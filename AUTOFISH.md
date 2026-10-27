@@ -12,6 +12,29 @@ Run with BrowserOS neo on the lofi.town tab, with the neo window genuinely uncov
 
 ## Run
 
+The normal way, one command:
+
+```bash
+./run.sh
+```
+
+It picks the first free port at or above 8731, starts `fishserve.js`, waits until it actually
+serves `/autofish.js` (not just "process started"), then prints the two things you need: the
+`http://127.0.0.1:<port>/install` URL and the ready-made `javascript:` bookmarklet for copy-paste.
+Keep that terminal open while fishing; Ctrl-C stops the server, and the panel in the game tab dies
+with it - click the bookmarklet again after the next `./run.sh`.
+
+Two operational traps that cost a whole evening:
+
+- **A second server on the same port serves a stale build.** If an old `node fishserve.js` is still
+  alive on 8731 (Windows side or a forgotten WSL job), the browser reaches *that* one and keeps
+  loading old code no matter how often the bookmarklet is reinstalled. Check with
+  `curl -s localhost:8731/autofish.js | wc -c` and compare against `wc -c autofish.js`.
+- **Nothing warns you that the server died.** The panel is just a DOM script that stops being able to
+  reach anything; the game keeps running and clicks do nothing.
+
+## Run from the console (no server)
+
 ```js
 // paste autofish.js into the page once, then:
 __fish.start()                        // run, pressing the dial with Space
