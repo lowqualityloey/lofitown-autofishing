@@ -2681,6 +2681,7 @@ const SPECIES = [
     '.primary:disabled{opacity:.45;cursor:default}',
     '.banner{font-size:11px;color:#f2c14e;background:rgba(242,193,78,.10);border-top:1px solid rgba(242,193,78,.22);padding:6px 10px}',
     '.banner:empty{display:none}',
+    '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
@@ -2989,13 +2990,23 @@ const SPECIES = [
       primary.disabled = false;
     }
 
-    ui.banner.textContent = banner;
-    ui.banner.style.display = banner ? '' : 'none';
+    // The single most confusing stop: the core is running but the game will not bite because the
+    // character is standing up. Fishing in lofi.town is seat-based (the CAST! prompt is only emitted
+    // from the sit-down path), so nothing the bot can click will start a cast - only sitting down
+    // again will. Say that plainly, ahead of the log-offline chatter.
+    var seatNote = '';
+    if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
+      seatNote = 'nothing to bite — sit on a chair by the water, then Start again';
+    }
+    ui.banner.textContent = seatNote || banner;
+    ui.banner.className = seatNote ? 'banner seat' : 'banner';
+    ui.banner.style.display = (seatNote || banner) ? '' : 'none';
 
     // Observable from the outside even though the shadow root is closed.
     if (host) {
       host.dataset.phase = phase;
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
+      if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
     }
 
     place();

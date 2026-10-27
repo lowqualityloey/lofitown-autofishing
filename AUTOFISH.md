@@ -927,6 +927,13 @@ than tapping the prompt.
 **Operating rule**: sit at the water, then Start. If the log says `needs a seat`, stand up and sit
 again — the bot will not move your character for you.
 
+**The panel says it too** (2026-10-28): while a session is running or paused and `status().needsSeat`
+is set, the card's footer banner turns orange and reads *"nothing to bite — sit on a chair by the
+water, then Start again"*. It outranks the log-offline banner because it is the reason nothing is
+happening, and `host.dataset.needsSeat = '1'` exposes the same flag outside the closed shadow root.
+Verified live by forcing the flag through `status()`: the footer rendered the orange notice on the
+running card.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

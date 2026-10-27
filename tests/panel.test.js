@@ -61,3 +61,16 @@ test('the panel reads the catch ledger for the rarity strip and the last catch',
   assert.ok(fn.includes('catch (e) { book = null; }'), 'renderLog swallows a ledger read failure');
   assert.ok(fn.includes("ui.lastCatch.textContent = bits.join"), 'the last catch line is text, not markup');
 });
+test('a running session that cannot bite says so: sit down, the game is seat-based', () => {
+  // Fishing in lofi.town only starts from the sit-down path (the CAST! prompt is emitted there), so a
+  // standing character can never be rescued by clicking. The panel is the only thing the user looks
+  // at, so the condition has to be visible there and not just in the event log.
+  const fn = src.slice(src.indexOf('function render()'), src.indexOf('/* ------------------------------------------------------------ layout'));
+  assert.ok(fn.length > 0, 'render() exists');
+  assert.ok(fn.includes('status.needsSeat'), 'render() reads needsSeat from the core status');
+  assert.ok(fn.includes("'paused'"), 'the notice also shows while paused, not only while running');
+  assert.match(fn, /seatNote \|\| banner/, 'the seat notice outranks the log-offline banner');
+  assert.ok(fn.includes("'banner seat'"), 'the seat notice gets its own colour, not the amber warning style');
+  assert.ok(fn.includes("host.dataset.needsSeat = '1'"), 'needsSeat is observable from outside the shadow root');
+  assert.match(src, /\.banner\.seat\{/, 'the seat style exists');
+});
