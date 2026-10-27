@@ -4,6 +4,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test",
-    "serve": "node fishserve.js"
+    "serve": "node fishserve.js",
+    "build:userscript": "node build-userscript.js"
   }
 }

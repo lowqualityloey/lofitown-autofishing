@@ -5,7 +5,8 @@
  *   GET  /panel.js         the panel HUD                 (no-store, CORS open)
  *   GET  /session.js       the session reducer           (no-store, CORS open)
  *   GET  /layout.js        the placement math            (no-store, CORS open)
- *   GET  /autofish.user.js the userscript                (no-store, CORS open)
+ *   GET  /autofish.user.js the standalone userscript (dist/, no server needed after install)
+ *   GET  /panel.user.js    the loader userscript: mounts panel.js from this server
  *   GET  /install          the bookmarklet page          (text/html)
  *   POST /catch            { t, species, rarity, quality, weight, value } -> a catches.csv row
  *   POST /session          { started_at, minutes, catches, reason }      -> a sessions.csv row
@@ -42,7 +43,12 @@ const STATIC = {
   '/panel.js': 'panel.js',
   '/session.js': 'session.js',
   '/layout.js': 'layout.js',
-  '/autofish.user.js': 'autofish.user.js',
+  // The installable userscript is the BUILD (bot + chip, no server at runtime).
+  // The old loader, which needs this server for the panel, stays reachable but is no longer
+  // the thing to install: pointing Tampermonkey at a server-dependent file is the confusion
+  // this split removes.
+  '/autofish.user.js': 'dist/autofish.user.js',
+  '/panel.user.js': 'autofish.user.js',
   '/install': 'install.html'
 };
 
@@ -132,7 +138,7 @@ function createServer() {
         res.writeHead(200, route === '/install' ? Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, CORS) : JS);
         // The userscript has to inject the panel from whichever host:port served it, and only the
         // request knows that (8731 is often already taken on Windows by an older copy).
-        res.end(route === '/autofish.user.js' ? withHost(d.toString('utf8'), req.headers.host) : d);
+        res.end(route.slice(-8) === '.user.js' ? withHost(d.toString('utf8'), req.headers.host) : d);
       });
       return;
     }

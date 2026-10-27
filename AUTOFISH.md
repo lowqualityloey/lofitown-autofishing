@@ -10,7 +10,30 @@ dial ends early (see below), never by the coin total.
 Run with BrowserOS neo on the lofi.town tab, with the neo window genuinely uncovered
 (a covered window reports `hidden` and freezes the game).
 
-## Run
+## Install once, run forever (userscript - no server, no console)
+
+The easiest path by a wide margin. Everything is one self-contained file; the only thing it talks
+to over the network is the optional `/catch` CSV log, and that call already fails silently.
+
+```bash
+node build-userscript.js      # writes dist/autofish.user.js (committed; only rerun after editing autofish.js)
+```
+
+1. Install Tampermonkey (or Violentmonkey) in the browser that plays lofi.town.
+2. Tampermonkey -> Dashboard -> Utilities -> **Import from file** -> `dist/autofish.user.js`.
+   (Or, while `fishserve` is running, open `http://127.0.0.1:8731/autofish.user.js` and press Install.)
+3. Open https://app.lofi.town. A chip appears bottom-left: `🐟 AutoFish · off · 0 caught`.
+4. Click the chip once. It turns green (`on`) and starts fishing; click again to stop.
+
+Why the first load is OFF on purpose: an install must never start pressing keys in a tab you just
+opened. The choice is remembered in `localStorage['autofish:on']`, so a reload resumes whatever
+state you left it in. Fishing needs no server at all - the panel and the CSV log still do.
+
+Verified live (2026-10-28, app.lofi.town): the built file creates the chip, installs `window.__fish`
+with `accuracy()`, stays off on a fresh profile, and a click flips `__fish.running` true -> false
+with `localStorage` following. `node --test` = 62 pass / 0 fail.
+
+## Run (the server path)
 
 The normal way, one command:
 
