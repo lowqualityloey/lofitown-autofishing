@@ -34,10 +34,32 @@ test('the chip starts off, remembers a click, and can stop the bot', () => {
   assert.match(src, /if \(remembered\(\)\)/);
   assert.match(src, /Api\.stop\(\); remember\(false\)/);
   assert.match(src, /Api\.start\(\); remember\(true\)/);
-  assert.match(src, /el\.id = 'autofish-chip'/);
+  assert.match(src, /node\.id = 'autofish-chip'/);
   // A fresh install must not fish on its own: the only boot-time start sits inside the
   // remembered() check, so nothing is pressed until the user clicks the chip once.
   assert.match(src, /if \(remembered\(\)\) \{ try \{ window\.__fish\.start\(\); \} catch \(e\) \{\} \}/);
   const autoStarts = src.match(/window\.__fish\.start\(\)/g) || [];
   assert.equal(autoStarts.length, 1);
+});
+
+test('the panel, the session reducer and the layout math are inlined, in load order', () => {
+  const iCore = src.indexOf('window.__fish = F');
+  const iSession = src.indexOf('root.AutoFishSession');
+  const iLayout = src.indexOf('root.AutoFishLayout');
+  const iPanel = src.indexOf('if (window.__panel && window.__panel.mounted) return;');
+  assert.ok(iCore > 0, 'core inlined');
+  assert.ok(iSession > iCore, 'session.js after the core');
+  assert.ok(iLayout > iSession, 'layout.js after session.js');
+  assert.ok(iPanel > iLayout, 'panel.js last, after everything it depends on');
+  // The panel loads its three deps from fishserve only when they are missing. Inlined, that
+  // path never runs - which is what makes the panel server-free.
+  assert.match(src, /if \(!window\.__fish\) await loadScript\('autofish', '\/autofish\.js'\)/);
+});
+
+test('the panel is the UI and the chip is only its fallback', () => {
+  assert.match(src, /function panelUp\(\)/);
+  assert.match(src, /if \(panelUp\(\)\) \{ try \{ el\.remove\(\)/);
+  assert.match(src, /\[800, 2000, 4000\]\.forEach/);
+  // No chip is built at load time - only showChip(), which the timers call.
+  assert.ok(src.indexOf('el = makeChip()') > src.indexOf('function showChip()'));
 });

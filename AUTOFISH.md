@@ -10,32 +10,55 @@ dial ends early (see below), never by the coin total.
 Run with BrowserOS neo on the lofi.town tab, with the neo window genuinely uncovered
 (a covered window reports `hidden` and freezes the game).
 
-## Install once, run forever (userscript - no server, no console)
+## Install once, run forever (userscript - panel included, no server, no console)
 
-The easiest path by a wide margin. Everything is one self-contained file; the only thing it talks
-to over the network is the optional `/catch` CSV log, and that call already fails silently.
+The easiest path by a wide margin: **one file, and the whole HUD is inside it**. The panel, the
+session rules (length / cooldown / daily cap / clock window), the catch list and the fishing core are
+all inlined in `dist/autofish.user.js`; no local server, no bookmarklet, no console.
 
 ```bash
-node build-userscript.js      # writes dist/autofish.user.js (committed; only rerun after editing autofish.js)
+node build-userscript.js      # writes dist/autofish.user.js (committed; rerun after editing
+                              # autofish.js, session.js, layout.js or panel.js)
+npm run build:userscript      # same thing
 ```
 
 1. Install Tampermonkey (or Violentmonkey) in the browser that plays lofi.town.
 2. Tampermonkey -> Dashboard -> Utilities -> **Import from file** -> `dist/autofish.user.js`.
    (Or, while `fishserve` is running, open `http://127.0.0.1:8731/autofish.user.js` and press Install.)
-3. Open https://app.lofi.town. A chip appears bottom-left: `🐟 AutoFish · off · 0 caught`.
-4. Click the chip once. It turns green (`on`) and starts fishing; click again to stop.
+3. Open https://app.lofi.town. The **AutoFish panel** appears top-left, marked `IDLE`.
+4. Press **Start** in the panel. Stop / Pause / Resume and the session rules all work offline.
 
 Why the first load is OFF on purpose: an install must never start pressing keys in a tab you just
-opened. The choice is remembered in `localStorage['autofish:on']`, so a reload resumes whatever
-state you left it in. Fishing needs no server at all - the panel and the CSV log still do.
+opened. The remembered choice lives in `localStorage` (`autofish:on`, `autofish.prefs`,
+`autofish.live`), so a reload restores what you left.
 
-Verified live (2026-10-28, app.lofi.town): the built file creates the chip, installs `window.__fish`
-with `accuracy()`, stays off on a fresh profile, and a click flips `__fish.running` true -> false
-with `localStorage` following. `node --test` = 62 pass / 0 fail.
+The chip is only a **fallback**: the bootstrap checks for a mounted panel at 0.8 s, 2 s and 4 s and
+only then draws `🐟 AutoFish · off · 0 caught` bottom-left (that path auto-starts if the remembered
+state is on). With the panel mounting normally, no chip is created.
 
-## Run (the server path)
+### What still wants the server (all optional, all degrade)
 
-The normal way, one command:
+`fishserve` is now an extras server, not a requirement:
+
+| Feature | Without fishserve |
+| --- | --- |
+| `/catch` CSV catch log | the POST fails silently, fishing is unaffected |
+| `/sessions` history + "left N min today" | `loadToday()` catches and starts from 0 min |
+| session row written after a run | banner `session log offline — the session still works` |
+| `/diag` screenshot capture | `diagnosis upload failed (fishserve offline?)` |
+
+Verified live (2026-10-28, app.lofi.town, **port 8731 confirmed dead** - `curl` refused, nothing
+listening): `__panel.mounted === true`, no chip in the DOM, Start moved the panel to `RUNNING` and
+the core fished (6 presses, 1 catch in 12.8 s), Stop returned `phase 'cooldown'`, `stopReason
+'user'`, `__fish.running === false`, and the panel showed the expected offline banner. The panel's
+shadow root is `mode: 'closed'`, so verify through `window.__panel.state()`, not the DOM.
+`node --test` = 64 pass / 0 fail (the build is also checked against a fresh `build()` so a stale
+committed `dist/` fails the suite).
+
+## Run (the server path - optional extras)
+
+Only needed for the CSV catch log, the `/sessions` history and `/diag` captures, or for loading the
+bot from a bookmarklet instead of Tampermonkey. One command:
 
 ```bash
 ./run.sh

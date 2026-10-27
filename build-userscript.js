@@ -2,13 +2,17 @@
 /**
  * Build the server-free userscript.
  *
- * The bot needs two things the bookmarklet path makes hard: the script itself, and a local
- * HTTP server to serve it from. A userscript removes both - Tampermonkey runs it on page load,
- * forever, with no terminal, no port and no bookmarklet to click.
+ * The bookmarklet path needs three things that are hard: a terminal to run fishserve, a port
+ * that has to still be alive, and a bookmarklet re-clicked after every reload. A userscript
+ * removes all three - Tampermonkey runs it on page load, forever.
  *
- * So this file inlines autofish.js verbatim and appends a tiny bootstrap: a status chip that
- * starts and stops the bot, remembering the choice in localStorage. Nothing here talks to
- * fishserve; the catch POST inside autofish.js already fails silently when no server is up.
+ * So this file inlines the four pieces the bookmarklet used to fetch over HTTP - the bot core,
+ * the session reducer, the placement math and the panel - verbatim and in load order. The panel
+ * then mounts itself exactly as it always did; it only ever fetched those three dependencies
+ * when they were missing, so with them inlined it needs no server at all. Its two server calls
+ * (today's minutes, the session row) already fail softly.
+ *
+ * A chip is kept as the fallback UI: if the panel cannot mount, the bot must still be reachable.
  *
  *   node build-userscript.js            -> dist/autofish.user.js
  */
@@ -23,8 +27,8 @@ const HEADER = [
   '// ==UserScript==',
   '// @name         lofi.town AutoFish',
   '// @namespace    lofitown-autofishing',
-  '// @version      3.1.0',
-  '// @description  Casts, reels and presses the dial on lofi.town. No server, no bookmarklet.',
+  '// @version      3.2.0',
+  '// @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.',
   '// @match        https://app.lofi.town/*',
   '// @run-at       document-idle',
   '// @grant        none',
@@ -33,9 +37,14 @@ const HEADER = [
 ].join('\n');
 
 /**
- * The chip is the whole UI on this path: it says whether the bot is running and how many fish
- * it has landed, and one click toggles it. A fresh install starts OFF so the script never
- * presses keys on a page the user only just installed it on; the choice is remembered after.
+ * The panel owns the session (length, cooldown, guards, caught list). It mounts itself when it
+ * loads, and it needs window.__fish, AutoFishSession and AutoFishLayout - all inlined above, so
+ * it never calls loadScript() and never needs fishserve.
+ *
+ * The chip is only a fallback: if the panel is not mounted shortly after load (an exception, or
+ * a page where something removed it), a small pill starts and stops the bot and remembers the
+ * choice in localStorage. A fresh install starts OFF either way - an install must never press
+ * keys in a tab the user only just opened.
  */
 const BOOTSTRAP = `
 (function () {
@@ -47,28 +56,12 @@ const BOOTSTRAP = `
   function remember(on) {
     try { localStorage.setItem(KEY, on ? 'on' : 'off'); } catch (e) {}
   }
-  if (window.__autofishChip) return;
-  window.__autofishChip = true;
-
-  function makeChip() {
-    var el = document.createElement('div');
-    el.id = 'autofish-chip';
-    el.style.cssText = [
-      'position:fixed', 'left:14px', 'bottom:54px', 'z-index:2147483647',
-      'font:600 12px/1.25 ui-sans-serif,system-ui,-apple-system,sans-serif',
-      'color:#0f2f1c', 'background:#b9f6c9', 'border:1px solid rgba(15,47,28,.25)',
-      'border-radius:999px', 'padding:7px 12px', 'cursor:pointer',
-      '-webkit-user-select:none', 'user-select:none', 'box-shadow:0 2px 10px rgba(0,0,0,.25)',
-      'white-space:nowrap'
-    ].join(';');
-    el.title = 'AutoFish: click to start or stop';
-    (document.body || document.documentElement).appendChild(el);
-    return el;
-  }
+  function panelUp() { return !!(window.__panel && window.__panel.mounted); }
 
   var el = null;
   function paint() {
     if (!el) return;
+    if (panelUp()) { try { el.remove(); } catch (e) {} el = null; return; }
     // A chip that goes blank because one status() read threw is worse than a stale label.
     try {
       var Api = window.__fish;
@@ -83,6 +76,22 @@ const BOOTSTRAP = `
     }
   }
 
+  function makeChip() {
+    var node = document.createElement('div');
+    node.id = 'autofish-chip';
+    node.style.cssText = [
+      'position:fixed', 'left:14px', 'bottom:54px', 'z-index:2147483647',
+      'font:600 12px/1.25 ui-sans-serif,system-ui,-apple-system,sans-serif',
+      'color:#0f2f1c', 'background:#f1e6c9', 'border:1px solid rgba(15,47,28,.25)',
+      'border-radius:999px', 'padding:7px 12px', 'cursor:pointer',
+      '-webkit-user-select:none', 'user-select:none', 'box-shadow:0 2px 10px rgba(0,0,0,.25)',
+      'white-space:nowrap'
+    ].join(';');
+    node.title = 'AutoFish: click to start or stop';
+    (document.body || document.documentElement).appendChild(node);
+    return node;
+  }
+
   function toggle() {
     var Api = window.__fish;
     if (!Api) return;
@@ -91,7 +100,8 @@ const BOOTSTRAP = `
     paint();
   }
 
-  function boot() {
+  function showChip() {
+    if (el || panelUp()) return;
     el = makeChip();
     el.addEventListener('click', toggle);
     setInterval(paint, 1000);
@@ -99,15 +109,30 @@ const BOOTSTRAP = `
     paint();
   }
 
-  if (document.body) boot();
-  else window.addEventListener('DOMContentLoaded', boot, { once: true });
+  // The panel's mount is async (it reads prefs and today's minutes), so give it a moment before
+  // deciding it failed. These timers are the only thing the chip waits on.
+  [800, 2000, 4000].forEach(function (ms) {
+    setTimeout(function () { if (!panelUp()) showChip(); }, ms);
+  });
 })();
 `;
 
+const PARTS = ['autofish.js', 'session.js', 'layout.js', 'panel.js'];
+
+function read(name) {
+  return fs.readFileSync(path.join(ROOT, name), 'utf8');
+}
+
 function build() {
-  const src = fs.readFileSync(path.join(ROOT, 'autofish.js'), 'utf8');
+  const src = read('autofish.js');
   if (src.indexOf('window.__fish = F') < 0) throw new Error('autofish.js no longer installs window.__fish');
-  return [HEADER, '', '(function () {', "'use strict';", 'if (window.__autofishInstalled) return;', 'window.__autofishInstalled = true;', '', src, BOOTSTRAP, '})();', ''].join('\n');
+  const session = read('session.js');
+  if (session.indexOf('AutoFishSession') < 0) throw new Error('session.js no longer exports AutoFishSession');
+  const layout = read('layout.js');
+  if (layout.indexOf('AutoFishLayout') < 0) throw new Error('layout.js no longer exports AutoFishLayout');
+  const panel = read('panel.js');
+  if (panel.indexOf('AutoFishSession') < 0) throw new Error('panel.js no longer consumes AutoFishSession');
+  return [HEADER, '', '(function () {', "'use strict';", 'if (window.__autofishInstalled) return;', 'window.__autofishInstalled = true;', '', src, session, layout, panel, BOOTSTRAP, '})();', ''].join('\n');
 }
 
 function main() {
@@ -119,4 +144,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { build, OUT };
+module.exports = { build, OUT, PARTS };
