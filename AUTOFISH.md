@@ -106,8 +106,9 @@ corner of the game and runs from there.
 
 - **Session / Cooldown / Daily cap** — set with `−` / `+` steppers (hold to accelerate). Defaults
   60 min, 30 min, 4 h. Ranges: session 5 min – **12 h**, cooldown **1 min** – 2 h, daily cap 30 min –
-  **24 h**. A long session still stops at the cap, and the panel restarts itself after a cooldown until
-  the cap is spent.
+  **24 h**. A session stops when its timer runs out: the cooldown then runs and the panel goes **idle** —
+  it does not chain sessions on its own, so one night needs one long session. The cap only refuses a
+  Start once the day's total is spent.
 - **Clock window** — optional "only fish between HH:MM and HH:MM"; times move in 15-minute steps and
   the stop time wins over the duration.
 - **Start / Stop** — one button. Every Stop starts the cooldown; a pause does not.
