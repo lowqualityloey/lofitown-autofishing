@@ -58,3 +58,42 @@ or user-calibrated bubble box is the right follow-up, with the user in the loop.
    and removes the broken host.
 5. Default corner was top-right, on top of the game's coin/upgrade controls. Corners now start
    top-left and below a 72 px top inset, so the panel clears the game's HUD strip.
+
+## Follow-up round: the user's first real trial (same day)
+
+The user reported, from their own window (game viewport about 1022x810): *"after pressing start it
+doesn't start casting/catching fish or reeling"* and *"if i try to move the autofish window with the
+mouse pointer it permanently sticks on it ... it just follows the mouse pointer"*. The screenshot
+showed `CAST!` at about (510, 511) page coordinates, far outside the fixed scan boxes, which
+confirmed the finding above was the whole story for bug 1.
+
+**Drag never ended** (`panel.js`): the host swallows bubbled `pointerup` with `stopPropagation` (it
+must, so the game never sees panel clicks), and `pointermove` was not in that list — so with pointer
+capture set, the panel followed every move while the window-level `endDrag` listener never fired.
+`dragging` stayed non-null forever and `place()` opens with `if (!host || dragging) return;`, so the
+panel was never placed again. The drag listeners are now on `window` in the **capture** phase
+(`pointermove`, `pointerup`, `pointercancel`, `blur`), and the stepper repeat also stops on a
+capture-phase release anywhere. Verified live with real CDP mouse events: the panel followed the
+pointer to (332, 294), stayed there after release, and ignored a later pointer move.
+
+**Blind detection** (`autofish.js`): the fixed boxes remain the first attempt, then the core scans
+the whole UI layer at quarter scale for connected components that look like a prompt — a white
+capsule 45-190 x 24-110 with 45% white fill and 2-50% dark ink — and, for the catch card, a cream
+panel 200-620 x 220-700. Verified against the real thing at a 1234x1023 viewport by Marlin's Fish
+Shack: the live `REEL!` measured 108x44 at (618, 270) and was found by both the box pass and the
+anywhere pass. A 24-second run then produced 5 bubbles, 10 dials locked, 9 dials closed, 5 presses
+and **one caught Salmon (11.2 kg)**.
+
+Two smaller fixes from the same round:
+
+6. `readUI()` threw `Cannot read properties of undefined (reading 'width')` while the SPA had no
+   canvases (route change / soft reload). Every frame counted as an error, so the panel saw an error
+   burst and stopped the session as `errors`. It now reports "nothing drawn" instead.
+7. `reduce()` used `Number(fact.at) || 0`, so a fact without a clock started a session at the epoch;
+   the next tick credited `now - 0` ms of fishing time and the session died as a `daily-cap` hit. It
+   now falls back to `Date.now()`. (Found by hand: a test dispatch without `at` wrote a
+   `29,884,614 min` session row, which was removed from `sessions.csv`.)
+
+Also added: `POST /diag` plus `__fish.captureUI()`. A run that finds nothing for 20 seconds uploads
+one PNG of the UI layer and its counters to `shots/diag/`, so the next blind report can be fixed
+from the pixels the bot actually saw.

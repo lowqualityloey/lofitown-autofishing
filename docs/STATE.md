@@ -16,7 +16,9 @@
 ### Milestone Roadmap
 - [/] **Milestone 1** — in-game AutoFish panel: session reducer, server session records, core
   pause/zones hooks, collision-free placement, HUD, guards G1-G7, wake lock + reload resume,
-  bookmarklet install page. Code + 30 unit tests land; live browser verification still partial.
+  bookmarklet install page. Code + 33 unit tests. Live verification: panel mounts, real-click
+  Start/Stop, counters, cooldown, drag release and adaptive prompt detection all observed in the
+  browser; 1 Salmon caught by the bot in 24 s at 1234x1023.
 
 ### Active Milestone Task Breakdown
 Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued, `[!]` Blocked):
@@ -30,7 +32,7 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 - [x] T7 guards G1-G7 + session log rows — 10 tests
 - [x] T8 wake lock + reload survival
 - [x] T9 install page (`install.html`) + userscript (`autofish.user.js`)
-- [ ] T10 docs — AUTOFISH.md run section done; spec §14 checklist report pending
+- [x] T10 docs — AUTOFISH.md run + "finding the prompt at any window size" sections; observed-vs-reasoned checklist in `docs/reviews/2026-10-27-panel-verification.md` (follow-up round appended)
 
 ---
 
@@ -182,10 +184,11 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. Run the spec §14 checklist against the live game at the user's real window size and record
-   which items were observed versus only unit-tested.
-2. Have the user run the panel for one real session (install page → bookmarklet) and confirm the
-   Start/Stop, counters and cooldown feel right in their own browser.
+1. Have the user reload the game page, re-run the bookmarklet from http://127.0.0.1:8741/install
+   and fish one real session. If the bot still finds nothing, read `shots/diag/ui-*.png` (the panel
+   uploads one frame 20 s into a blind run) and correct the detector from those pixels.
+2. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
+   bubbles) at window sizes nobody has tested yet.
 
 ---
 
@@ -195,6 +198,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 
 | Date | Engineer / Agent | Milestone / Focus | Key Changes & Artifacts |
 | :--- | :--- | :--- | :--- |
+| 2026-10-27 | lead (DSH session) | M1 fix round after first user trial | Commits 1ab882d, 6682c20, ba2c9e6: adaptive prompt scan (fixed boxes first, then the whole UI layer), capture-phase drag listeners, `POST /diag` + `__fish.captureUI()`, `readUI` canvas-loss guard, reducer clock fallback; 33 tests. Live: drag releases, `REEL!` 108x44 at (618,270) found, 1 Salmon in 24 s. |
 | 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
 
 ---

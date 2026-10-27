@@ -54,6 +54,21 @@ daily cap (G6), cooldown between sessions (G7).
 
 Run the tests with `node --test` (bare — `node --test tests/` fails on Node v24.22.1).
 
+## Finding the prompt at any window size
+
+The first version only looked inside two rectangles measured at a 1522x954 window, so at any other
+size (the user's window is about 1234x975) it never saw **CAST! / REEL!** and pressed nothing. Those
+boxes are still tried first; then the core scans the whole UI layer at quarter scale for a white
+capsule with dark text (about 108x48) and, for the catch card, a large cream panel. Verified live at
+1234x1023 by Marlin's Fish Shack: 5 bubbles, 10 dials, 9 dials closed, 5 presses and a Salmon in 24
+seconds.
+
+`__fish.findBubble()` / `__fish.findCatch()` report what is on screen right now;
+`__fish.captureUI()` grabs one PNG of the UI layer for diagnosis. The panel does that once by
+itself, 20 seconds into a run that has found nothing, and uploads the frame with its counters to
+`POST /diag` — the file lands as `shots/diag/ui-<time>.png` next to a `.json` of the counters, so a
+blind run can be debugged from real pixels instead of guesses.
+
 ## Where it stands
 
 | Piece | State |
