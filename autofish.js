@@ -223,6 +223,23 @@
     }
     return list[((i % list.length) + list.length) % list.length];
   }
+  // A press makes the game spawn a fresh triangle in the same widget, with a new random
+  // rotation and thickness. Pressing "again" while the SAME triangle is still under the pin is
+  // a misclick: the game subtracts the last gain. So a second press on one dial lock is only
+  // allowed once the measurement shows a new triangle.
+  function newTriangle(press, s, blinks, o) {
+    if (!press) return true;                       // first press of the lock
+    const opts = o || {};
+    if ((blinks || 0) >= (opts.blinkFrames || 2)) return true;   // the ring blinked out: new spawn
+    if (press.width != null && s.width != null &&
+        Math.abs(Number(s.width) - Number(press.width)) >= (opts.widthJumpDeg || 3)) return true;
+    if (press.delta != null && s.delta != null && s.t != null && press.t != null) {
+      const dt = Math.max(0, (s.t - press.t) / 1000);
+      const predicted = Number(press.delta) + (s.omega || 0) * dt;
+      if (Math.abs(wrap180(Number(s.delta) - predicted)) > (opts.jumpDeg || 25)) return true;
+    }
+    return false;
+  }
   /**
    * Speed band a press is scored in. The verified win rate is only meaningful per band: a dial at
    * 120 deg/s has ~300 ms of tolerance and one at 700 deg/s has ~70 ms, so averaging them hides
@@ -883,6 +900,11 @@
     if (via === 'space') space(F.opts.spaceTarget);
     else tap(F.geo.cx, F.geo.cy);
     F.armed = false;
+    // The game answers a press by spawning a fresh triangle in the same widget, so the wedge
+    // jumps. Drop the rotation history: a fit that straddles the jump would invent a wild rate.
+    if (F.geo && F.geo._hist) F.geo._hist.length = 0;
+    F.pressStamp = s ? { delta: s.delta, width: s.width, t: s.t != null ? s.t : now() } : null;
+    F.dialBlinks = 0;
     F.lastPress = now();
     F.stats.presses++; F.pressesThisDial++;
     if (F.attempt) {
@@ -905,6 +927,7 @@
       fitRms: s && s.fit ? +s.fit.rms.toFixed(1) : null,
       biasMs: (s && s.biasMs) || 0,
       dialPressN: F.pressesThisDial,
+      gate: F.pressesThisDial === 1 ? 'first' : 'new-triangle',
       late: pend ? Math.round(now() - pend.at) : null,
     });
   }
@@ -1033,6 +1056,8 @@
       schedHorizonMs: 40,           // furthest ahead a press is put on a timer (2-3 frames)
       replanMs: 8,                  // re-aim the timer only when the plan moved this much
       pressGapMs: 120,
+      relockGraceMs: 450,           // hold a dial's geometry this long after a press (the ring blinks)
+      maxPressPerDial: 12,          // safety cap on presses per dial lock (one per rotation is normal)
       hitMs: 1500,                  // a press the game acts on ends the dial within this
       skipMs: 300,                  // an unpressed dial that lived this long lost a fish (fades are ~100 ms)
       attemptIdleMs: 25000,         // an attempt with no dial and no press this long is over
@@ -1056,6 +1081,7 @@
     F.geo = null; F.hint = { x: 861, y: 372 }; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
     F.txtAt = now(); F.cardWait = null;                        // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
+    F.pressStamp = null; F.dialBlinks = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
@@ -1229,7 +1255,12 @@
     if (F.geo) {
       const s = F.sample(F.geo);
       if (!s || !s.valid || s.ring < 0.7) {
+        F.dialBlinks = (F.dialBlinks || 0) + 1;
         if (++F.bad > 3) {
+          // A successful press animates the ring away for a few frames, then the next triangle
+          // appears in the same widget. Dropping the lock there cost a re-lock scan plus a lock
+          // on the fading ring, ~300 ms per press. Hold the geometry briefly instead.
+          if (F.pressesThisDial > 0 && t - F.lastPress < (F.opts.relockGraceMs || 450)) return;
           cancelPend();
           closeDial(t, s && s.ring);
           F.geo = null; F.bad = 0; F.pressesThisDial = 0;
@@ -1266,11 +1297,17 @@
         F.geoTrace.push({ t: Math.round(t - F.geoAt), d: +Number(s.delta).toFixed(1), w: Math.round(s.width || 0),
           om: s.omega == null ? null : Math.round(s.omega), r: plan.reason });
         if (F.geoTrace.length > 48) F.geoTrace.shift();
+      } else {
+        F.dialBlinks = (F.dialBlinks || 0) + 1;   // a blink after a press is how a new spawn shows
       }
-      // Re-arm only once the wedge has left the window, so one rotation gets one press.
-      // One press per dial: a second press cannot help (the game already judged the first) and
-      // only shows up as an unexplained extra click.
-      if (F.pressesThisDial === 0 && Math.abs(plan.delta) > plan.win + 12) F.armed = true;
+      // Re-arm once the wedge has left the window: one rotation gets one press, and a new
+      // triangle on the same dial is pressed on its next rotation. The earlier 'one press per
+      // dial' rule assumed a press solved the fish; it does not - a fish is many triangles, so
+      // that rule forced a full dial close plus re-lock for every single press and starved slow
+      // dials. The cap only guards against a runaway if the game stops accepting input.
+      if (F.pressesThisDial < (F.opts.maxPressPerDial || 12) &&
+          Math.abs(plan.delta) > plan.win + 12 &&
+          newTriangle(F.pressStamp, s, F.dialBlinks, F.opts)) F.armed = true;
       if (plan.cancel) cancelPend();
       if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
       if (plan.press) doPress(s, 'frame');
@@ -1282,7 +1319,7 @@
       F.lastDialCheck = t;
       const g = F.lockDial(F.hint.x, F.hint.y);
       if (g) {
-        F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0;
+        F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
@@ -1451,7 +1488,7 @@
   };
 
   /** The timing maths, exposed so a live console can re-plan against a captured dial. */
-  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk };
+  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle };
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));

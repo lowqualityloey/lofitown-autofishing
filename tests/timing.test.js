@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk']) {
+  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -201,3 +201,43 @@ test('omegaBand splits presses into the four speed bands', () => {
   assert.equal(T.omegaBand(null), 'slow');
   assert.equal(T.omegaBand(undefined), 'slow');
 });
+
+test('newTriangle: the first press of a lock is always allowed', () => {
+  assert.equal(T.newTriangle(null, { delta: 3, width: 120, t: 2000, omega: 300 }, 0, {}), true);
+});
+
+test('newTriangle: the same triangle still under the pin is not a new spawn', () => {
+  // 300 deg/s: 250 ms later the wedge moved 75 deg, exactly what the fit predicts.
+  const press = { delta: 0, width: 120, t: 1000 };
+  const s = { delta: 75, width: 121, t: 1250, omega: 300 };
+  assert.equal(T.newTriangle(press, s, 1, {}), false, 'a second press here would subtract the last gain');
+});
+
+test('newTriangle: a thickness jump means the game spawned a new triangle', () => {
+  const press = { delta: 0, width: 120, t: 1000 };
+  const s = { delta: 75, width: 126, t: 1250, omega: 300 };
+  assert.equal(T.newTriangle(press, s, 0, {}), true);
+});
+
+test('newTriangle: a delta jump beyond the predicted rotation is a new spawn', () => {
+  const press = { delta: 0, width: 120, t: 1000 };
+  const s = { delta: -120, width: 120, t: 1250, omega: 300 };   // predicted +75, seen -120
+  assert.equal(T.newTriangle(press, s, 0, {}), true);
+});
+
+test('newTriangle: the ring blinking out twice is a new spawn', () => {
+  const press = { delta: 0, width: 120, t: 1000 };
+  const s = { delta: 10, width: 120, t: 1100, omega: 300 };
+  assert.equal(T.newTriangle(press, s, 2, {}), true);
+});
+
+test('newTriangle: continuous rotation with no jump stays one triangle', () => {
+  const press = { delta: 10, width: 90, t: 1000 };
+  let s = { delta: 10, width: 90, t: 1000, omega: 420 };
+  for (let i = 1; i <= 6; i++) {
+    const t = 1000 + i * 16.7;
+    s = { delta: T.wrap180(10 + 420 * (t - 1000) / 1000), width: 90, t, omega: 420 };
+    assert.equal(T.newTriangle(press, s, 0, {}), false, 'frame ' + i);
+  }
+});
+
