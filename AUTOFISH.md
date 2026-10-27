@@ -405,6 +405,12 @@ Live evidence, the same afternoon session, pointer presses at the dial centre:
 |-----|-------|---------|------|--------|------|-----|------|------|
 | A | 14 | 13 | 10 | 0 | 3/3 | 5/5 | 2/2 | - |
 | B | 15 | 9 | 8 | 0 real | 4/4 | 4/4 | - | - |
+| C | 108 | 65 | 63 | 0 | 18/18 | 34/34 | 10/10 | 1/1 |
+
+Run C was a 5.6 minute unattended run on the console-started core (no panel): 108 locked rings, 45 of
+them ghost fades, 65 presses and **63 card-confirmed catches with no loss in any band** - including
+one blur-band dial above 500 deg/s, the speed legendary fish live at. Two presses never got a verdict
+because the run was stopped inside their 600 ms window.
 
 - Card latency after a winning press: **9-16 ms** (`cardMs`). The 600 ms window is generous.
 - Measured speeds in these runs were **118-264 deg/s**, i.e. slow and mid only. Nothing above
