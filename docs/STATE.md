@@ -2,8 +2,9 @@
 
 ## 1. Executive Summary & Current Position
 - **Project Name**: lofitown-autofishing (autofish 3.0 + in-game control panel)
-- **Current Milestone / Epic**: Milestone 1 — in-game AutoFish panel (plan tasks 1-10)
-- **Overall Status**: ACTIVE
+- **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
+  oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed
+- **Overall Status**: ACTIVE — private repo published at github.com/lowqualityloey/lofitown-autofishing
 - **Target Release / Deadline**: v1.0.0 usable panel / not tracked
 - **Current Working Branch**: main
 - **Last Updated**: 2026-10-28
@@ -19,6 +20,13 @@
   bookmarklet install page. Code + 33 unit tests. Live verification: panel mounts, real-click
   Start/Stop, counters, cooldown, drag release and adaptive prompt detection all observed in the
   browser; 1 Salmon caught by the bot in 24 s at 1234x1023.
+
+- [/] **Milestone 2** — trustworthy accuracy: the per-fish-attempt oracle replaced per-press scoring
+  (28 caught / 30 attempts, Wilson 95% CI 78.7-98.2%); the dial search went from 83 ms to 4 ms a
+  call; fishing was found to be seat-based, so a missing cast prompt is now named, the session clock
+  pauses while unseated, and the pause honours the clock window and the daily cap. 110 tests.
+- [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
+  (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
 
 ### Active Milestone Task Breakdown
 Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued, `[!]` Blocked):
@@ -40,7 +48,7 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
 - **Active RFC / Spec**: `docs/specs/2026-10-27-in-game-panel-design.md` (approved)
 - **Active Task Spec**: `docs/superpowers/plans/2026-10-27-autofish-panel.md` (approved route)
-- **Key Source Files in Flight**: `panel.js`, `session.js`, `layout.js`, `autofish.js`, `fishserve.js`, `install.html`, `autofish.user.js`, `tests/*.test.js`
+- **Key Source Files in Flight**: `autofish.js`, `panel.js`, `session.js`, `layout.js`, `build-userscript.js`, `dist/autofish.user.js`, `tests/*.test.js`
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
   - Server smoke: `FISHSERVE_PORT=8741 node fishserve.js` then `curl -s localhost:8741/recent?n=1`
@@ -182,18 +190,26 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-10-28 | Catch history | Per-catch ledger in `localStorage` (`autofish:log:v1`), written only from parsed catch text. Session records stay server-only; the ledger is history, never a scoreboard, and rarity may be filled from the embedded catalogue with `derived:true`. | `docs/specs/2026-10-28-catch-log.md` |
 | 2026-10-27 | Placement | Panel position comes from the live exclusion rect (`__fish.zones()`) at runtime, not from fixed coordinates; no room means collapse to the pill. | same spec |
 | 2026-10-28 | Frame budget | UI `getImageData` is a GPU readback (~2.1 ms per 360x210 box). The bubble scan is throttled to 25 Hz idle / 11 Hz with a dial locked, the whole-surface prompt scan to 3 Hz, and per-pixel loops read channels by index. The dial sample keeps the full loop rate because accuracy depends on it. Measured: the old build held the page at 27.6 fps, this one at 111-138 fps. | `AUTOFISH.md` 2026-10-28 frame rate |
+| 2026-10-28 | Accuracy oracle | A press is never a win or a loss. The unit is the fish attempt: opened by the first press after the last catch, closed by parsed catch text (caught) or by the cast prompt returning (lost). Rarity/time-limit tables were read out of the game bundle; one fish is many presses on a level bar. | `AUTOFISH.md` one fish is many presses |
+| 2026-10-28 | Seat-based fishing | `showCastButton` is emitted only from the character's sit path, so an unseated character can never be rescued by clicking. The bot never synthesises movement (an earlier walk rung unseated the character and lost the run) and names the condition as `needsSeat` after 45 s without a prompt. | `AUTOFISH.md` why the bot stops casting |
+| 2026-10-28 | Seat pause | `fact.seat` pauses the session before any fishing time is credited, without pausing the core (the core is what spots the returning prompt). The pause honours the clock window and an already-spent daily cap, and ends with `no-seat` after 30 minutes. | this file, section 7 |
 | 2026-10-28 | Frame budget (dial search) | The dominant cost was `lockDial` at 83.3 ms a call eight times a second (670 ms/s, 67% of the main thread) - 99,000 rim samples per call, each with its own trig call and a fresh 4-element array. Geometry unchanged: trig tables, a `Uint8Array` rim mask per read, index-only predicates, and `inkMix` without per-pixel arrays. `findCatch` throttled to 100 ms. Measured: 4.2-4.3 ms a call, idle frame rate 32.2 -> 140.6 fps. | `AUTOFISH.md` 2026-10-28 the dial search was the real lag |
 
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. The user re-imports `dist/autofish.user.js` into Tampermonkey - their copy predates the
-   dial-search fix (the bubble fix alone still left the page at 15.6 fps) - and reports whether the
-   lag is gone in normal play.
-2. Watch the after-catch cast stall: on 2026-10-28 the bot found the `CAST!` bubble, tapped it and
-   still cast nothing for five seconds at a time (23 `cast retry` events over three attempts). The
-   bubble tap and the space fallback both failed there, so it is not the scan rate.
-3. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
+1. The user re-imports `dist/autofish.user.js` into Tampermonkey and reloads. Their page still runs
+   the pre-seat build and currently has two mounted panels (their copy plus a test copy); a reload
+   leaves exactly one and activates the seat pause, the cap/window rules and the dial-search fix.
+2. Prove the seat pause live end to end: remount the panel from the current build, force
+   `status().needsSeat`, and confirm `paused`/`seat` with `fishingMs` frozen, the window stop past the
+   schedule, and the resume when a prompt returns. Node tests cover the reducer; the page has not run
+   this code yet.
+3. Settle the two lost fish in the 28/30 sample. Both scored `cast prompt`; one showed a
+   shape-accepted card (304x420 / 320x436, ink 0.115-0.116) that never produced parsed text, so
+   `parseCatch` can still drop a win silently when no dial is locked - fix that path or prove the
+   loss genuine.
+4. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
    bubbles) at window sizes nobody has tested yet.
 
 ---
@@ -207,6 +223,8 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-10-27 | lead (DSH session) | M1 catch-card freeze | Commits 228c517, 28e77b1, 14abfe6: card detection by solid rectangle (integral image, solid seed grown while solid, tap the seed centre), `cardAnywhere()` removed, stale-canvas and opaque-layer guards; 34 tests. Cause found from pixels: an event card's artwork spills outside the frame, so the connected blob measured 700x576 at 46% fill and `findCatch()` returned null. Live: the stuck card dismissed, then 22 s and 25 s runs with 28/28 dials closed, 0 errors, Eel/Herring/Bass logged. |
 | 2026-10-27 | lead (DSH session) | M1 fix round after first user trial | Commits 1ab882d, 6682c20, ba2c9e6: adaptive prompt scan (fixed boxes first, then the whole UI layer), capture-phase drag listeners, `POST /diag` + `__fish.captureUI()`, `readUI` canvas-loss guard, reducer clock fallback; 33 tests. Live: drag releases, `REEL!` 108x44 at (618,270) found, 1 Salmon in 24 s. |
 | 2026-10-28 | lead (DSH session) | Dial search was the lag | The user reported lag still there after importing. rAF attribution put 84% of the main thread in the userscript loop; instrumented function timers put 67% of it in `lockDial` (83.34 ms x 8/s), 16% in `findCatch`. Fix: precomputed trig tables, `rimMask`/`rimHits` over a `Uint8Array`, index-only `isRim`/`isGreen`/`isPin`, `inkMix` without arrays, `cardCheckMs` 100. Live: 4.2-4.29 ms per lock over 82 calls, idle fps 32.2 -> 140.6, 1/1 fish caught with 0 ghosts 0 errors. 4 new `tests/perf.test.js` guards; 94 tests pass. |
+| 2026-10-28 | lead (DSH session) | Fishing is seat-based | The long "bot stops casting" stall was finally explained from the game bundle: the cast prompt is only emitted from the sit path, so standing up (a stray tap, a walk) kills fishing until the player sits again. Commit 58abc48 replaced the walk rung of the cast-recovery ladder with a `needsSeat` watchdog; 6d91243 put the same fact in the panel footer. 103 tests. |
+| 2026-10-28 | lead (DSH session) | Seat pause + repo published | da2d328 pauses the session clock while unseated (core untouched, 30 min cap, `no-seat`), f13967f makes that pause honour the clock window and a spent daily cap. Added README, MIT licence, docs index and the docs/STATE refresh; repo pushed private to github.com/lowqualityloey/lofitown-autofishing (28 files, `shots/` excluded). 110 tests. |
 | 2026-10-28 | lead (DSH session) | Frame rate | The user reported lag; measured 27.6 fps with the bot running vs 141.3 with it stopped. Cause: a 360x210 readback plus 75,600 per-pixel array allocations every frame, a whole-surface read at 5 Hz, and reads while a dial was locked. Fix: index-only loops, bubble scan 25 Hz / 11 Hz locked, prompt scan 3 Hz. After: 111-138 fps, 3/3 fish caught, 0 misses. `tests/perf.test.js` (4 guards); 90 tests pass. |
 | 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
 

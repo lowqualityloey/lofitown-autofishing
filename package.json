@@ -1,6 +1,14 @@
 {
   "name": "lofitown-autofishing",
+  "version": "3.2.0",
   "private": true,
+  "description": "Plays the lofi.town fishing loop: casts, reels, presses the reel dial on a predicted crossing, and keeps a local catch ledger. Ships as one self-contained userscript.",
+  "license": "MIT",
+  "author": "Jonell Balanay",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lowqualityloey/lofitown-autofishing.git"
+  },
   "type": "commonjs",
   "scripts": {
     "test": "node --test",
