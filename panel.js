@@ -499,6 +499,7 @@
       panel: size,
       viewport: { w: window.innerWidth, h: window.innerHeight },
       exclude: exclude,
+      topInset: 72,
       preferred: dragged || null
     });
     if (res === 'pill') {

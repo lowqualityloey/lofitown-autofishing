@@ -57,17 +57,23 @@
     var size = { w: opts.panel.w, h: opts.panel.h };
     var viewport = opts.viewport;
     var margin = opts.margin == null ? MARGIN : opts.margin;
+    // The game draws a HUD strip along the top; corners start below it so the panel does not cover
+    // controls the player still needs to click.
+    var topInset = opts.topInset || 0;
+    var top = margin + topInset;
     var exclude = opts.exclude || null;
 
     if (size.w + margin * 2 > viewport.w || size.h + margin * 2 > viewport.h) return 'pill';
 
     var right = viewport.w - size.w - margin;
     var bottom = viewport.h - size.h - margin;
+    // Top-left first: the game's coin and upgrade controls live in the top-right strip, and the
+    // panel swallows pointer events, so parking over them would make them unclickable.
     var corners = [
-      { x: right, y: margin },
+      { x: margin, y: top },
       { x: margin, y: bottom },
-      { x: margin, y: margin },
-      { x: right, y: bottom }
+      { x: right, y: bottom },
+      { x: right, y: top }
     ];
 
     var candidates = [];
