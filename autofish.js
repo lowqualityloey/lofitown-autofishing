@@ -56,7 +56,7 @@
   let ubuf = null, uctx = null;
   /** Read the UI layer. Must be called from inside a rAF callback. */
   function readUI(x, y, w, h) {
-    if (!uiCanvas || !uiCanvas.width) surfaces();
+    if (!uiCanvas || !uiCanvas.width || !uiCanvas.isConnected) surfaces();
     // The SPA can drop its canvases for a moment (route change, soft reload). Reporting "nothing
     // drawn" is correct there; touching a missing canvas would throw on every frame and the
     // panel would read a burst of errors as a broken session and stop it.
@@ -158,7 +158,7 @@
   let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
 
   function downscale() {
-    if (!uiCanvas) surfaces();
+    if (!uiCanvas || !uiCanvas.isConnected) surfaces();
     if (!uiCanvas || !uiCanvas.width) return false;
     const w = Math.max(1, Math.floor(uiCanvas.width / SDOWN));
     const h = Math.max(1, Math.floor(uiCanvas.height / SDOWN));
@@ -319,6 +319,7 @@
       }
     }
     if (!seed || seed.n / (CW * CH) < 0.94) return null;   // nothing card-sized and solid here
+    if (I[sh * stride + sw] / (sw * sh) > 0.6) return null; // an opaque layer is the world, not a card
     const solid = (x0, y0, x1, y1) => sum(x0, y0, x1, y1) / ((x1 - x0) * (y1 - y0)) >= 0.88;
     let x0 = seed.x, y0 = seed.y, x1 = x0 + CW, y1 = y0 + CH;
     const MAXW = Math.floor(CARD_MAX_W / SDOWN), MAXH = Math.floor(CARD_MAX_H / SDOWN);
