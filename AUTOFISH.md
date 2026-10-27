@@ -770,6 +770,56 @@ and day buckets, `logSummary` ranking, `logCsv` escaping, `trimLog`, JSON round 
 foreign / blocked stores. Plus a `tests/panel.test.js` guard that the strip reads `__fish.log()`.
 `node --test` = 85 pass / 0 fail.
 
+## 2026-10-28 frame rate: the bot was the lag
+
+Reported: "i noticed fps drops or bit laggy now in playing lofi.town". Measured on the live tab (UI
+layer 1459x954, dpr 1, `document.visibilityState === 'visible'`), sampling `requestAnimationFrame`
+gaps in 3 s windows:
+
+| Condition | fps | p50 gap | p95 gap | worst |
+|---|---|---|---|---|
+| Bot stopped (game alone) | 141.3 | 7.0 ms | 7.2 ms | 14 ms |
+| Old build running | **27.6** | 13.9 ms | **111.4 ms** | 139 ms |
+| This build running, dial locked | 111-138 | 7.0 ms | 7.3-21 ms | 35 ms |
+
+So the lag was ours, not the game's, and it was not subtle: the bot spent more than a whole frame of
+a 144 Hz display on its own work every frame, and the p95 stalls were garbage collection.
+
+**What cost the time.** Every number below was measured in the page against the live canvas:
+
+| Work | Cost |
+|---|---|
+| `getImageData` of the bubble box (360x210) | 2.1 ms |
+| `getImageData` of the dial box (194x194) | 1.68 ms |
+| `getImageData` of the whole surface downscaled to 365x239 | 1.63 ms |
+
+Three causes compounded it:
+
+1. **`bubbleInBox` ran every frame**, and its column count called `PX()` per pixel. `PX` returns a
+   fresh 4-element array, so a 360x210 box allocated 75,600 arrays per frame - roughly 6.3M
+   arrays/s at the observed loop rate. That is the p95 stall.
+2. `bubbleAnywhere` read and flood-filled the **whole** UI surface five times a second for a prompt
+   that stays on screen for seconds.
+3. The bubble box was read even while a dial was locked, when the cast prompt cannot be up.
+
+**What changed.** The two per-pixel loops in `bubbleInBox` read channels straight out of the buffer
+(`d[i]`, `d[i+3]`) and count columns in one pass; the whole-surface prompt scan is throttled to
+3 Hz; and `F.findBubble` is time-gated to **25 Hz while idle and 11 Hz while a dial is locked**. A
+dial on screen means the cast prompt is gone, so those reads were pure waste. Detection latency is
+at most 40 ms against prompts that live for seconds. The dial sample - the part accuracy depends on
+- still reads at the full loop rate.
+
+**Two bugs I put in, and the guards that now catch them.** Shortening the inner bubble width/height
+to `bw`/`bh` first shadowed the buffer's own `w`/`h`; the height one left `h` in the temporal dead
+zone, which would have thrown on the first candidate bubble and stopped the run after four bad
+frames. Both were caught by reading the rewritten function before shipping, and are now pinned by
+`tests/perf.test.js` (four guards: the scan rates, no `PX()` or array literal in the box scan, and no
+shadowing of the buffer stride).
+
+**Measured after** (same tab, build injected, bot running with a dial locked): 111.4 fps, p50 7.0 ms,
+p95 21 ms, `stats.errors` 0. Detection still works: `bubble anywhere` fired 1.0 s after a catch card
+was dismissed, and the bot kept catching while the sample was taken.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

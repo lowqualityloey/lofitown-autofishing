@@ -625,28 +625,32 @@ const SPECIES = [
   function bubbleInBox() {
     const r = readUI(BOX_BUBBLE.x, BOX_BUBBLE.y, BOX_BUBBLE.w, BOX_BUBBLE.h);
     if (!r) return null;
-    const cols = [];
-    for (let x = 0; x < r.w; x++) {
-      let c = 0;
-      for (let y = 0; y < r.h; y++) if (WHT(PX(r, x + r.x, y + r.y))) c++;
-      cols.push(c);
+    // Column counts straight off the buffer. The old loop built a fresh 4-element array for every
+    // pixel - 75,600 allocations per frame, i.e. ~6M/s at the loop rate. That GC pressure is what
+    // made the page stutter, so this pass reads channels by index only.
+    const d = r.d, w = r.w, h = r.h;
+    const cols = new Array(w).fill(0);
+    for (let y = 0, i = 0; y < h; y++) {
+      for (let x = 0; x < w; x++, i += 4) {
+        if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) cols[x]++;
+      }
     }
     let s = -1, best = null;
     for (let x = 0; x <= r.w; x++) {
       const on = x < r.w && cols[x] > 3;
       if (on && s < 0) s = x;
       if (!on && s >= 0) {
-        const w = x - s;
-        if (w > 45 && w < 150) {
+        const bw = x - s;                     // bubble width, not the buffer stride
+        if (bw > 45 && bw < 150) {
           let y0 = 1e9, y1 = -1, n = 0;
-          for (let xx = s; xx < x; xx++) {
-            for (let y = 0; y < r.h; y++) {
-              if (WHT(PX(r, xx + r.x, y + r.y))) { n++; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+          for (let y = 0; y < h; y++) {
+            for (let xx = s, i = (y * w + s) * 4; xx < x; xx++, i += 4) {   // w = buffer width
+              if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) { n++; if (y < y0) y0 = y; if (y > y1) y1 = y; }
             }
           }
-          const h = y1 - y0;
-          if (h > 25 && h < 95 && (!best || n > best.n)) {
-            best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w, h, n };
+          const bh = y1 - y0;                 // bubble height; h stays the buffer height
+          if (bh > 25 && bh < 95 && (!best || n > best.n)) {
+            best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n };
           }
         }
         s = -1;
@@ -736,7 +740,7 @@ const SPECIES = [
   let promptAt = 0;
   function bubbleAnywhere() {
     const t = now();
-    if (t - promptAt < 200) return null;          // the scan is throttled; between runs report nothing
+    if (t - promptAt < 350) return null;          // full-surface readback: 3 Hz is plenty for a prompt
     promptAt = t;
     if (F.geo) return null;                       // a dial on screen means the prompt is already gone
     if (!downscale()) return null;
@@ -761,7 +765,17 @@ const SPECIES = [
     return best;
   }
 
+  /**
+   * Reading the UI layer is a GPU readback, and it is not free: a 360x210 read measured ~2.1 ms
+   * against the live game, which is most of a 144 Hz frame. The prompts it looks for (CAST!,
+   * REEL!) stay on screen for seconds, so there is nothing to gain from scanning 84 times a
+   * second - 25 Hz while idle and 11 Hz while a dial is locked (a dial on screen means the cast
+   * prompt is gone) detects a prompt tens of milliseconds after it appears.
+   */
   F.findBubble = function () {
+    const t = now();
+    if (t - (F.bubbleScanAt || 0) < (F.geo ? 90 : 40)) return null;
+    F.bubbleScanAt = t;
     return bubbleInBox() || bubbleAnywhere();
   };
 

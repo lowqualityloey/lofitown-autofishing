@@ -181,14 +181,19 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-10-27 | Pause semantics | Pause is not a stop: no cooldown, and paused/waiting time never counts toward session length or the daily cap. | same spec |
 | 2026-10-28 | Catch history | Per-catch ledger in `localStorage` (`autofish:log:v1`), written only from parsed catch text. Session records stay server-only; the ledger is history, never a scoreboard, and rarity may be filled from the embedded catalogue with `derived:true`. | `docs/specs/2026-10-28-catch-log.md` |
 | 2026-10-27 | Placement | Panel position comes from the live exclusion rect (`__fish.zones()`) at runtime, not from fixed coordinates; no room means collapse to the pill. | same spec |
+| 2026-10-28 | Frame budget | UI `getImageData` is a GPU readback (~2.1 ms per 360x210 box). The bubble scan is throttled to 25 Hz idle / 11 Hz with a dial locked, the whole-surface prompt scan to 3 Hz, and per-pixel loops read channels by index. The dial sample keeps the full loop rate because accuracy depends on it. Measured: the old build held the page at 27.6 fps, this one at 111-138 fps. | `AUTOFISH.md` 2026-10-28 frame rate |
 
 ---
 
 ## 7. Next Immediate Actions (Queued)
 1. The user re-imports `dist/autofish.user.js` into Tampermonkey (their copy predates the panel
-   embed and the collapse fix) and fishes one real session. Then read `__fish.log()` and
-   `__fish.logCsv()` to confirm the ledger fills from real catches, not from the injected test.
-2. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
+   embed, the collapse fix, the higher session ranges and the frame-rate fix) and fishes one real
+   session. Then read `__fish.log()` and `__fish.logCsv()` to confirm the ledger fills from real
+   catches, not from the injected test.
+2. Watch the after-catch cast stall: on 2026-10-28 the bot found the `CAST!` bubble, tapped it and
+   still cast nothing for five seconds at a time (23 `cast retry` events over three attempts). The
+   bubble tap and the space fallback both failed there, so it is not the scan rate.
+3. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
    bubbles) at window sizes nobody has tested yet.
 
 ---
@@ -201,6 +206,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | :--- | :--- | :--- | :--- |
 | 2026-10-27 | lead (DSH session) | M1 catch-card freeze | Commits 228c517, 28e77b1, 14abfe6: card detection by solid rectangle (integral image, solid seed grown while solid, tap the seed centre), `cardAnywhere()` removed, stale-canvas and opaque-layer guards; 34 tests. Cause found from pixels: an event card's artwork spills outside the frame, so the connected blob measured 700x576 at 46% fill and `findCatch()` returned null. Live: the stuck card dismissed, then 22 s and 25 s runs with 28/28 dials closed, 0 errors, Eel/Herring/Bass logged. |
 | 2026-10-27 | lead (DSH session) | M1 fix round after first user trial | Commits 1ab882d, 6682c20, ba2c9e6: adaptive prompt scan (fixed boxes first, then the whole UI layer), capture-phase drag listeners, `POST /diag` + `__fish.captureUI()`, `readUI` canvas-loss guard, reducer clock fallback; 33 tests. Live: drag releases, `REEL!` 108x44 at (618,270) found, 1 Salmon in 24 s. |
+| 2026-10-28 | lead (DSH session) | Frame rate | The user reported lag; measured 27.6 fps with the bot running vs 141.3 with it stopped. Cause: a 360x210 readback plus 75,600 per-pixel array allocations every frame, a whole-surface read at 5 Hz, and reads while a dial was locked. Fix: index-only loops, bubble scan 25 Hz / 11 Hz locked, prompt scan 3 Hz. After: 111-138 fps, 3/3 fish caught, 0 misses. `tests/perf.test.js` (4 guards); 90 tests pass. |
 | 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
 
 ---
