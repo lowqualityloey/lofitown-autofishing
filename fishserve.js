@@ -107,6 +107,12 @@ function readBigBody(req, done) {
   req.on('error', () => done(null));
 }
 
+/** Fill __FISHSERVE__ in the userscript with the address the browser actually reached us on. */
+function withHost(text, host) {
+  const safe = String(host || '').replace(/[^A-Za-z0-9.:[\]-]/g, '') || ('127.0.0.1:' + PORT);
+  return text.replace(/__FISHSERVE__/g, safe);
+}
+
 function createServer() {
   ensure(CATCHES(), CATCH_HEAD);
   ensure(SESSIONS(), SESSION_HEAD);
@@ -124,7 +130,9 @@ function createServer() {
       fs.readFile(full, (e, d) => {
         if (e) { res.writeHead(404, CORS); return res.end('not found'); }
         res.writeHead(200, route === '/install' ? Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, CORS) : JS);
-        res.end(d);
+        // The userscript has to inject the panel from whichever host:port served it, and only the
+        // request knows that (8731 is often already taken on Windows by an older copy).
+        res.end(route === '/autofish.user.js' ? withHost(d.toString('utf8'), req.headers.host) : d);
       });
       return;
     }

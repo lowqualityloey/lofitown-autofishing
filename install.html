@@ -58,7 +58,7 @@
 
   <div class="card">
     <h2 style="font-size:16px;margin:0 0 10px">Prefer a userscript?</h2>
-    <p class="note" style="margin:0">Point Tampermonkey at <code>http://127.0.0.1:8731/autofish.user.js</code> — same panel, loads on page open so you never click anything.</p>
+    <p class="note" style="margin:0">Point Tampermonkey at <code id="userscript">/autofish.user.js</code> — same panel, loads on page open so you never click anything.</p>
   </div>
 </main>
 <script>
@@ -72,7 +72,16 @@
       + "s.src='" + origin + "/panel.js?'+Date.now();"
       + "s.onerror=()=>alert('AutoFish: fishserve is not running');"
       + "document.documentElement.appendChild(s)})()";
-    document.getElementById('bm').setAttribute('href', code);
+    var bm = document.getElementById('bm');
+    bm.setAttribute('href', code);
+    var us = document.getElementById('userscript');
+    if (us) us.textContent = origin + '/autofish.user.js';
+    // Dragging to the bookmarks bar is fiddly in some browsers; clicking copies the same code.
+    bm.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      var done = function () { bm.textContent = '🎣 copied — paste it as a bookmark'; setTimeout(function () { bm.textContent = '🎣 AutoFish'; }, 2200); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(code).then(done, function () {});
+    });
   })();
 </script>
 </body>

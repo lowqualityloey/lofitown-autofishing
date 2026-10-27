@@ -87,6 +87,17 @@ test('POST /diag refuses a body without a png', async () => {
   } finally { server.close(); }
 });
 
+test('GET /autofish.user.js points the panel at the port it was served on', async () => {
+  const { server, port } = await boot();
+  try {
+    const res = await fetch('http://127.0.0.1:' + port + '/autofish.user.js');
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.doesNotMatch(body, /__FISHSERVE__/);
+    assert.ok(body.includes('127.0.0.1:' + port), 'the injected origin is the request host');
+  } finally { server.close(); }
+});
+
 test('GET /session.js serves the reducer with no-store', async () => {
   const { server, port } = await boot();
   try {
