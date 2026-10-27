@@ -30,6 +30,8 @@
   var tickTimer = null;
   var placeTimer = null;
   var heartbeatAt = 0;
+  var diagSent = false;       // one UI frame per session, when a run never sees a prompt
+  var diagAt = 0;
   var wakeSentinel = null;
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
@@ -112,6 +114,29 @@
         body: JSON.stringify({ started_at: new Date(state.startedAt || Date.now()).toISOString(), minutes: minutes, catches: catches, reason: reason })
       }).then(function (r) { if (!r.ok) banner = 'session log rejected the row'; }).catch(function () { banner = 'session log offline — the session still works'; });
     } catch (e) { banner = 'session log offline — the session still works'; }
+  }
+
+  /**
+   * Send one PNG of the game's UI layer to the local server. A run that pastes in the game but never
+   * reacts is almost always looking at the wrong pixels; with the frame on disk the detector can be
+   * corrected from what the game actually drew instead of from guesses.
+   */
+  function captureDiag(note) {
+    try {
+      var f = fish();
+      if (!f || !f.captureUI) { banner = 'this core cannot grab a frame'; return; }
+      f.captureUI();
+      setTimeout(function () {
+        var shot = f._shot;
+        if (typeof shot !== 'string' || shot.indexOf('data:image') !== 0) { banner = 'could not grab a frame to send'; return; }
+        fetch(BASE + '/diag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ note: note, png: shot, stats: f.stats, viewport: [window.innerWidth, window.innerHeight], dpr: window.devicePixelRatio })
+        }).then(function (r) { banner = r.ok ? 'sent a game frame to ' + BASE + ' for diagnosis' : 'diagnosis upload was rejected'; })
+          .catch(function () { banner = 'diagnosis upload failed (fishserve offline?)'; });
+      }, 400);
+    } catch (e) { banner = 'diagnosis failed: ' + ((e && e.message) || e); }
   }
 
   /* ---------------------------------------------------------- actions ----- */
@@ -382,6 +407,9 @@
       btn.addEventListener('pointerdown', function (e) { e.preventDefault(); hold(delta); });
       ['pointerup', 'pointerleave', 'pointercancel'].forEach(function (t) { btn.addEventListener(t, stop); });
     });
+    // a release outside the button must stop the repeat too, or the value keeps climbing
+    document.addEventListener('pointerup', stop, true);
+    document.addEventListener('pointercancel', stop, true);
   }
 
   function keyConf(key) {
@@ -531,9 +559,14 @@
     if (e.button != null && e.button !== 0) return;
     var r = host.getBoundingClientRect();
     dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
-    host.setPointerCapture && host.setPointerCapture(e.pointerId);
-    window.addEventListener('pointermove', onDrag);
-    window.addEventListener('pointerup', endDrag);
+    try { host.setPointerCapture(e.pointerId); } catch (ignored) {}
+    // Capture phase on purpose: the host swallows pointerup in the bubble phase so the game never
+    // sees it, and a bubble-phase window listener here would never run — the drag would follow the
+    // pointer forever. Capture runs before the host handler.
+    window.addEventListener('pointermove', onDrag, true);
+    window.addEventListener('pointerup', endDrag, true);
+    window.addEventListener('pointercancel', endDrag, true);
+    window.addEventListener('blur', endDrag, true);
   }
 
   function onDrag(e) {
@@ -546,8 +579,10 @@
   }
 
   function endDrag() {
-    window.removeEventListener('pointermove', onDrag);
-    window.removeEventListener('pointerup', endDrag);
+    window.removeEventListener('pointermove', onDrag, true);
+    window.removeEventListener('pointerup', endDrag, true);
+    window.removeEventListener('pointercancel', endDrag, true);
+    window.removeEventListener('blur', endDrag, true);
     if (dragging && dragged) writeJSON(POS_KEY, { x: Math.round(dragged.x), y: Math.round(dragged.y), collapsed: collapsed });
     dragging = null;
     place();
@@ -578,6 +613,13 @@
       errors: status && status.stats ? status.stats.errors || 0 : 0,
       todayMs: baseTodayMs
     });
+
+    // 20 s running with zero prompts found means the detector is blind; grab one frame so the
+    // shape of the real bubble can be measured rather than guessed. Once per session.
+    if (!diagSent && state.phase === 'running' && status && status.stats && !status.stats.bubbles) {
+      if (!diagAt) diagAt = Date.now();
+      if (Date.now() - diagAt > 20000) { diagSent = true; captureDiag('no-prompt-after-20s'); }
+    }
 
     if (Date.now() - heartbeatAt > 30000) { heartbeatAt = Date.now(); writeHeartbeat(); }
     if (banner && state.phase === 'running' && banner.indexOf('offline') === -1) { /* keep guard text visible */ }
@@ -631,6 +673,7 @@
     window.__panel.state = function () { return state; };
     window.__panel.dispatch = dispatch;
     window.__panel.unmount = unmount;
+    window.__panel.captureDiag = captureDiag;
     tick();
   }
 

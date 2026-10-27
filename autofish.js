@@ -56,7 +56,11 @@
   let ubuf = null, uctx = null;
   /** Read the UI layer. Must be called from inside a rAF callback. */
   function readUI(x, y, w, h) {
-    if (!uiCanvas) surfaces();
+    if (!uiCanvas || !uiCanvas.width) surfaces();
+    // The SPA can drop its canvases for a moment (route change, soft reload). Reporting "nothing
+    // drawn" is correct there; touching a missing canvas would throw on every frame and the
+    // panel would read a burst of errors as a broken session and stop it.
+    if (!uiCanvas || !uiCanvas.width) return null;
     if (!ubuf) {
       ubuf = document.createElement('canvas');
       ubuf.width = 520; ubuf.height = 520;
@@ -107,10 +111,10 @@
                     && c[2] < 135 && c[0] - c[1] > 55;
 
   /* --------------------------------------------------------- bubbles ----- */
-  /** The CAST!/REEL! bubble: the only large white shape near the player. */
-  F.findBubble = function () {
-    const B = { x: 690, y: 215, w: 360, h: 210 };
-    const r = readUI(B.x, B.y, B.w, B.h);
+  /** The CAST!/REEL! bubble: a white rounded prompt, clearly wider than it is tall. */
+  const BOX_BUBBLE = { x: 690, y: 215, w: 360, h: 210 };
+  function bubbleInBox() {
+    const r = readUI(BOX_BUBBLE.x, BOX_BUBBLE.y, BOX_BUBBLE.w, BOX_BUBBLE.h);
     if (!r) return null;
     const cols = [];
     for (let x = 0; x < r.w; x++) {
@@ -140,6 +144,116 @@
       }
     }
     return best;
+  }
+
+  /* -------------------------------------------------- adaptive search ---- */
+  /**
+   * The prompts hang off the play area, not the window: the bubble floats above the player and
+   * slides with the camera, so a fixed box only fits the window and camera position it was
+   * measured at. When the box misses, look for the same shapes anywhere on the UI layer, using a
+   * single 1/4-scale read of the whole surface. Both searches stop at "not found" and return null,
+   * so a resized window degrades to doing nothing rather than tapping blind.
+   */
+  const SDOWN = 4;
+  let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
+
+  function downscale() {
+    if (!uiCanvas) surfaces();
+    if (!uiCanvas || !uiCanvas.width) return false;
+    const w = Math.max(1, Math.floor(uiCanvas.width / SDOWN));
+    const h = Math.max(1, Math.floor(uiCanvas.height / SDOWN));
+    if (!sbuf) {
+      sbuf = document.createElement('canvas');
+      sctx = sbuf.getContext('2d', { willReadFrequently: true });
+    }
+    if (sbuf.width !== w || sbuf.height !== h) { sbuf.width = w; sbuf.height = h; }
+    sctx.clearRect(0, 0, w, h);
+    try { sctx.drawImage(uiCanvas, 0, 0, w * SDOWN, h * SDOWN, 0, 0, w, h); } catch (e) { return false; }
+    sdata = sctx.getImageData(0, 0, w, h).data;
+    sw = w; sh = h;
+    return true;
+  }
+
+  function spx(p) {
+    const i = p * 4;
+    return [sdata[i], sdata[i + 1], sdata[i + 2], sdata[i + 3]];
+  }
+
+  /** 4-connected components on the downscaled surface: bbox and pixel count per blob. */
+  function blobs(match, minPx) {
+    const total = sw * sh, seen = new Uint8Array(total), out = [];
+    for (let p0 = 0; p0 < total; p0++) {
+      if (seen[p0] || !match(spx(p0))) continue;
+      const stack = [p0];
+      seen[p0] = 1;
+      let x0 = sw, y0 = sh, x1 = 0, y1 = 0, count = 0;
+      while (stack.length) {
+        const p = stack.pop(), x = p % sw, y = (p / sw) | 0;
+        count++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        const near = [x > 0 ? p - 1 : -1, x < sw - 1 ? p + 1 : -1, y > 0 ? p - sw : -1, y < sh - 1 ? p + sw : -1];
+        for (let k = 0; k < 4; k++) {
+          const q = near[k];
+          if (q < 0 || seen[q] || !match(spx(q))) continue;
+          seen[q] = 1;
+          stack.push(q);
+        }
+      }
+      if (count >= minPx) out.push({ x0, y0, x1, y1, count });
+    }
+    return out;
+  }
+
+  const WHT_S = (c) => c[3] > 120 && c[0] >= 225 && c[1] >= 225 && c[2] >= 225;
+  const CREAM = (c) => c[3] > 60 && c[0] > 225 && c[1] > 200 && c[2] > 130 && c[2] < 238;
+
+  /** Dark glyphs on a white field — what separates a prompt from any other white blob. */
+  function inkMix(r) {
+    let dark = 0, white = 0, n = 0;
+    for (let y = 0; y < r.h; y++) {
+      for (let x = 0; x < r.w; x++) {
+        const c = PX(r, x + r.x, y + r.y);
+        n++;
+        if (c[3] > 120 && LU(c) < 150) dark++;
+        if (WHT(c)) white++;
+      }
+    }
+    return n ? { dark: dark / n, white: white / n } : { dark: 0, white: 0 };
+  }
+
+  let promptAt = 0;
+  function bubbleAnywhere() {
+    const t = now();
+    if (t - promptAt < 200) return null;          // the scan is throttled; between runs report nothing
+    promptAt = t;
+    if (F.geo) return null;                       // a dial on screen means the prompt is already gone
+    if (!downscale()) return null;
+    let best = null;
+    const comps = blobs(WHT_S, 30);
+    for (let i = 0; i < comps.length; i++) {
+      const b = comps[i];
+      const W = (b.x1 - b.x0 + 1) * SDOWN, H = (b.y1 - b.y0 + 1) * SDOWN;
+      if (W < 45 || W > 190 || H < 24 || H > 110) continue;
+      const ar = W / H;
+      if (ar < 1.05 || ar > 4.6) continue;
+      if ((b.count * SDOWN * SDOWN) / (W * H) < 0.42) continue;
+      const x = b.x0 * SDOWN, y = b.y0 * SDOWN;
+      const r = readUI(x, y, W, H);
+      if (!r) continue;
+      const ink = inkMix(r);
+      if (ink.white < 0.45 || ink.dark < 0.02 || ink.dark > 0.5) continue;
+      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, n: b.count * SDOWN * SDOWN };
+      if (!best || cand.n > best.n) best = cand;
+    }
+    if (best) L('bubble anywhere', { cx: best.cx, cy: best.cy, w: best.w, h: best.h });
+    return best;
+  }
+
+  F.findBubble = function () {
+    return bubbleInBox() || bubbleAnywhere();
   };
 
   /**
@@ -147,21 +261,53 @@
    * It is drawn on the same UI layer, so it is found by colour and area - a cream fill over a
    * wide centre rect. The dial cannot trip this: it covers well under the 45% threshold.
    */
-  F.findCatch = function () {
-    const B = { x: 620, y: 315, w: 365, h: 405 };
-    const r = readUI(B.x, B.y, B.w, B.h);
-    if (!r) return null;
+  const BOX_CARD = { x: 620, y: 315, w: 365, h: 405 };
+  function creamFraction(r) {
     let hit = 0, n = 0;
     for (let y = 6; y < r.h - 6; y += 8) {
       for (let x = 6; x < r.w - 6; x += 8) {
-        const c = PX(r, x + r.x, y + r.y);
         n++;
-        if (c[3] > 60 && c[0] > 225 && c[1] > 200 && c[2] > 130 && c[2] < 238) hit++;
+        if (CREAM(PX(r, x + r.x, y + r.y))) hit++;
       }
     }
-    const frac = n ? hit / n : 0;
+    return n ? hit / n : 0;
+  }
+
+  function cardInBox() {
+    const r = readUI(BOX_CARD.x, BOX_CARD.y, BOX_CARD.w, BOX_CARD.h);
+    if (!r) return null;
+    const frac = creamFraction(r);
     if (frac < 0.2) return null;      // paper is 249,238,208 and covers ~28% once art and frame are excluded
     return { cx: Math.round(r.x + r.w / 2), cy: Math.round(r.y + r.h / 2), frac: +frac.toFixed(2) };
+  }
+
+  let cardAt = 0;
+  function cardAnywhere() {
+    const t = now();
+    if (t - cardAt < 400) return null;
+    cardAt = t;
+    if (!downscale()) return null;
+    let best = null;
+    const comps = blobs(CREAM, 300);
+    for (let i = 0; i < comps.length; i++) {
+      const b = comps[i];
+      const W = (b.x1 - b.x0 + 1) * SDOWN, H = (b.y1 - b.y0 + 1) * SDOWN;
+      if (W < 200 || W > 620 || H < 220 || H > 700) continue;
+      if ((b.count * SDOWN * SDOWN) / (W * H) < 0.35) continue;
+      const x = b.x0 * SDOWN, y = b.y0 * SDOWN;
+      const r = readUI(x, y, W, H);
+      if (!r) continue;
+      const frac = creamFraction(r);
+      if (frac < 0.2) continue;
+      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), frac: +frac.toFixed(2) };
+      if (!best || cand.frac > best.frac) best = cand;
+    }
+    if (best) L('card anywhere', { cx: best.cx, cy: best.cy, frac: best.frac });
+    return best;
+  }
+
+  F.findCatch = function () {
+    return cardInBox() || cardAnywhere();
   };
   /**
    * Text capture. The card is canvas-drawn: no DOM node, no scene text, no local save. But every
@@ -527,9 +673,21 @@
     return { bubble, dial, card: F.lastCardRect || null, hintZone };
   };
 
+  /**
+   * Ask for one PNG of the UI layer on the next animation frame. The panel posts it to fishserve so
+   * a run that never sees a prompt can be diagnosed from the pixels the bot actually looked at,
+   * instead of from guesses about what went wrong.
+   */
+  F.captureUI = function () { F._shot = null; F._shotWanted = true; return true; };
+
   function loop() {
     if (!F.running) { F._raf = null; return; }
     F._raf = requestAnimationFrame(loop);
+    // Inside rAF, before compositing, is the only moment the UI layer's buffer is still readable.
+    if (F._shotWanted && uiCanvas) {
+      F._shotWanted = false;
+      try { F._shot = uiCanvas.toDataURL('image/png'); } catch (e) { F._shot = 'ERR ' + ((e && e.message) || e); }
+    }
     try { step(); } catch (e) { F.stats.errors++; L('error', { e: String((e && e.message) || e) }); }
   }
 
