@@ -153,6 +153,8 @@ never fired. Sampling is tri-state - GRN = wedge, PIN (rgb 229,118,83, within +-
 wildcard, anything else = base - and wildcard-only **edges** are trimmed afterwards so the pin cannot
 inflate the measured width.
 
+*(The trigger below is v1, superseded by Timing v2 further down; the measurement notes stand.)*
+
 The trigger keys on the arc **midpoint**, not on the pin being anywhere inside the arc:
 
     delta = 0 - mid                      signed distance from midpoint to pin
@@ -165,6 +167,61 @@ Sample radius moved to 0.69R (63px at R of ~91): the old 0.62R read the arc shor
 Verify by **dial lifetime only**: a registered press ends the dial early (the one confirmed case was
 4.64s against the natural 15.97s). A ~15.9s dial means the press missed or never arrived. The PRESS
 log entries carry delta, pred, mid, width and omega so each attempt is auditable.
+
+### Timing v2 - measured rotation, timer dispatch, containment (implemented 2026-10-27)
+
+The v1 rule above fires only when `abs(pred) <= 6`. At 746 deg/s the pin travels 18.6 deg in the
+25ms the event takes to land, and the 60fps loop can only *start* a press on a frame boundary, so
+one frame of omega error or one late frame loses the crossing. Three changes replace it:
+
+1. **omega is fitted, not differenced.** `fitOmega` takes the last <=12 *distinct* frames
+   (`F.sample` pushes only when t moved >=4ms or mid moved >=0.2 deg, so re-rendered identical
+   frames cannot fake a 0 rate), unwraps the mids, least-squares the slope over <=200ms, drops a
+   single outlier frame, and clamps to +-1500 deg/s. No deadband: a 0 deg/s fit is a real answer.
+2. **the press is dispatched by a timer.** `planPress` computes the crossing `toJudge`, then
+   `dispatchAt = t + toJudge - (leadMs + biasMs)`; when that is within the horizon (40ms) it arms a
+   `setTimeout`. The loop re-plans and cancels/re-arms **every frame**, so a plan is never older
+   than one frame plus the horizon, and a reversal or a bad fit cannot leave a stale timer alive.
+3. **the acceptance window is the arc, not the midpoint.** `trigger: 'contain'` (default) presses
+   when the pin is inside the *measured* arc shrunk by `marginDeg`: `win = max(midDeg, width/2 -
+   margin)`. `trigger: 'angle'` keeps the old midpoint +-midDeg behaviour.
+
+    delta = 0 - mid                              signed offset of the midpoint from the pin
+    pred  = delta + omega * leadMs/1000          offset at the moment the event lands
+    toJudge = (-delta/omega) mod rotation period time until the midpoint reaches the pin
+    press  = pin inside the arc at judgement     (contain)  |  abs(pred) <= midDeg  (angle)
+
+Defaults: `pressWith:'pointer'` (proven path), `trigger:'contain'`, `midDeg:6`, `marginDeg:4`,
+`leadMs:25`, `biasMs:0`, `schedHorizonMs:40`, `replanMs:8`, `pressGapMs:120`. `F.timing` exposes
+the three helpers; `tests/timing.test.js` pins them (46 tests pass, `node --test`).
+
+**Telemetry, so the next question is answerable with data.** Every press logs `how` (timer|frame),
+`via`, `delta`, `pred`, `omega`, `fitRms`, `biasMs`, `late`. When the dial ends, `closeDial` scores
+it: a press within `hitMs` (1.5s) of the end is a **hit**, otherwise a **miss**; no press at all is
+**no-press**. Verdicts accumulate in `stats.hits/misses/noPress`, the last 400 in `F.outcomes`, and
+`__fish.sweepReport()` groups them per `biasMs`. `opts.sweep = {min:-60,max:60,step:15}` cycles the
+bias across presses, so one run measures which lead actually lands.
+
+**What the offline replay can and cannot say.** `shots/diag/replay.js` runs the captured dials
+(`dial_frames.json`, 66 dials, 780 frames) through the old frame rule and the new planner, scoring
+the true pin offset at press + lead. The captures are only ~1.35s per dial at ~115ms spacing, so
+they mostly exercise the late "press now" branch, and the fitted omega on 2-3 points is no better
+than the old single-frame delta: **the replay validates the arithmetic, not the hit rate.**
+
+    mode             presses  dials   |err| med  in-arc  inside6deg
+    old frame rule      18    18/66       9.5      94%       44%
+    new contain         27    25/66      19.7     100%       15%
+    new angle           19    18/66      14.7     100%       37%
+
+Containment presses on **more dials** and never lands outside the arc; the wider `|err|` is the
+point - it is pressing somewhere inside the target instead of insisting on the midpoint. The three
+timer presses that did fire dispatched at the predicted crossing but read ~18-25 deg late at
+judgement, because the fitted omega there was 96-370 deg/s while the captured truth was moving
+390-595 deg/s (an acceleration inside the 200ms window, on top of 115ms truth interpolation). That
+is a sampling limit of the capture, not a bug in `planPress`: at 60fps the same window holds ~12
+points.
+
+---
 
 ## 2026-10-27 live run - trigger in, input not trustworthy
 

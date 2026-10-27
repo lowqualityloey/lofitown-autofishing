@@ -27,15 +27,203 @@
  *   disc       base rgb(142,138,111) / wedge rgb(182,188,132), wedge 45-65 degrees
  *   rotation   ~125-140 deg/s
  *
- * A press outside the wedge loses the fish, so the loop presses at most once per
- * rotation, when the MIDPOINT of the wedge is predicted to be on the pin, and never
- * clicks anything except a validated bubble.
+ * Timing: the press is dispatched by a timer aimed at the moment the pin crosses the wedge,
+ * not by the frame that happens to see it - at 746 deg/s the whole +/-6 deg window is 16 ms,
+ * i.e. exactly one frame. Spin rate is a least-squares fit over the last ~200 ms of distinct
+ * frames (unwrapped, no deadband, no 600 deg/s clamp). The acceptance window is the measured
+ * arc minus a margin unless opts.trigger === 'angle'. Presses go through the pointer path,
+ * the one proven to reach the game; 'space' stays available for A/B tests.
  */
 (() => {
   if (window.__fish) { try { window.__fish.stop(); } catch (e) {} }
 
   const F = { version: 'autofish 3.0' };
   const now = () => performance.now();
+
+  /* ---- timing core -----------------------------------------------------
+   * Pure functions, no DOM and no state. tests/timing.test.js extracts this block by its
+   * sentinels and runs it under node, so the maths is tested once and shipped once.
+   */
+  // <timing-core>
+  /** Fold an angle into (-180, 180]. */
+  function wrap180(a) {
+    a = (a + 180) % 360;
+    if (a < 0) a += 360;
+    return a - 180;
+  }
+
+  /**
+   * Least-squares spin rate over the last few DISTINCT frames.
+   *
+   * pts: [{ t: ms, mid: deg }] oldest -> newest. The mids are unwrapped in order so a wedge
+   * crossing 0 deg does not read as a 360 deg jump. Frames older than maxAgeMs are dropped, a
+   * single outlier is removed and the fit re-run. Returns null when the frames cannot define
+   * a rate at all (fewer than minN survive, or they all share one timestamp).
+   *
+   * Why a fit: a one-frame delta behind a 0.5 deg deadband never updated at slow spin, kept a
+   * stale fast value, and had to be clamped at 600 deg/s - exactly the speeds this game uses.
+   */
+  function fitOmega(pts, opts) {
+    const o = opts || {};
+    const maxAge = o.maxAgeMs != null ? o.maxAgeMs : 200;
+    const minN = o.minN != null ? o.minN : 2;
+    const minSpan = o.minSpanMs != null ? o.minSpanMs : 8;
+    const limit = o.limit != null ? o.limit : 1500;
+    if (!pts || pts.length < minN) return null;
+    const last = pts[pts.length - 1];
+    const nowMs = o.now != null ? o.now : last.t;
+    const live = [];
+    for (const p of pts) {
+      if (p && isFinite(p.mid) && isFinite(p.t) && nowMs - p.t <= maxAge) live.push(p);
+    }
+    if (live.length < minN) return null;
+    if (live[live.length - 1].t - live[0].t < minSpan) return null;
+
+    const slope = (rows) => {
+      let st = 0, sm = 0;
+      for (const r of rows) { st += r.t; sm += r.m; }
+      const mt = st / rows.length, mm = sm / rows.length;
+      let num = 0, den = 0;
+      for (const r of rows) { const d = r.t - mt; num += d * (r.m - mm); den += d * d; }
+      return den > 0 ? (num / den) * 1000 : null;      // deg per ms -> deg per s
+    };
+    const unroll = (rows) => {
+      const out = [{ t: rows[0].t, m: rows[0].mid }];
+      for (let i = 1; i < rows.length; i++) {
+        out.push({ t: rows[i].t, m: out[i - 1].m + wrap180(rows[i].mid - rows[i - 1].mid) });
+      }
+      return out;
+    };
+    const rmsOf = (rows, omega) => {
+      const t0 = rows[0].t, m0 = rows[0].m;
+      let s = 0;
+      for (const r of rows) { const e = r.m - (m0 + omega / 1000 * (r.t - t0)); s += e * e; }
+      return Math.sqrt(s / rows.length);
+    };
+
+    let rows = unroll(live);
+    let omega = slope(rows);
+    if (omega == null) return null;
+    let dropped = 0, rms = rmsOf(rows, omega);
+    if (rows.length >= 3) {
+      const t0 = rows[0].t, m0 = rows[0].m;
+      let worst = 1, worstE = 0;
+      for (let i = 1; i < rows.length; i++) {
+        const e = Math.abs(rows[i].m - (m0 + omega / 1000 * (rows[i].t - t0)));
+        if (e > worstE) { worstE = e; worst = i; }
+      }
+      const kept = rows.slice(0, worst).concat(rows.slice(worst + 1));
+      const w2 = slope(kept);
+      if (w2 != null) {
+        // Drop the point when it is an outlier against the rest AND removing it makes the fit
+        // materially better. A real rotation cannot improve that much, a mis-tracked arc can.
+        const rms2 = rmsOf(kept, w2);
+        const r = kept.map((q) => q.m - (kept[0].m + w2 / 1000 * (q.t - kept[0].t)));
+        const scale = Math.max(1, Math.sqrt(r.reduce((s, v) => s + v * v, 0) / r.length));
+        if (worstE > Math.max(5, 3 * scale) || rms2 < 0.6 * rms) {
+          rows = kept; omega = w2; rms = rms2; dropped = 1;
+        }
+      }
+    }
+    const clamped = Math.abs(omega) > limit;
+    if (clamped) omega = omega > 0 ? limit : -limit;
+    return {
+      omega, rms, dropped, clamped,
+      n: rows.length,
+      span: rows[rows.length - 1].t - rows[0].t,
+    };
+  }
+
+  /**
+   * Decide what this frame should do about the dial.
+   *
+   * st: { t, delta, width, omega, armed, pendingAt }
+   *     delta  signed degrees from the wedge midpoint to the pin (0 = aligned)
+   *     armed  no press has been sent for this rotation yet
+   * o:  { trigger, midDeg, marginDeg, leadMs, biasMs, horizonMs, replanMs, minOmega }
+   *
+   * Returns { press, armAt, at, cancel, pred, win, reason }.
+   *   press  send the press now (only ever <= leadMs before the crossing)
+   *   armAt  absolute time to dispatch the press (null = no timer wanted)
+   *   cancel drop an already-armed timer (false = keep it as it is)
+   *   pred   where the pin will be when the game judges a press dispatched NOW
+   *   win    the acceptance half-width in degrees
+   *
+   * The schedule always aims at the CROSSING (pin on the midpoint) - that is the widest error
+   * tolerance in both directions. Containment only widens the window used to decide that a
+   * late press is still inside the drawn arc; trigger 'angle' keeps the old midpoint rule.
+   */
+  function planPress(st, o) {
+    const cfg = o || {};
+    const lead = (cfg.leadMs || 0) / 1000;
+    const bias = (cfg.biasMs || 0) / 1000;
+    const minOmega = cfg.minOmega != null ? cfg.minOmega : 8;          // deg/s
+    const horizon = cfg.horizonMs != null ? cfg.horizonMs : 40;
+    const replan = cfg.replanMs != null ? cfg.replanMs : 8;
+    const midDeg = cfg.midDeg != null ? cfg.midDeg : 6;
+    const margin = cfg.marginDeg != null ? cfg.marginDeg : 4;
+    const half = (st.width || 0) / 2;
+    const win = cfg.trigger === 'angle' || !half ? midDeg : Math.max(midDeg, half - margin);
+    const delta = st.delta == null ? wrap180(0 - (st.mid || 0)) : st.delta;
+    const omega = isFinite(st.omega) ? st.omega : null;
+    const pred = omega == null ? delta : wrap180(delta + omega * lead);
+    const out = { delta, pred, win, press: false, armAt: null, at: null, cancel: false, reason: '' };
+
+    if (omega == null || Math.abs(omega) < minOmega) {
+      out.reason = 'static';
+      out.cancel = true;
+      out.press = !!st.armed && Math.abs(pred) <= win;
+      return out;
+    }
+
+    const degPerMs = omega / 1000;
+    const period = 360 / Math.abs(degPerMs);
+    let toJudge = -delta / degPerMs;                       // ms until midpoint reaches the pin
+    toJudge = ((toJudge % period) + period) % period;      // next occurrence, >= 0
+    const dispatchAt = st.t + toJudge - (lead + bias) * 1000;
+    const wait = dispatchAt - st.t;
+
+    if (!st.armed) {
+      out.reason = 'disarmed';
+      out.cancel = true;
+      return out;
+    }
+    if (wait <= 0) {
+      // Too late to schedule the crossing: press only if the pin is still inside the window
+      // at judgement time. Containment turns what would be a dropped dial into a likely hit.
+      const inside = Math.abs(pred) <= win;
+      out.reason = inside ? 'now-inside' : 'now-outside';
+      out.cancel = true;
+      out.press = inside;
+      return out;
+    }
+    if (wait <= horizon) {
+      const keep = st.pendingAt != null && Math.abs(st.pendingAt - dispatchAt) <= replan;
+      out.reason = 'schedule';
+      out.at = dispatchAt;
+      out.cancel = !keep;
+      out.armAt = keep ? null : dispatchAt;
+      return out;
+    }
+    out.reason = 'wait';
+    out.cancel = true;
+    return out;
+  }
+
+  /** Next probe offset (ms) from a bias-sweep config; 0 when the sweep is off. */
+  function sweepBias(cfg, i) {
+    if (!cfg) return 0;
+    let list = cfg.biases;
+    if (!list || !list.length) {
+      const min = cfg.min != null ? cfg.min : -60;
+      const max = cfg.max != null ? cfg.max : 60;
+      const step = cfg.step || 15;
+      list = [];
+      for (let b = min; b <= max + 1e-9; b += step) list.push(Math.round(b));
+    }
+    return list[((i % list.length) + list.length) % list.length];
+  }
+  // </timing-core>
 
   /* ------------------------------------------------------------- log ----- */
   F.log = [];
@@ -592,29 +780,116 @@
 
     const start = best.start, width = best.width, mid = best.mid;
 
-    let omega = geo._om == null ? null : geo._om;
-    if (tracked) {
-      let d = mid - geo._mid;
-      while (d > 180) d -= 360;
-      while (d < -180) d += 360;
-      if (Math.abs(d) >= 0.5 && dt > 0 && dt < 300) {
-        const w = d / dt * 1000;
-        if (Math.abs(w) <= 600) omega = w;
-      }
+    // Spin rate: least-squares over the last ~200 ms of DISTINCT frames (unwrapped, no
+    // deadband, no 600 deg/s clamp). The one-frame delta this replaces froze at slow spin,
+    // held a stale fast value, and clipped the 746 deg/s dials this game actually uses.
+    const tNow = now();
+    if (!geo._hist) geo._hist = [];
+    const hist = geo._hist;
+    const lastPt = hist[hist.length - 1];
+    if (!lastPt || tNow - lastPt.t >= 4 || Math.abs(wrap180(mid - lastPt.mid)) >= 0.2) {
+      hist.push({ t: tNow, mid });
+      while (hist.length > 12) hist.shift();
     }
-    geo._mid = mid; geo._mt = now(); geo._om = omega;
+    const fit = fitOmega(hist, { now: tNow, maxAgeMs: 200, limit: 1500, minSpanMs: 12 });
+    const omega = fit ? fit.omega : null;
+    geo._mid = mid; geo._mt = tNow; geo._om = omega; geo._fit = fit;
 
     // Signed distance from the wedge midpoint to the pin: 0 means aligned.
-    let delta = (0 - mid) % 360;
-    if (delta > 180) delta -= 360;
-    if (delta <= -180) delta += 360;
+    const delta = wrap180(0 - mid);
 
     // Lead: where the midpoint will be when a dispatched event is processed.
     const lead = ((F.opts && F.opts.leadMs) || 0) / 1000;
-    const pred = omega == null ? delta : delta + omega * lead;
+    const pred = omega == null ? delta : wrap180(delta + omega * lead);
 
-    return { ring, valid: true, start, width, mid, delta, pred, omega, tracked, runs: runs.length, pat: b.join(''), greenN, R: geo.R };
+    return {
+      ring, valid: true, start, width, mid, delta, pred, omega, t: tNow, fit,
+      tracked, runs: runs.length, pat: b.join(''), greenN, R: geo.R,
+    };
   };
+
+  /* ------------------------------------------------------- pressing ----- */
+  /** Drop a pending scheduled press (dial gone, pause, stop, re-plan). */
+  function cancelPend() {
+    if (F.pend) { clearTimeout(F.pend.id); F.pend = null; }
+  }
+
+  /**
+   * Arm a timer so the press lands BETWEEN animation frames, aimed at the computed crossing.
+   * The frame loop re-evaluates every 16 ms and cancels/re-aims this, so a wrong prediction
+   * never survives more than one frame.
+   */
+  function armPress(at, geo, s) {
+    cancelPend();
+    const delay = Math.max(0, at - now());
+    const id = setTimeout(() => {
+      if (!F.pend || F.pend.id !== id) return;
+      F.pend = null;
+      if (!F.running || F.paused || F.geo !== geo) return;
+      doPress(s, 'timer');
+    }, delay);
+    F.pend = { id, at, geo };
+  }
+
+  function doPress(s, how) {
+    if (!F.opts.press || !F.geo) return;
+    const via = F.opts.pressWith === 'space' ? 'space' : 'pointer';
+    if (via === 'space') space(F.opts.spaceTarget);
+    else tap(F.geo.cx, F.geo.cy);
+    F.armed = false;
+    F.lastPress = now();
+    F.stats.presses++; F.pressesThisDial++;
+    F.dialLastPress = { t: F.lastPress, via, biasMs: (s && s.biasMs) || 0, omega: s && s.omega };
+    const pend = F.pend;
+    cancelPend();
+    L('PRESS', {
+      how, via,
+      delta: s ? Math.round(s.delta) : null,
+      pred: s ? +s.pred.toFixed(1) : null,
+      mid: s ? Math.round(s.mid) : null,
+      width: s ? Math.round(s.width) : null,
+      omega: s && s.omega != null ? Math.round(s.omega) : null,
+      fitRms: s && s.fit ? +s.fit.rms.toFixed(1) : null,
+      biasMs: (s && s.biasMs) || 0,
+      dialPressN: F.pressesThisDial,
+      late: pend ? Math.round(now() - pend.at) : null,
+    });
+  }
+
+  /**
+   * End of a dial. A press the game acts on ends the dial within ~1.5 s; a press that misses
+   * leaves it spinning to its ~15.9 s timeout, and an unpressed dial just times out. That is
+   * the only hit/miss signal available, so it is what the counters and the sweep score.
+   */
+  function closeDial(t, ring) {
+    const presses = F.pressesThisDial;
+    const heldMs = Math.round(t - (F.geoAt || t));
+    const last = F.dialLastPress;
+    const sincePress = last ? Math.round(t - last.t) : null;
+    const hitMs = F.opts.hitMs || 1500;
+    const verdict = presses === 0 ? 'no-press' : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
+    F.stats.dialsClosed++;
+    F.stats[verdict === 'hit' ? 'hits' : verdict === 'miss' ? 'misses' : 'noPress']++;
+    const rec = {
+      heldMs, presses, verdict, sincePress,
+      width: Math.round((F.geo && F.geo.width) || 0),
+      omega: last && last.omega != null ? Math.round(last.omega) : null,
+      biasMs: last ? last.biasMs : null,
+    };
+    if (last && last.omega != null) rec.omega = Math.round(last.omega);
+    F.outcomes.push(rec);
+    while (F.outcomes.length > 400) F.outcomes.shift();
+    if (verdict !== 'no-press' && last && last.biasMs != null) {
+      const key = last.biasMs;
+      const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, hits: 0, misses: 0 });
+      cell.presses++;
+      if (verdict === 'hit') cell.hits++; else cell.misses++;
+    }
+    L('dial gone', {
+      ring: ring == null ? null : +ring.toFixed(2),
+      presses, heldMs, verdict, sincePress, width: rec.width, omega: rec.omega,
+    });
+  }
 
   /* ----------------------------------------------------------- input ----- */
   function tap(x, y) {
@@ -654,19 +929,32 @@
   F.start = function (opts) {
     F.opts = Object.assign({
       press: true,
-      pressWith: 'space',           // 'space' | 'pointer'
+      pressWith: 'pointer',         // 'pointer' | 'space' - the pointer path is the proven one
       spaceTarget: 'window',
-      midDeg: 6,                    // press when the wedge midpoint is this close to the pin
-      leadMs: 25,                   // fire early by the event travel (~3 deg at 130 deg/s)
+      trigger: 'contain',           // 'contain' = pin anywhere inside the arc | 'angle' = midpoint only
+      midDeg: 6,                    // 'angle' window: press when the midpoint is this close to the pin
+      marginDeg: 4,                 // 'contain' stays this far inside the drawn arc
+      leadMs: 25,                   // dispatch -> game judgement latency
+      biasMs: 0,                    // fixed extra delay; an active sweep overrides it per press
+      schedHorizonMs: 40,           // furthest ahead a press is put on a timer (2-3 frames)
+      replanMs: 8,                  // re-aim the timer only when the plan moved this much
+      pressGapMs: 120,
+      hitMs: 1500,                  // a press the game acts on ends the dial within this
+      sweep: null,                  // e.g. { min: -60, max: 60, step: 15 } - one probe per press
       bubbleDebounceMs: 900,
       dialCheckMs: 250,
       maxMinutes: 240,
     }, opts || {});
     surfaces();
-    F.stats = { bubbles: 0, dials: 0, presses: 0, dialsClosed: 0, frames: 0, errors: 0, cards: 0 };
+    F.stats = {
+      bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
+      hits: 0, misses: 0, noPress: 0,
+      frames: 0, errors: 0, cards: 0,
+    };
     F.geo = null; F.hint = { x: 861, y: 372 }; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
     F.txtAt = now(); F.cardWait = null;                        // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
+    F.pend = null; F.outcomes = []; F.sweep = {}; F.dialLastPress = null;
     F.paused = false; F.lastBubble = null; F.lastCardRect = null;
     F.pressesThisDial = 0; F.pressesAtThisDial = 0;
     F.running = true; F.startedAt = now(); F.hiddenPauses = 0;
@@ -677,6 +965,7 @@
 
   F.stop = function () {
     F.running = false;
+    cancelPend();
     if (F._raf) cancelAnimationFrame(F._raf);
     F._raf = null;
     L('stop', { stats: F.stats });
@@ -686,6 +975,7 @@
   /** Hold the loop where it is without ending the session: no presses until resume(). */
   F.pause = function () {
     F.paused = true;
+    cancelPend();
     F.geo = null; F.bad = 0; F.pressesThisDial = 0;   // re-lock on resume rather than press a stale wedge
     L('pause');
     return F.status();
@@ -700,7 +990,12 @@
 
   /** Fresh counters without restarting: used when a panel session begins on a live loop. */
   F.resetStats = function () {
-    F.stats = { bubbles: 0, dials: 0, presses: 0, dialsClosed: 0, frames: 0, errors: 0, cards: 0 };
+    F.stats = {
+      bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
+      hits: 0, misses: 0, noPress: 0,
+      frames: 0, errors: 0, cards: 0,
+    };
+    F.sweep = {};
     F.catches = [];
     return F.status();
   };
@@ -785,28 +1080,33 @@
       const s = F.sample(F.geo);
       if (!s || !s.valid || s.ring < 0.7) {
         if (++F.bad > 3) {
-          const presses = F.pressesThisDial;
-          F.stats.dialsClosed++;
-          L('dial gone', { ring: s && +s.ring.toFixed(2), presses, heldMs: Math.round(t - (F.geoAt || t)) });
+          cancelPend();
+          closeDial(t, s && s.ring);
           F.geo = null; F.bad = 0; F.pressesThisDial = 0;
         }
         return;
       }
       F.bad = 0;
-      const win = F.opts.midDeg == null ? 6 : F.opts.midDeg;
-      if (Math.abs(s.pred) > 30) F.armed = true;             // one press per rotation
-      if (F.opts.press && F.armed && s.tracked && Math.abs(s.pred) <= win && t - F.lastPress > 120) {
-        if (F.opts.pressWith === 'space') space(F.opts.spaceTarget);
-        else tap(F.geo.cx, F.geo.cy);
-        F.armed = false; F.lastPress = t;
-        F.stats.presses++; F.pressesThisDial++;
-        L('PRESS', {
-          delta: Math.round(s.delta), pred: +s.pred.toFixed(1),
-          mid: Math.round(s.mid), width: Math.round(s.width),
-          omega: s.omega && Math.round(s.omega),
-          via: F.opts.pressWith, dialPressN: F.pressesThisDial,
-        });
-      }
+      s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
+      const plan = planPress({
+        t: s.t != null ? s.t : t,
+        delta: s.delta, width: s.width, omega: s.omega,
+        armed: F.armed && s.tracked && t - F.lastPress > (F.opts.pressGapMs || 120),
+        pendingAt: F.pend ? F.pend.at : null,
+      }, {
+        trigger: F.opts.trigger,
+        midDeg: F.opts.midDeg,
+        marginDeg: F.opts.marginDeg,
+        leadMs: F.opts.leadMs,
+        biasMs: s.biasMs,
+        horizonMs: F.opts.schedHorizonMs,
+        replanMs: F.opts.replanMs,
+      });
+      // Re-arm only once the wedge has left the window, so one rotation gets one press.
+      if (Math.abs(plan.delta) > plan.win + 12) F.armed = true;   // wedge left the window
+      if (plan.cancel) cancelPend();
+      if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
+      if (plan.press) doPress(s, 'frame');
       return;
     }
 
@@ -833,10 +1133,34 @@
       hint: F.hint,
       stats: F.stats,
       pressesThisDial: F.pressesThisDial,
+      pendingMs: F.pend ? Math.round(F.pend.at - now()) : null,
       logTail: F.log.slice(-8),
     };
   };
-  F.report = function () { return { version: F.version, stats: F.stats, log: F.log.slice(-250) }; };
+
+  /**
+   * Hit rate per probe offset. A miss costs the dial - it spins out its ~15.9 s timeout - so
+   * a sweep is a slow calibration pass, not a normal mode. Run it with press:true only.
+   */
+  F.sweepReport = function () {
+    return Object.keys(F.sweep)
+      .map((k) => F.sweep[k])
+      .sort((a, b) => a.biasMs - b.biasMs)
+      .map((r) => ({
+        biasMs: r.biasMs, presses: r.presses, hits: r.hits, misses: r.misses,
+        hitRate: r.presses ? +(r.hits / r.presses).toFixed(2) : null,
+      }));
+  };
+  F.report = function () {
+    return {
+      version: F.version, stats: F.stats, opts: F.opts,
+      sweep: F.sweepReport(), outcomes: F.outcomes.slice(-60),
+      log: F.log.slice(-250),
+    };
+  };
+
+  /** The timing maths, exposed so a live console can re-plan against a captured dial. */
+  F.timing = { wrap180, fitOmega, planPress, sweepBias };
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
