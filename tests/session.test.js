@@ -158,6 +158,46 @@ test('sitting down again resumes the session where it left off', () => {
   assert.equal(after.state.fishingMs, 90_000, 'time counts again once seated');
 });
 
+test('the daily cap counts fishing time, not waiting for a chair', () => {
+  // the pause credits nothing, so an unseated hour cannot creep the day's budget toward the cap
+  let { state } = reduce(createState({ dailyCapMs: 10 * 60_000 }), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 5 * 60_000, { todayMs: 0 }));
+  assert.equal(state.fishingMs, 5 * 60_000);
+  ({ state } = tick(state, T0 + 6 * 60_000, { seat: true, todayMs: 0 }));
+  assert.equal(state.pauseReason, 'seat');
+  // 19 unseated minutes, still inside the 30-minute seat cap
+  for (let m = 7; m <= 25; m++) {
+    ({ state } = tick(state, T0 + m * 60_000, { seat: true, todayMs: 0 }));
+  }
+  assert.equal(state.phase, 'paused', 'unseated time never spends the last five minutes of the cap');
+  assert.equal(state.fishingMs, 5 * 60_000);
+  const back = tick(state, T0 + 26 * 60_000, { seat: false, todayMs: 0 });
+  assert.equal(back.state.phase, 'running');
+  assert.equal(back.state.fishingMs, 5 * 60_000, 'the pause added no fishing time either');
+});
+
+test('a seat pause that outlives the clock window ends the session', () => {
+  const window22 = new Date(2026, 0, 1, 22, 0, 0);   // local 22:00, inside 21:00-23:00
+  const T = window22.getTime();
+  let { state } = reduce(createState({ window: { on: true, start: '21:00', stop: '23:00' } }), { type: 'start', at: T });
+  ({ state } = tick(state, T + 60_000, { seat: true }));
+  assert.equal(state.pauseReason, 'seat');
+  const inside = tick(state, T + 30 * 60_000, { seat: true });
+  assert.equal(inside.state.phase, 'paused', 'still inside the window: keep waiting for a chair');
+  const closed = tick(state, T + 61 * 60_000, { seat: true });   // 23:01
+  assert.equal(closed.state.phase, 'cooldown');
+  assert.equal(closed.state.stopReason, 'window');
+});
+
+test('a seat pause that runs into a spent daily cap stops instead of resuming', () => {
+  let { state } = reduce(createState({ dailyCapMs: 10 * 60_000 }), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 60_000, { seat: true, todayMs: 0 }));
+  assert.equal(state.pauseReason, 'seat');
+  const spent = tick(state, T0 + 120_000, { seat: true, todayMs: 10 * 60_000 });
+  assert.equal(spent.state.phase, 'cooldown');
+  assert.equal(spent.state.stopReason, 'daily-cap');
+});
+
 test('a seat pause longer than half an hour ends the session instead of waiting forever', () => {
   let { state } = reduce(createState(), { type: 'start', at: T0 });
   ({ state } = tick(state, T0 + 120_000, { seat: true }));

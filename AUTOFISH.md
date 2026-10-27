@@ -944,6 +944,14 @@ reason `no-seat` instead of leaving it paused forever, so a forgotten character 
 a night: measured in node, one unseated minute left `fishingMs` at 60 000, twenty more left it
 there, sitting down resumed at 60 000 and the next 30 s brought it to 90 000.
 
+**The daily cap and the clock window ignore seat time too** (2026-10-28, same reducer). The character's
+clock stops during a seat pause; the wall clock does not, so the pause branch re-checks the schedule:
+a seat pause that outlives the window now ends the session with reason `window` (22:00 start, 23:01
+tick -> cooldown), and a pause that runs into an already-spent daily budget ends it with
+`daily-cap` instead of resuming straight into a stop. What it never does is charge the pause to the
+budget: 19 unseated minutes with a 10-minute cap left `fishingMs` at 300 000 and the session paused,
+then sitting down resumed at 300 000 with the last five minutes still available.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

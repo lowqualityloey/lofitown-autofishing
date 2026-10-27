@@ -152,6 +152,15 @@
       return { state: s, actions: [] };
     }
     if (s.pauseReason === 'seat') {
+      // The character's clock stops, the wall clock does not: while the seat pause holds, the
+      // schedule and the day's budget keep moving. Do not sit paused past a closed window or into a
+      // cap that is already spent - that would resume straight into an immediate stop.
+      if (s.window.on && !withinWindow(s.window, at)) {
+        return { state: s, actions: stopSession(s, at, 'window') };
+      }
+      if (typeof fact.todayMs === 'number' && s.todayMs >= s.dailyCapMs) {
+        return { state: s, actions: stopSession(s, at, 'daily-cap') };
+      }
       // still unseated: burn no time, but do not nag forever
       if (fact.seat === false) return runningAgain(s, at);
       if (s.seatSince != null && at - s.seatSince > SEAT_STOP_MS) {
