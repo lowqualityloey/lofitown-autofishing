@@ -659,6 +659,52 @@ measured at 590, 576, 595, 609, 560, 625, 589 ms (7 of 7). One 57 s gap remains 
 (`bubble anywhere` -> tap -> no dial for 57 s, then a bubble and a normal cast), so the retry is
 still in place and still unproven; do not read it as a bite-wait artifact.
 
+## 2026-10-28 thirty fish attempts on the multi-press build: 28 caught, 2 lost
+
+The first sample big enough to quote, taken on the build with multi-press throughput + the
+attempt-level oracle (a fish attempt opens at the first press and closes on a parsed catch, the cast
+prompt re-appearing, or 25 s of idleness). Arms were selected **once per fish**, contain vs angle.
+
+| metric | value |
+|--------|-------|
+| attempts | 30 |
+| caught / lost | 28 / 2 |
+| catch rate | 93.3% (Wilson 95% CI 78.7% - 98.2%) |
+| presses | 159 (5.68 per catch) |
+| presses per dial lock | 2.61 |
+| ghost locks | 0 |
+| `misses` (press the game ignored) | 0 |
+| loop rate | 84 fps, `visibilityState` visible |
+
+By speed band (band = fastest wedge the attempt saw):
+
+| band | attempts | caught | lost | presses |
+|------|----------|--------|------|---------|
+| fast (300-500 deg/s) | 27 | 25 | 2 | 144 |
+| blur (> 500 deg/s) | 3 | 3 | 0 | 15 |
+
+By arm (one arm per fish, so each row is whole fish):
+
+| arm | attempts | caught | lost | presses | dial locks | presses per catch |
+|-----|----------|--------|------|---------|-----------|-------------------|
+| contain | 15 | 14 | 1 | 77 | 27 | 5.50 |
+| angle (midDeg 6) | 15 | 14 | 1 | 82 | 34 | 5.86 |
+
+What this does and does not say:
+
+- The two losses are **not proven escapes**. Both were scored `why: 'cast prompt'` in the fast band.
+  Loss #21 was forensicked: 6 clean presses in 6.4 s, then two shape-accepted 304x420 / 320x436
+  cards with ink 0.115-0.116 - inside the *real* catch-card envelope - that never produced parsed
+  text. So the 93.3% is a **lower bound**: either the fish genuinely escaped, or `parseCatch()`
+  silently missed a card the detector had already accepted.
+- **The arms are indistinguishable** at this sample size (14/15 each; the difference is one fish and
+  the CIs overlap completely). Containment is kept for its larger theoretical slack (the whole arc is
+  the acceptance window), not because it has been shown to win.
+- The blur row has n = 3, so it says "no loss observed above 500 deg/s", not "safe above 500 deg/s";
+  the one-sided 95% lower bound on its catch rate is 36.8%.
+- This **replaces** the withdrawn 63/65 table - that one counted the minigame panel as a catch card.
+  It does not resurrect the old claim; 28/30 is what the honest oracle measured.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.
