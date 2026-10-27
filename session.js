@@ -160,7 +160,10 @@
   function reduce(state, fact) {
     var s = clone(state);
     var actions = [];
-    var at = Number(fact.at) || 0;
+    // A fact without an explicit clock used to fall back to 0, which made the next real tick credit
+    // (now - 0) milliseconds of fishing time and stop the session as a daily-cap hit. Fall back to
+    // the wall clock instead; every caller that cares passes its own at.
+    var at = Number(fact.at) || Date.now();
 
     if (fact.type === 'config') {
       var patch = fact.patch || {};

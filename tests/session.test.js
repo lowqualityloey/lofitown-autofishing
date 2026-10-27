@@ -5,6 +5,14 @@ const { createState, reduce } = require('../session.js');
 
 const T0 = 1_800_000_000_000;
 
+test('a fact with no clock falls back to now instead of the epoch', () => {
+  const { state } = reduce(createState(), { type: 'start' });
+  assert.ok(state.startedAt > 1600000000000, 'startedAt is a real clock reading');
+  const tick = reduce(state, { type: 'tick', visible: true, catches: 0, errors: 0, todayMs: 0 });
+  assert.ok(tick.state.fishingMs < 5000, 'no epoch-sized phantom fishing time was credited');
+  assert.equal(tick.state.phase, 'running');
+});
+
 test('start moves idle to running and asks the core to start with a backstop', () => {
   const { state, actions } = reduce(createState(), { type: 'start', at: T0 });
   assert.equal(state.phase, 'running');
