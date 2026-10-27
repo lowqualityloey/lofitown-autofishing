@@ -59,9 +59,15 @@ Run the tests with `node --test` (bare — `node --test tests/` fails on Node v2
 The first version only looked inside two rectangles measured at a 1522x954 window, so at any other
 size (the user's window is about 1234x975) it never saw **CAST! / REEL!** and pressed nothing. Those
 boxes are still tried first; then the core scans the whole UI layer at quarter scale for a white
-capsule with dark text (about 108x48) and, for the catch card, a large cream panel. Verified live at
-1234x1023 by Marlin's Fish Shack: 5 bubbles, 10 dials, 9 dials closed, 5 presses and a Salmon in 24
-seconds.
+capsule with dark text (about 108x48) and, for the catch card, the largest solid opaque rectangle
+(a solid seed the size of the smallest card, grown while it stays solid, so artwork spilling out of
+the frame cannot hide the card). Verified live at 1234x1023 by Marlin's Fish Shack: 5 bubbles, 10
+dials, 9 dials closed, 5 presses and a Salmon in 24 seconds.
+
+Event cards (green frame, ribbon, an illustration that spills well past the card) broke the earlier
+"largest connected opaque blob" version on 2026-10-27: the blob measured 700x576 at 46% fill, was
+rejected, and the bot sat in front of a card it could not see. See
+`docs/reviews/2026-10-27-event-card-freeze.md`.
 
 `__fish.findBubble()` / `__fish.findCatch()` report what is on screen right now;
 `__fish.captureUI()` grabs one PNG of the UI layer for diagnosis. The panel does that once by

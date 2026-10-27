@@ -281,62 +281,74 @@
     return { cx: Math.round(r.x + r.w / 2), cy: Math.round(r.y + r.h / 2), frac: +frac.toFixed(2), via: 'box' };
   }
 
-  let cardAt = 0;
-  function cardAnywhere() {
-    const t = now();
-    if (t - cardAt < 400) return null;
-    cardAt = t;
-    if (!downscale()) return null;
-    let best = null;
-    const comps = blobs(CREAM, 300);
-    for (let i = 0; i < comps.length; i++) {
-      const b = comps[i];
-      const W = (b.x1 - b.x0 + 1) * SDOWN, H = (b.y1 - b.y0 + 1) * SDOWN;
-      if (W < 200 || W > 620 || H < 220 || H > 700) continue;
-      if ((b.count * SDOWN * SDOWN) / (W * H) < 0.35) continue;
-      const x = b.x0 * SDOWN, y = b.y0 * SDOWN;
-      const r = readUI(x, y, W, H);
-      if (!r) continue;
-      const frac = creamFraction(r);
-      if (frac < 0.2) continue;
-      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), frac: +frac.toFixed(2), w: W, h: H, via: 'cream' };
-      if (!best || cand.frac > best.frac) best = cand;
-    }
-    if (best) L('card anywhere', { cx: best.cx, cy: best.cy, frac: best.frac });
-    return best;
-  }
-
   /**
-   * A rare catch tints the card frame by rarity (epic is pink), which defeats any "is it cream?"
-   * test - on exactly the catches worth recording. Every card, though, is drawn as one big solid
-   * panel on top of a dimmed screen, so its body is the only thing on this layer that is both fully
-   * opaque and card-sized (the dial is a 180 px circle, prompts are 108x48). Detect that instead.
+   * A rare catch tints the card frame by rarity (epic is pink), so "is it cream?" is out on exactly
+   * the catches worth recording. Every card, though, is a big solid opaque panel. The first shape
+   * pass took the largest connected opaque blob and trusted its bounding box; an event card broke it
+   * - its illustration spills far past the frame, so the blob measured 700x576 at 46% fill, was
+   * rejected, and the bot sat in front of a card it could not see. Instead: find a solid seed the
+   * size of the smallest card, grow it while it stays solid (spilt artwork cannot fill the grown
+   * rectangle), and tap the seed's centre, which is inside the frame by construction. Bounded by the
+   * largest card and by a share of the layer, so an opaque layer is not mistaken for a card, and a
+   * card always prints text, so require ink.
    */
-  const OPAQUE = (c) => c[3] > 250;
+  const CARD_MIN_W = 180, CARD_MIN_H = 250, CARD_MAX_W = 760, CARD_MAX_H = 820;
   let shapeAt = 0;
   function cardByShape() {
     const t = now();
     if (t - shapeAt < 400) return null;
     shapeAt = t;
     if (!downscale()) return null;
-    let best = null;
-    const comps = blobs(OPAQUE, 500);
-    for (let i = 0; i < comps.length; i++) {
-      const b = comps[i];
-      const W = (b.x1 - b.x0 + 1) * SDOWN, H = (b.y1 - b.y0 + 1) * SDOWN;
-      if (W < 180 || W > 760 || H < 250 || H > 820) continue;
-      const fill = (b.count * SDOWN * SDOWN) / (W * H);
-      if (fill < 0.55) continue;
-      const x = b.x0 * SDOWN, y = b.y0 * SDOWN;
-      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, frac: +fill.toFixed(2), via: 'shape' };
-      if (!best || cand.frac > best.frac) best = cand;
+    const stride = sw + 1;
+    const I = new Int32Array(stride * (sh + 1));
+    for (let y = 0; y < sh; y++) {
+      let row = 0;
+      for (let x = 0; x < sw; x++) {
+        if (sdata[(y * sw + x) * 4 + 3] > 250) row++;
+        I[(y + 1) * stride + x + 1] = I[y * stride + x + 1] + row;
+      }
     }
-    if (best) L('card by shape', { cx: best.cx, cy: best.cy, w: best.w, h: best.h });
-    return best;
+    const sum = (x0, y0, x1, y1) => I[y1 * stride + x1] - I[y0 * stride + x1] - I[y1 * stride + x0] + I[y0 * stride + x0];
+    const CW = Math.ceil(CARD_MIN_W / SDOWN), CH = Math.ceil(CARD_MIN_H / SDOWN);
+    if (sw < CW || sh < CH) return null;
+    let seed = null;
+    for (let y = 0; y + CH <= sh; y++) {
+      for (let x = 0; x + CW <= sw; x++) {
+        const n = sum(x, y, x + CW, y + CH);
+        if (!seed || n > seed.n) seed = { x, y, n };
+      }
+    }
+    if (!seed || seed.n / (CW * CH) < 0.94) return null;   // nothing card-sized and solid here
+    const solid = (x0, y0, x1, y1) => sum(x0, y0, x1, y1) / ((x1 - x0) * (y1 - y0)) >= 0.88;
+    let x0 = seed.x, y0 = seed.y, x1 = x0 + CW, y1 = y0 + CH;
+    const MAXW = Math.floor(CARD_MAX_W / SDOWN), MAXH = Math.floor(CARD_MAX_H / SDOWN);
+    let grew = true;
+    for (let guard = 0; grew && guard < 4000; guard++) {
+      grew = false;
+      if (x1 < sw && x1 - x0 < MAXW && solid(x0, y0, x1 + 1, y1)) { x1++; grew = true; }
+      if (x0 > 0 && x1 - x0 < MAXW && solid(x0 - 1, y0, x1, y1)) { x0--; grew = true; }
+      if (y1 < sh && y1 - y0 < MAXH && solid(x0, y0, x1, y1 + 1)) { y1++; grew = true; }
+      if (y0 > 0 && y1 - y0 < MAXH && solid(x0, y0 - 1, x1, y1)) { y0--; grew = true; }
+    }
+    const W = (x1 - x0) * SDOWN, H = (y1 - y0) * SDOWN;
+    if (W < CARD_MIN_W || W > CARD_MAX_W || H < CARD_MIN_H || H > CARD_MAX_H) return null;
+    if (W * H > uiCanvas.width * uiCanvas.height * 0.7) return null;    // the layer itself is opaque, not a card
+    const r = readUI(x0 * SDOWN, y0 * SDOWN, W, H);
+    if (!r) return null;
+    const ink = inkMix(r);
+    if (ink.dark < 0.003) return null;                                 // a card always prints text
+    const fill = sum(x0, y0, x1, y1) / ((x1 - x0) * (y1 - y0));
+    const cand = {
+      cx: Math.round(seed.x * SDOWN + (CW * SDOWN) / 2),
+      cy: Math.round(seed.y * SDOWN + (CH * SDOWN) / 2),
+      w: W, h: H, frac: +fill.toFixed(2), via: 'shape'
+    };
+    L('card by shape', { cx: cand.cx, cy: cand.cy, w: cand.w, h: cand.h, fill: cand.frac, ink: +ink.dark.toFixed(3) });
+    return cand;
   }
 
   F.findCatch = function () {
-    return cardInBox() || cardAnywhere() || cardByShape();
+    return cardInBox() || cardByShape();
   };
   /**
    * Text capture. The card is canvas-drawn: no DOM node, no scene text, no local save. But every
