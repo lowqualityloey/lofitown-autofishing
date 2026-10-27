@@ -884,7 +884,7 @@
     // A locked ring that never rotated is the fade-out of a solved dial or a ripple, not a fish:
     // its wedge sits still (omega 0) and no press is ever due. Count it apart so the loss tally
     // stays honest.
-    const ghost = presses === 0 && (F.dialMaxOmega || 0) < 20;
+    const ghost = presses === 0 && (F.dialTravel || 0) < 15;
     const skipped = !ghost && presses === 0 && heldMs >= (F.opts.skipMs || 300);
     const verdict = ghost ? 'ghost'
       : presses === 0 ? (skipped ? 'skipped' : 'no-press')
@@ -1203,6 +1203,12 @@
       });
       F.planReason = plan.reason;
       if (s.omega != null && Math.abs(s.omega) > (F.dialMaxOmega || 0)) F.dialMaxOmega = Math.abs(s.omega);
+      // Total travel of the wedge since the lock: a real dial sweeps degrees every frame, a
+      // fading one sits still while the rate estimate decays to zero.
+      if (s.delta != null) {
+        if (F.dialPrevDelta != null) F.dialTravel = (F.dialTravel || 0) + Math.abs(wrap180(Number(s.delta) - F.dialPrevDelta));
+        F.dialPrevDelta = Number(s.delta);
+      }
       if (F.cardUntil && t < F.cardUntil) { cancelPend(); return; }   // paper is on top of the dial
       if (s.tracked) {
         F.geoTrace.push({ t: Math.round(t - F.geoAt), d: +Number(s.delta).toFixed(1), w: Math.round(s.width || 0),
@@ -1223,7 +1229,7 @@
       const g = F.lockDial(F.hint.x, F.hint.y);
       if (g) {
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0;
-        F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0;
+        F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.stats.dials++;
         L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width) });
       }
