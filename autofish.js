@@ -278,7 +278,7 @@
     if (!r) return null;
     const frac = creamFraction(r);
     if (frac < 0.2) return null;      // paper is 249,238,208 and covers ~28% once art and frame are excluded
-    return { cx: Math.round(r.x + r.w / 2), cy: Math.round(r.y + r.h / 2), frac: +frac.toFixed(2) };
+    return { cx: Math.round(r.x + r.w / 2), cy: Math.round(r.y + r.h / 2), frac: +frac.toFixed(2), via: 'box' };
   }
 
   let cardAt = 0;
@@ -299,15 +299,44 @@
       if (!r) continue;
       const frac = creamFraction(r);
       if (frac < 0.2) continue;
-      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), frac: +frac.toFixed(2) };
+      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), frac: +frac.toFixed(2), w: W, h: H, via: 'cream' };
       if (!best || cand.frac > best.frac) best = cand;
     }
     if (best) L('card anywhere', { cx: best.cx, cy: best.cy, frac: best.frac });
     return best;
   }
 
+  /**
+   * A rare catch tints the card frame by rarity (epic is pink), which defeats any "is it cream?"
+   * test - on exactly the catches worth recording. Every card, though, is drawn as one big solid
+   * panel on top of a dimmed screen, so its body is the only thing on this layer that is both fully
+   * opaque and card-sized (the dial is a 180 px circle, prompts are 108x48). Detect that instead.
+   */
+  const OPAQUE = (c) => c[3] > 250;
+  let shapeAt = 0;
+  function cardByShape() {
+    const t = now();
+    if (t - shapeAt < 400) return null;
+    shapeAt = t;
+    if (!downscale()) return null;
+    let best = null;
+    const comps = blobs(OPAQUE, 500);
+    for (let i = 0; i < comps.length; i++) {
+      const b = comps[i];
+      const W = (b.x1 - b.x0 + 1) * SDOWN, H = (b.y1 - b.y0 + 1) * SDOWN;
+      if (W < 180 || W > 760 || H < 250 || H > 820) continue;
+      const fill = (b.count * SDOWN * SDOWN) / (W * H);
+      if (fill < 0.55) continue;
+      const x = b.x0 * SDOWN, y = b.y0 * SDOWN;
+      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, frac: +fill.toFixed(2), via: 'shape' };
+      if (!best || cand.frac > best.frac) best = cand;
+    }
+    if (best) L('card by shape', { cx: best.cx, cy: best.cy, w: best.w, h: best.h });
+    return best;
+  }
+
   F.findCatch = function () {
-    return cardInBox() || cardAnywhere();
+    return cardInBox() || cardAnywhere() || cardByShape();
   };
   /**
    * Text capture. The card is canvas-drawn: no DOM node, no scene text, no local save. But every
@@ -707,7 +736,9 @@
       const card = F.findCatch();
       if (card) {
         // half-sizes measured on the 1522x954 layout; good enough to keep the panel clear
-        F.lastCardRect = { x: card.cx - 183, y: card.cy - 203, w: 366, h: 406 };
+        F.lastCardRect = card.w && card.h
+          ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
+          : { x: card.cx - 183, y: card.cy - 203, w: 366, h: 406 };
         const r = F.recordCatch(card);
         if (r !== 'logged') {
           if (F.cardWait == null) F.cardWait = t;
@@ -717,7 +748,7 @@
         tap(card.cx, card.cy);
         F.lastCard = t; F.cardWait = null; F.lastCardRect = null;
         F.stats.cards = (F.stats.cards || 0) + 1;
-        L('catch card dismissed', { frac: card.frac, log: r });
+        L('catch card dismissed', { via: card.via, frac: card.frac, log: r });
         return;
       }
     }
