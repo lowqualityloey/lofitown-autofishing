@@ -391,6 +391,50 @@ also resolves synthetic `Sun Fish | Epic | 4.08t | Exquisite | $258` and
 as a PNG was abandoned: the crop is taken during the card's fade-in, so the images come out washed
 out and unreadable.
 
+## 2026-10-27 live verified verdicts - what a press is actually worth
+
+Until now the bot scored a press by whether the dial ended within 1.5 s. That is not a hit signal:
+the game ends the dial on a win *and* on a timeout-triggered miss, so 60 "hits" and 0 "misses" over
+90 dials said nothing. A press is now scored by what follows it: a **catch card within 600 ms = win**,
+no card = the fish got away. `__fish.bandReport()` groups those wins/losses by the measured speed of
+the dial, because that is the only thing that separates an easy fish from a legendary one.
+
+Live evidence, the same afternoon session, pointer presses at the dial centre:
+
+| run | dials | presses | wins | losses | slow | mid | fast | blur |
+|-----|-------|---------|------|--------|------|-----|------|------|
+| A | 14 | 13 | 10 | 0 | 3/3 | 5/5 | 2/2 | - |
+| B | 15 | 9 | 8 | 0 real | 4/4 | 4/4 | - | - |
+
+- Card latency after a winning press: **9-16 ms** (`cardMs`). The 600 ms window is generous.
+- Measured speeds in these runs were **118-264 deg/s**, i.e. slow and mid only. Nothing above
+  500 deg/s (`blur`) has been verified yet, and that is where legendary fish live: at 746 deg/s the
+  whole tolerance around the pin is only ~62 ms, so the lead has to be right, not just fast.
+- Run B's two "skipped" dials were **not fish at all**. Their traces show `delta` frozen and
+  `omega 0` for 300-3600 ms: a locked lock-on that never rotated, i.e. the fade-out of a solved
+  dial. They are now counted as `ghost` and are no longer scored as losses.
+
+### Two real defects this exposed
+
+1. **The catch card was invisible while a dial was locked.** The card branch only runs when
+   `!F.geo`, so a card that arrived while the next dial had already been locked was never seen:
+   the pending press timed out as a loss with no catch recorded (that is why `stats.cards` ran
+   5 for 10 wins), and any tap aimed at the dial landed on the paper instead of the dial - a
+   misclick the player sees as a lost fish. The loop now scans for the card while a press is
+   awaiting its verdict, marks the win when it finds it, and **holds fire on the dial** for the
+   2.2 s the card is up. Live: `catch card over dial` fired once in run B.
+2. **A press could be scored twice or not at all.** `F.pendingWin` held one record; a second dial
+   closing inside the 600 ms window overwrote it. It is still one slot, but the card scan now
+   closes the window early instead of leaving it to the timer.
+
+### Diagnosing a lost dial
+
+Every dial keeps the last 48 frames (`t, delta, width, omega, plan reason`) and, for any dial that
+did not win, `outcome.trace` plus `outcome.reasons` (how many frames the planner spent in
+`wait` / `now-inside` / `disarmed` / `static`). A ghost shows the frozen trace above; a mistimed
+press shows a normal rotation with the press near a window edge; a dial the bot never locked shows
+up as no record at all.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

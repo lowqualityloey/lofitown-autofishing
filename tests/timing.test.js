@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -165,3 +165,15 @@ test('sweepBias cycles the probe offsets in order', () => {
   assert.deepEqual([0, 1].map((i) => T.sweepBias({ biases: [10, -10] }, i)), [10, -10]);
 });
 
+
+test('omegaBand splits presses into the four speed bands', () => {
+  assert.equal(T.omegaBand(0), 'slow');
+  assert.equal(T.omegaBand(120), 'slow');
+  assert.equal(T.omegaBand(149.9), 'slow');
+  assert.equal(T.omegaBand(150), 'mid');
+  assert.equal(T.omegaBand(-260), 'mid');
+  assert.equal(T.omegaBand(300), 'fast');
+  assert.equal(T.omegaBand(746), 'blur');
+  assert.equal(T.omegaBand(null), 'slow');
+  assert.equal(T.omegaBand(undefined), 'slow');
+});

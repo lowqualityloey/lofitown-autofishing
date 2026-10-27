@@ -223,6 +223,18 @@
     }
     return list[((i % list.length) + list.length) % list.length];
   }
+  /**
+   * Speed band a press is scored in. The verified win rate is only meaningful per band: a dial at
+   * 120 deg/s has ~300 ms of tolerance and one at 700 deg/s has ~70 ms, so averaging them hides
+   * exactly the case this file is trying to fix.
+   */
+  function omegaBand(omega) {
+    const a = Math.abs(omega || 0);
+    if (a < 150) return 'slow';
+    if (a < 300) return 'mid';
+    if (a < 500) return 'fast';
+    return 'blur';
+  }
   // </timing-core>
 
   /* ------------------------------------------------------------- log ----- */
@@ -867,28 +879,85 @@
     const last = F.dialLastPress;
     const sincePress = last ? Math.round(t - last.t) : null;
     const hitMs = F.opts.hitMs || 1500;
-    const verdict = presses === 0 ? 'no-press' : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
+    // A dial the bot never pressed that stayed up long enough to be real is a LOST FISH, not the
+    // ring fading after a solved one: those fade in ~100 ms.
+    // A locked ring that never rotated is the fade-out of a solved dial or a ripple, not a fish:
+    // its wedge sits still (omega 0) and no press is ever due. Count it apart so the loss tally
+    // stays honest.
+    const ghost = presses === 0 && (F.dialMaxOmega || 0) < 20;
+    const skipped = !ghost && presses === 0 && heldMs >= (F.opts.skipMs || 300);
+    const verdict = ghost ? 'ghost'
+      : presses === 0 ? (skipped ? 'skipped' : 'no-press')
+      : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
     F.stats.dialsClosed++;
-    F.stats[verdict === 'hit' ? 'hits' : verdict === 'miss' ? 'misses' : 'noPress']++;
+    F.stats[verdict === 'hit' ? 'hits' : verdict === 'miss' ? 'misses' : verdict === 'ghost' ? 'ghosts' : verdict === 'skipped' ? 'skipped' : 'noPress']++;
+    if (skipped) F.stats.losses++;
     const rec = {
       heldMs, presses, verdict, sincePress,
       width: Math.round((F.geo && F.geo.width) || 0),
       omega: last && last.omega != null ? Math.round(last.omega) : null,
       biasMs: last ? last.biasMs : null,
+      reasons: F.geoReasons || null,
+      trace: F.geoReasons && !(verdict === 'hit') ? F.geoTrace.slice() : null,
     };
     if (last && last.omega != null) rec.omega = Math.round(last.omega);
     F.outcomes.push(rec);
     while (F.outcomes.length > 400) F.outcomes.shift();
     if (verdict !== 'no-press' && last && last.biasMs != null) {
       const key = last.biasMs;
-      const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, hits: 0, misses: 0 });
+      const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, hits: 0, misses: 0, wins: 0, losses: 0 });
       cell.presses++;
       if (verdict === 'hit') cell.hits++; else cell.misses++;
+    }
+    // Verified outcome. The 1.5 s rule cannot tell a win from a loss - the game ends the dial
+    // either way - so every press is scored by what actually follows: a catch card within
+    // winWindowMs means the click landed, no card means the fish got away.
+    if (presses > 0) {
+      rec.closedAt = t;
+      rec.biasMs = last ? last.biasMs : null;
+      F.pendingWin = rec;
+      rec.timer = setTimeout(() => {
+        if (F.pendingWin !== rec) return;
+        F.pendingWin = null;
+        tallyVerified(rec, false, null);
+      }, F.opts.winWindowMs || 600);
     }
     L('dial gone', {
       ring: ring == null ? null : +ring.toFixed(2),
       presses, heldMs, verdict, sincePress, width: rec.width, omega: rec.omega,
     });
+  }
+
+  /** Count one press as won or lost, in the totals and in its speed band and bias cell. */
+  function tallyVerified(rec, won, cardMs) {
+    rec.won = won;
+    if (cardMs != null) rec.cardMs = cardMs;
+    const band = omegaBand(rec.omega);
+    const cell = F.bands[band] || (F.bands[band] = { band, presses: 0, wins: 0, losses: 0 });
+    cell.presses++;
+    cell[won ? 'wins' : 'losses']++;
+    if (rec.biasMs != null) {
+      const s = F.sweep[rec.biasMs] || (F.sweep[rec.biasMs] = { biasMs: rec.biasMs, presses: 0, hits: 0, misses: 0, wins: 0, losses: 0 });
+      s[won ? 'wins' : 'losses']++;
+    }
+    F.stats[won ? 'wins' : 'losses']++;
+    L(won ? 'dial won' : 'dial lost', {
+      omega: rec.omega, width: rec.width, biasMs: rec.biasMs,
+      cardMs: cardMs == null ? null : cardMs,
+    });
+  }
+
+  function clearPendingWin() {
+    if (F.pendingWin && F.pendingWin.timer) clearTimeout(F.pendingWin.timer);
+    F.pendingWin = null;
+  }
+
+  /** A catch card arrived: the dial that just closed was a hit. */
+  function markWin(t) {
+    const rec = F.pendingWin;
+    if (!rec) return;
+    clearPendingWin();
+    tallyVerified(rec, true, rec.closedAt != null ? Math.round(t - rec.closedAt) : null);
   }
 
   /* ----------------------------------------------------------- input ----- */
@@ -940,21 +1009,26 @@
       replanMs: 8,                  // re-aim the timer only when the plan moved this much
       pressGapMs: 120,
       hitMs: 1500,                  // a press the game acts on ends the dial within this
+      winWindowMs: 600,             // a winning press is followed by a catch card within this
+      skipMs: 300,                  // an unpressed dial that lived this long lost a fish (fades are ~100 ms)
       sweep: null,                  // e.g. { min: -60, max: 60, step: 15 } - one probe per press
       bubbleDebounceMs: 900,
-      dialCheckMs: 250,
+      dialCheckMs: 120,
       maxMinutes: 240,
     }, opts || {});
     surfaces();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
+      wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
     };
     F.geo = null; F.hint = { x: 861, y: 372 }; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
     F.txtAt = now(); F.cardWait = null;                        // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
-    F.pend = null; F.outcomes = []; F.sweep = {}; F.dialLastPress = null;
+    F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
+    F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
+    clearPendingWin();
     F.paused = false; F.lastBubble = null; F.lastCardRect = null;
     F.pressesThisDial = 0; F.pressesAtThisDial = 0;
     F.running = true; F.startedAt = now(); F.hiddenPauses = 0;
@@ -966,6 +1040,7 @@
   F.stop = function () {
     F.running = false;
     cancelPend();
+    clearPendingWin();
     if (F._raf) cancelAnimationFrame(F._raf);
     F._raf = null;
     L('stop', { stats: F.stats });
@@ -976,6 +1051,7 @@
   F.pause = function () {
     F.paused = true;
     cancelPend();
+    clearPendingWin();
     F.geo = null; F.bad = 0; F.pressesThisDial = 0;   // re-lock on resume rather than press a stale wedge
     L('pause');
     return F.status();
@@ -993,9 +1069,12 @@
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
+      wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
     };
     F.sweep = {};
+    F.bands = {};
+    clearPendingWin();
     F.catches = [];
     return F.status();
   };
@@ -1043,6 +1122,7 @@
     if (!F.geo && t - (F.lastCard || 0) > 1500) {
       const card = F.findCatch();
       if (card) {
+        markWin(t);
         // half-sizes measured on the 1522x954 layout; good enough to keep the panel clear
         F.lastCardRect = card.w && card.h
           ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
@@ -1054,10 +1134,28 @@
           L('catch text missing', { frac: card.frac, why: F.parseWhy });
         }
         tap(card.cx, card.cy);
-        F.lastCard = t; F.cardWait = null; F.lastCardRect = null;
+        F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0;
         F.stats.cards = (F.stats.cards || 0) + 1;
         L('catch card dismissed', { via: card.via, frac: card.frac, log: r });
         return;
+      }
+    }
+
+    // 0b. A catch card that lands while the next dial is already locked used to be invisible: the
+    // branch above needs !F.geo, so the card sat there until the 600 ms win window expired and the
+    // press was scored a loss with no catch recorded. Worse, a tap aimed at the dial lands on the
+    // paper instead. Look for the card whenever a press is awaiting its verdict, and while it is up
+    // hold fire on the dial.
+    if (F.pendingWin && t - (F.cardScan || 0) > 120) {
+      F.cardScan = t;
+      const c = F.findCatch();
+      if (c) {
+        markWin(t);
+        F.cardUntil = t + 2200;
+        F.lastCardRect = c.w && c.h
+          ? { x: c.cx - c.w / 2, y: c.cy - c.h / 2, w: c.w, h: c.h }
+          : { x: c.cx - 183, y: c.cy - 203, w: 366, h: 406 };
+        L('catch card over dial', { frac: c.frac, cx: c.cx, cy: c.cy, dial: !!F.geo });
       }
     }
 
@@ -1088,6 +1186,7 @@
       }
       F.bad = 0;
       s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
+      if (F.geoReasons) F.geoReasons[F.planReason || 'none'] = (F.geoReasons[F.planReason || 'none'] || 0) + 1;
       const plan = planPress({
         t: s.t != null ? s.t : t,
         delta: s.delta, width: s.width, omega: s.omega,
@@ -1102,6 +1201,14 @@
         horizonMs: F.opts.schedHorizonMs,
         replanMs: F.opts.replanMs,
       });
+      F.planReason = plan.reason;
+      if (s.omega != null && Math.abs(s.omega) > (F.dialMaxOmega || 0)) F.dialMaxOmega = Math.abs(s.omega);
+      if (F.cardUntil && t < F.cardUntil) { cancelPend(); return; }   // paper is on top of the dial
+      if (s.tracked) {
+        F.geoTrace.push({ t: Math.round(t - F.geoAt), d: +Number(s.delta).toFixed(1), w: Math.round(s.width || 0),
+          om: s.omega == null ? null : Math.round(s.omega), r: plan.reason });
+        if (F.geoTrace.length > 48) F.geoTrace.shift();
+      }
       // Re-arm only once the wedge has left the window, so one rotation gets one press.
       if (Math.abs(plan.delta) > plan.win + 12) F.armed = true;   // wedge left the window
       if (plan.cancel) cancelPend();
@@ -1116,6 +1223,7 @@
       const g = F.lockDial(F.hint.x, F.hint.y);
       if (g) {
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0;
+        F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0;
         F.stats.dials++;
         L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width) });
       }
@@ -1148,19 +1256,30 @@
       .sort((a, b) => a.biasMs - b.biasMs)
       .map((r) => ({
         biasMs: r.biasMs, presses: r.presses, hits: r.hits, misses: r.misses,
+        wins: r.wins || 0, losses: r.losses || 0,
         hitRate: r.presses ? +(r.hits / r.presses).toFixed(2) : null,
+        winRate: r.wins + (r.losses || 0) ? +((r.wins || 0) / (r.wins + (r.losses || 0))).toFixed(2) : null,
       }));
+  };
+
+  /** Verified win rate per speed band - the number that says WHERE accuracy is lost. */
+  F.bandReport = function () {
+    const order = ['slow', 'mid', 'fast', 'blur'];
+    return order.filter((k) => F.bands && F.bands[k]).map((k) => {
+      const b = F.bands[k];
+      return { band: b.band, presses: b.presses, wins: b.wins, losses: b.losses, winRate: b.presses ? +(b.wins / b.presses).toFixed(2) : null };
+    });
   };
   F.report = function () {
     return {
       version: F.version, stats: F.stats, opts: F.opts,
-      sweep: F.sweepReport(), outcomes: F.outcomes.slice(-60),
+      sweep: F.sweepReport(), bands: F.bandReport(), outcomes: F.outcomes.slice(-60),
       log: F.log.slice(-250),
     };
   };
 
   /** The timing maths, exposed so a live console can re-plan against a captured dial. */
-  F.timing = { wrap180, fitOmega, planPress, sweepBias };
+  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand };
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
