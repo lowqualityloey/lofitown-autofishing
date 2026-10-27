@@ -97,3 +97,22 @@ Two smaller fixes from the same round:
 Also added: `POST /diag` plus `__fish.captureUI()`. A run that finds nothing for 20 seconds uploads
 one PNG of the UI layer and its counters to `shots/diag/`, so the next blind report can be fixed
 from the pixels the bot actually saw.
+
+## Rare catch cards (epic and up) froze the bot
+
+After the fixes above the user fished for real and caught a **Whale Shark (Epic)** — and the bot
+stopped dead in front of the card. Cause: a rare catch tints the card frame by rarity (pink for
+epic) and adds a large creature image, so the cream-fill test that finds common cards scored the
+Whale Shark card too low. `findCatch()` returned `null`, the card was never tapped away, and since a
+card blocks the next cast the loop sat there for minutes with the session still `running`.
+
+Fixed by adding a shape pass: every card, whatever its rarity colours, is one large fully opaque
+panel drawn on a dimmed screen, so `findCatch()` now also accepts the biggest opaque card-sized blob
+(180-760 x 250-820, fill >= 0.55) and taps its measured centre. Order is box -> cream -> shape, so
+common cards behave exactly as before. Verified live: `card by shape` fired on real cards at
+300-340 x 376-416 while the session kept fishing (2 catches, 19 dials closed in ~30 s), and the text
+parser already handles the epic layout (`Whale Shark | Epic | 26.6t | Impressive | $247`), so those
+catches are recorded and not just dismissed.
+
+Known limit: the shape rule cannot tell a catch card from another large opaque game panel (a menu).
+Both are tapped, which is what the bot already did to cream cards.
