@@ -19,6 +19,7 @@ Unit tests at the time of writing: `node --test` → 30 pass, 0 fail.
 | The game never sees panel clicks | pass — no game reaction to the two clicks; `stats` unchanged |
 | Counters advance while running | pass — "today" meter went 0 → 3 min / 4 h 00 |
 | State is observable from outside the closed shadow root | pass — `host.dataset.phase` / `host.dataset.catches` mirror the reducer state |
+| A stopped session writes a server row | pass — `GET /sessions?day=2026-10-27` returned `{time:"2026-10-27T04:18:14.743Z", started_at:"2026-10-27T04:14:28.436Z", minutes:4, catches:0, reason:"user"}` for the 3 min 47 s run the panel ended |
 
 ## Not observed (unit-tested only, or not reachable in this browser)
 
@@ -30,7 +31,6 @@ Unit tests at the time of writing: `node --test` → 30 pass, 0 fail.
 | Reload resume, `reload` session row | would have interrupted the run under test; the row logic is unit-tested |
 | Pill collapse | needs a viewport where no candidate rect fits, or a deliberate resize; window resize is blocked from the agent side (`Browser.getWindowForTarget` → `target_scope_unsupported`) |
 | Drag position persistence | drag needs a pointer sequence over a closed shadow root; not exercised live |
-| `POST /session` rows from the panel | the run was stopped before its row was written; the endpoint itself is covered by `tests/fishserve.test.js` |
 
 ## The finding that matters: bubble scan box vs. the real prompt
 
