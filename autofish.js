@@ -270,6 +270,28 @@
     if (!(m.ink < maxInk)) return { card: false, why: 'inky' };
     return { card: true, why: 'ok' };
   }
+  /**
+   * What to do on the N-th fruitless attempt to make a cast happen (N counts from 1).
+   *
+   * A white bubble is not always the CAST button: the caught-indicator and other HUD sprites share
+   * the shape, and tapping one changes nothing. Measured live on 2026-10-28: the bot found a blob,
+   * tapped it every ~0.9 s for 60+ s, and never cast, because the bubble branch returns before the
+   * cast retry. So a rung ladder: the first tap is the normal path, then also the game's own fishing
+   * keybind.
+   *
+   * Never walk. Fishing in this game is SEAT-BASED: the cast prompt is emitted only by the sit-down
+   * path (character.sit -> isRaycastHittingWater(seat.fishingReach ?? 50) -> signal showCastButton)
+   * and by the post-fish / post-fail result. A standing character has no prompt at all, so walking
+   * cannot create one - and the walk itself stands the character up (200 ms of held movement) and,
+   * measured live, walked it behind a building where it was neither visible nor fishable. The seat
+   * watchdog in step() names that condition instead of flailing.
+   */
+  function castRecovery(n) {
+    const i = Math.floor(n) || 0;
+    if (i <= 1) return { tap: true, space: false, walk: false };   // the normal path: click the bubble
+    if (i === 2) return { tap: true, space: true, walk: false };   // the click did not take: also press the key
+    return { tap: false, space: true, walk: false };                // the keybind alone, then hold
+  }
   // </timing-core>
 
   /* ---- catch log --------------------------------------------------------
@@ -1400,6 +1422,9 @@ const SPECIES = [
     return !kd.defaultPrevented;
   }
 
+  /* No movement keys are synthesised anywhere: a walk stands the character up out of the fishing
+   * seat, and the seat is the only thing that produces a cast prompt (see castRecovery above). */
+
   /* ------------------------------------------------------------ loop ----- */
   F.start = function (opts) {
     F.opts = Object.assign({
@@ -1423,6 +1448,7 @@ const SPECIES = [
       ab: null,                     // { arms: [{name:'contain',trigger:'contain'},{name:'angle',trigger:'angle',midDeg:6}] } - one arm per FISH
       bubbleDebounceMs: 900,
       castRetryMs: 5000,            // nothing has happened this long: cast with the game's own keybind
+      seatWatchdogMs: 45000,        // no dial, no press, no prompt this long -> the character is not seated
       lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
     cardCheckMs: 100,
@@ -1434,7 +1460,7 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
-      shapeHits: 0,
+      shapeHits: 0, castRetries: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.geo = null; F.hint = { x: 861, y: 372 }; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
@@ -1442,6 +1468,7 @@ const SPECIES = [
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
     F.pressStamp = null; F.dialBlinks = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
+    F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.needsSeat = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
     F.paused = false; F.lastBubble = null; F.lastCardRect = null;
@@ -1455,6 +1482,7 @@ const SPECIES = [
   F.stop = function () {
     F.running = false;
     cancelPend();
+
     clearPendingWin();
     if (F.attempt) { L('attempt abandoned', { n: F.attempt.n, presses: F.attempt.presses }); F.attempt = null; }
     if (F._raf) cancelAnimationFrame(F._raf);
@@ -1487,9 +1515,10 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
-      shapeHits: 0,
+      shapeHits: 0, castRetries: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
+    F.bubbleMiss = 0; F.stallRetry = 0;
     F.sweep = {};
     F.bands = {};
     clearPendingWin();
@@ -1600,12 +1629,27 @@ const SPECIES = [
           L('attempt loss pending', { n: F.attempt.n });
         }
       }
+      // A blob that never produces a dial is not a button. Every fruitless CAST ATTEMPT walks one
+      // rung up the ladder (click -> click plus keybind -> keybind), which is what stops the silent
+      // 60 s stall this branch used to cause by returning before the cast retry could ever run. The
+      // rung counts attempts, not frames: counting frames ran the ladder to the top in ~1 s and left
+      // the bot clicking nothing (measured live 2026-10-28: rung 4567, 36 walks, 0 dials).
       if (t - F.lastPress > F.opts.bubbleDebounceMs) {
-        tap(b.cx, b.cy);
+        const rung = (F.bubbleMiss = (F.bubbleMiss || 0) + 1);
+        F.lastRung = rung;
+        F.needsSeat = false;                                  // a prompt is up: the character is seated
+        const rec = castRecovery(rung);
+        if (rec.tap) {
+          tap(b.cx, b.cy);
+          F.hint = { x: b.cx, y: b.cy + 53 };
+        }
         F.lastPress = t;
         F.stats.bubbles++;
-        F.hint = { x: b.cx, y: b.cy + 53 };
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y });
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, tap: rec.tap, space: rec.space });
+        if (rec.space) {
+          F.lastSpaceTry = t;
+          space(F.opts.spaceTarget);
+        }
       }
       return;
     }
@@ -1680,6 +1724,7 @@ const SPECIES = [
       if (g) {
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
+        F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
         // dialect by dial would put both arms inside one attempt and the A/B would compare nothing.
@@ -1687,7 +1732,9 @@ const SPECIES = [
         F.attempt.dials++;
         F.attempt.touched = t;
         F.attempt.pendingLoss = null;
-        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n });
+        F.needsSeat = false;                                    // a dial means the cast took
+        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0 });
+        F.lastRung = 0;                                         // logged above: which rung did the casting
       }
     }
 
@@ -1699,8 +1746,25 @@ const SPECIES = [
     if (F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
       F.lastCastTry = t;
       F.stats.castRetries = (F.stats.castRetries || 0) + 1;
+      const rung = (F.stallRetry = (F.stallRetry || 0) + 1) + 1;   // rung 1 was the bubble tap
+      F.lastRung = rung;
+      castRecovery(rung);                                     // rungs only pick the key path now
       const consumed = !space(F.opts.spaceTarget);
-      L('cast retry', { consumed });
+      L('cast retry', { consumed, rung });
+    }
+
+    // The game shows a cast prompt only while the character is SEATED on a seat whose raycast
+    // reaches water (bundle: sit -> isRaycastHittingWater(seat.fishingReach ?? 50) -> showCastButton)
+    // or right after a fish result. A standing character therefore has no prompt and nothing the bot
+    // can synthesise sits it down, so say what is wrong instead of clicking forever - the old
+    // 60 s silent stall is exactly this state.
+    const seatWatch = F.opts.seatWatchdogMs;
+    if (seatWatch && !F.geo && !F.needsSeat) {
+      const idle = t - Math.max(F.lastPress || 0, F.lastBubbleAt || 0, F.geoAt || 0, F.startedAt);
+      if (idle > seatWatch) {
+        F.needsSeat = true;
+        L('needs a seat', { idleMs: Math.round(idle), why: 'no cast prompt: sit on a waterside chair' });
+      }
     }
   }
 
@@ -1768,6 +1832,7 @@ const SPECIES = [
       hidden: !!F.hidden,
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,
       hint: F.hint,
+      needsSeat: !!F.needsSeat,
       stats: F.stats || {},
       accuracy: {
         attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
@@ -1871,7 +1936,7 @@ const SPECIES = [
   };
 
   /** The timing maths, exposed so a live console can re-plan against a captured dial. */
-  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle };
+  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, castRecovery };
 
   /** The embedded species table, for a console that wants to check a rarity by hand. */
   F.catalogue = { count: SPECIES.length, tiers: TIER_ORDER.slice(), info: speciesInfo, describe: describeCatch };

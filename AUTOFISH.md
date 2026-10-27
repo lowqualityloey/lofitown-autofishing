@@ -881,6 +881,52 @@ first fix removed 6.3M array allocations a second and took the dial-locked frame
 111 - and left the *idle* frame rate at 32, because the expensive call only ever ran when no dial was
 on screen. Measure the state you are actually in.
 
+## 2026-10-28 why the bot stops casting: fishing is seat-based
+
+The long-standing "it just stops after a while" stall is not a click-timing bug and not a pixel
+miss. It is the seat.
+
+**The bundle says so** (`shots/diag/c3763.js`, the character's sit path):
+
+```js
+this.isLocal && "stand" !== t.seat.type && (
+  this.isRaycastHittingWater(t.seat.fishingReach ?? 50)
+    ? (P.A.getState().setCurrentSeatType("fishing"),
+       d.A.signal.emit("showAnimations", []),
+       d.A.signal.emit("showCastButton"))
+    : (P.A.getState().setCurrentSeatType("focus"), ...)
+)
+```
+
+`showCastButton` has exactly two sources: that sit path (a seat whose 50 px raycast reaches water)
+and the post-fish result (`onFishingResult`, `lose`, `showCastUI`). A **standing** character
+therefore has no cast prompt at all — and `startFishing` is only reachable from the prompt
+(`castUI.button` click, or Space while `castUI.button.sprite.visible`).
+
+So the real cycle is: sit on a waterside chair once → the prompt appears → click it → the reel/dial
+loop runs → after every fish the prompt comes back → the loop is self-sustaining. Anything that
+stands the character up (a stray tap on the ground, a walk, the site's own unsit) kills the prompt
+permanently, and the bot then logs `cast retry` every 5 s forever. That is the 60 s+ stall.
+
+**The bot cannot sit itself.** Seats are world objects the player clicks; the fishing code has no
+self-sit entry point, and synthesising pointer clicks on furniture is a much larger input surface
+than tapping the prompt.
+
+**What shipped because of this**
+
+- The recovery ladder no longer walks. `castRecovery(n)` is now click → click + keybind → keybind
+  only. The old 4th rung held a movement key to stand the character up; that is exactly the wrong
+  move here (it removes the seat), and on 2026-10-28 it walked the character behind the fish shack
+  where it was neither visible nor fishable — a self-inflicted stall.
+- A seat watchdog: after `seatWatchdogMs` (45 s) with no dial, no press and no prompt the bot logs
+  `needs a seat` once and reports `status().needsSeat === true`, instead of clicking at nothing.
+  The flag clears the moment a prompt or a dial proves the character is seated again.
+- `tests/perf.test.js` now forbids re-introducing any movement key, and `tests/timing.test.js`
+  pins the three-rung, never-walk ladder (102 tests).
+
+**Operating rule**: sit at the water, then Start. If the log says `needs a seat`, stand up and sit
+again — the bot will not move your character for you.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

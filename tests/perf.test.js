@@ -100,3 +100,67 @@ test('the catch-card scan is throttled to about 10 Hz', () => {
   assert.ok(m, 'the card-scan throttle is missing');
   assert.ok(Number(m[1]) >= 100, 'a card waits for a tap; there is nothing to win by scanning faster');
 });
+
+// A white blob is not always the cast button. Measured live 2026-10-28: a false-positive bubble was
+// tapped every ~0.9 s for 60+ s with no cast, because the bubble branch returns before the cast
+// retry. These guards keep the bounded recovery ladder (click -> keybind -> stand up) wired in.
+
+test('the bubble branch escalates instead of tapping the same blob forever', () => {
+  const btn = CORE.indexOf('const b = F.findBubble();');
+  assert.ok(btn > 0, 'the bubble branch is missing');
+  const branch = CORE.slice(btn, btn + 2400);
+  assert.match(branch, /const rung = \(F\.bubbleMiss = \(F\.bubbleMiss \|\| 0\) \+ 1\);/);
+  assert.match(branch, /castRecovery\(rung\)/);
+  assert.match(branch, /if \(rec\.tap\)/);
+  assert.match(branch, /if \(rec\.space\)/);
+  // a plain unconditional tap() is what caused the stall
+  assert.doesNotMatch(branch, /\n\s{8}tap\(b\.cx, b\.cy\);/);
+});
+
+test('a locked dial resets the recovery ladder, so the next cast starts at rung one', () => {
+  const m = CORE.match(/F\.bubbleMiss = 0; F\.stallRetry = 0;[^\n]*the ladder worked[^\n]*/);
+  assert.ok(m, 'the dial lock must reset bubbleMiss and stallRetry');
+  const lock = CORE.indexOf("L('dial locked'");
+  assert.ok(lock > m.index, 'the reset has to happen when the lock succeeds');
+  assert.ok(lock - m.index < 900, 'the reset belongs next to the lock');
+});
+
+test('the cast retry uses the same ladder, so a stall with no bubble still stands up', () => {
+  const at = CORE.indexOf("L('cast retry'");
+  assert.ok(at > 0);
+  const around = CORE.slice(at - 700, at + 60);
+  assert.match(around, /castRecovery\(rung\)/);
+});
+
+// Fishing in this game is seat-based: the cast prompt is emitted only by the sit-down path
+// (isRaycastHittingWater -> showCastButton) and by the post-fish result. A walk stands the character
+// up, i.e. it destroys the only thing that produces the prompt - measured live 2026-10-28 it walked
+// the character behind a building instead of recovering anything.
+
+test('no movement key is ever synthesised - sitting is what makes a cast possible', () => {
+  assert.doesNotMatch(CORE, /walkNudge\(/);
+  assert.doesNotMatch(CORE, /function clearWalk/);
+  assert.doesNotMatch(CORE, /\.walk\b/);
+  assert.doesNotMatch(CORE, /walkHoldMs/);
+});
+
+test('a missing cast prompt is named, not clicked at forever', () => {
+  assert.match(CORE, /seatWatchdogMs: \d+/);
+  assert.match(CORE, /L\('needs a seat'/);
+  assert.match(CORE, /F\.needsSeat = true;/);
+  // the flag has to clear again once a prompt or a dial proves the character is seated
+  assert.match(CORE, /F\.needsSeat = false;[^\n]*the character is seated/);
+  assert.match(CORE, /F\.needsSeat = false;[^\n]*the cast took/);
+  const status = CORE.slice(CORE.indexOf('F.status = function'), CORE.indexOf('F.status = function') + 1600);
+  assert.match(status, /needsSeat:/);
+});
+
+test('the ladder counts cast attempts, not frames', () => {
+  // Counting frames ran the rung to 4567 in one second and left the bot walking instead of clicking.
+  const btn = CORE.indexOf('const b = F.findBubble();');
+  const branch = CORE.slice(btn, btn + 1800);
+  const gate = branch.indexOf('if (t - F.lastPress > F.opts.bubbleDebounceMs) {');
+  assert.ok(gate > 0, 'the debounce gate is missing');
+  const rung = branch.indexOf('const rung = (F.bubbleMiss = (F.bubbleMiss || 0) + 1);');
+  assert.ok(rung > gate, 'the rung must only advance once per cast attempt (inside the debounce gate)');
+});

@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, castRecovery };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle']) {
+  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle', 'castRecovery']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -241,3 +241,26 @@ test('newTriangle: continuous rotation with no jump stays one triangle', () => {
   }
 });
 
+
+test('castRecovery walks up a bounded ladder: tap, then the keybind as well', () => {
+  // Rung 1 is the normal path: click the bubble and nothing else.
+  assert.deepEqual(T.castRecovery(1), { tap: true, space: false, walk: false });
+  // A click that changed nothing buys the game's own keybind as well.
+  assert.deepEqual(T.castRecovery(2), { tap: true, space: true, walk: false });
+  // Then the keybind alone while the pointer path has proven useless.
+  assert.deepEqual(T.castRecovery(3), { tap: false, space: true, walk: false });
+  assert.deepEqual(T.castRecovery(9), { tap: false, space: true, walk: false });
+});
+
+test('castRecovery never walks - a walk would stand the character out of the fishing seat', () => {
+  // Seat-based fishing: the cast prompt only exists while seated, so walking cannot recover a cast
+  // and can strand the character somewhere unfishable (measured live 2026-10-28).
+  for (let n = 0; n < 40; n++) assert.equal(T.castRecovery(n).walk, false, 'rung ' + n);
+  // Bounded: the last rung repeats and never taps again.
+  assert.deepEqual(T.castRecovery(5), { tap: false, space: true, walk: false });
+  assert.deepEqual(T.castRecovery(39), { tap: false, space: true, walk: false });
+  // Junk input must not crash.
+  assert.deepEqual(T.castRecovery(0), { tap: true, space: false, walk: false });
+  assert.deepEqual(T.castRecovery(null), { tap: true, space: false, walk: false });
+  assert.equal(T.castRecovery(2.7).tap, true);
+});
