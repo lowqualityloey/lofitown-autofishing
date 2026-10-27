@@ -549,6 +549,70 @@ minutes of visible play.
    has focus. Live: `stats.castRetries` counts those recoveries (34 in the first ~6 minutes of the
    run above, i.e. the bite wait is longer than the retry gap, and the retry is harmless then).
 
+
+## 2026-10-27 throughput - one press per triangle, and what "not losing" actually costs
+
+Until now the loop held **one press per dial lock**: `pressesThisDial === 0` gated the re-arm. That
+rule came from the belief that a press solved a fish, and it is wrong. `successfulPress()` spawns a
+new triangle in the same widget, so a fish is 5-7 presses and every one of them cost the bot a full
+dial close (4 bad frames), a re-lock scan (`dialCheckMs`) and often a lock on the fading ring.
+Measured on the live build before the change: **0.56 presses per lock, 24 ghosts in 86 locks**, and
+the three lost fish of that run were all slow dials (omega 111-175 deg/s) where one press took 3-13 s.
+
+The rule now:
+
+- re-arm when `|delta| > win + 12` (the wedge left the window), so one rotation is one press and the
+  next triangle is pressed on its next rotation; `maxPressPerDial` (12) is only a runaway guard;
+- a second press on the same lock also needs **evidence of a new spawn** (`newTriangle()`): a
+  thickness jump >= 3 deg, a delta jump > 25 deg beyond the predicted rotation, or the ring blinking
+  out for 2 frames. Without that gate a second press can land on the triangle the game just judged,
+  and `failedPress()` subtracts the last gain and zeroes the streak;
+- `relockGraceMs` (450) holds the dial geometry through the post-press blink instead of dropping it,
+  which is where the ghost locks came from;
+- a press clears `geo._hist` so the rate fit never straddles the spawn jump.
+
+Live, first 10 minutes on the new build (contain vs angle, per fish):
+
+| metric | before | after |
+|--------|--------|-------|
+| presses per dial lock | 0.56 | 2.1 (19 presses / 9 locks) |
+| ghost locks | 24 / 86 | 0 / 9 |
+| caught / attempts | 11 / 15 | 4 / 4 |
+| `misses` (press the game did not act on) | 3 / 61 | 0 / 19 |
+| PRESS `gate` counts | - | first 9, new-triangle 10 |
+
+### The arithmetic of losing
+
+A fish needs `ceil(100 / gain)` clean presses inside its rarity clock; `gain` is random per press
+(Common 15-25 -> 4-7 presses, Legendary 6-15 -> 7-17, Secret 2-10 -> 10-50) and a wrong press takes
+the last gain back. So the only question a loss asks is **presses needed x press cadence vs the
+timer**. Simulated 30 000 fish per cell from the bundle's own tables at a 97% clean-press rate
+(`shots/diag/cadence.js`):
+
+| cadence | Common 15s | Uncommon 15s | Rare 16s | Epic 22s | Legendary 30s | Secret 40s |
+|---------|-----------|--------------|----------|----------|---------------|------------|
+| 0.9 s | 100% | 100% | 100% | 100% | 100% | 100% |
+| 1.2 s | 100% | 99.97% | 99.99% | 100% | 100% | 100% |
+| 1.5 s | 99.86% | 99.83% | 99.25% | 99.97% | 100% | 100% |
+| 1.8 s | 98.94% | 98.39% | 95.57% | 99.77% | 99.98% | 99.99% |
+| 2.2 s | 89.00% | 87.41% | 87.36% | 98.48% | 99.71% | 99.86% |
+| 3.0 s | 86.34% | 66.70% | 18.78% | 85.00% | 96.66% | 96.57% |
+| 4.0 s | 0% | 0% | 0% | 0.69% | 80.72% | 81.94% |
+
+The live cadence is ~1.4 s per press per fish (5 presses per 5.5-11 s attempt), i.e. inside the band
+where every rarity is >= 99%. That is the honest answer to "can it never lose": the clock only bites
+when the cadence stretches, and the cadence stretches on slow dials (one press per rotation is then
+bounded by `360/omega`) and on any dead time spent re-acquiring a dial. Frame rate is not the
+limit: the live loop runs at 84 fps in this tab (dev machine, 144 Hz display), so a frame is ~4 deg
+at 350 deg/s against a window that is tens of degrees wide.
+
+### One open anomaly
+
+`stats.castRetries` fires during a long wait, and the wait is normally short: cast -> first dial
+measured at 590, 576, 595, 609, 560, 625, 589 ms (7 of 7). One 57 s gap remains unexplained
+(`bubble anywhere` -> tap -> no dial for 57 s, then a bubble and a normal cast), so the retry is
+still in place and still unproven; do not read it as a bite-wait artifact.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.
