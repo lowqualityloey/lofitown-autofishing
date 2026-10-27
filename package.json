@@ -1,0 +1,9 @@
+{
+  "name": "lofitown-autofishing",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test",
+    "serve": "node fishserve.js"
+  }
+}
