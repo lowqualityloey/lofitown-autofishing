@@ -36,6 +36,20 @@ test('collapsing actually hides the card and shows the 48px pill', () => {
   // the choice has to survive a reload
   assert.match(setCollapsed, /pos\.collapsed = collapsed/);
 });
+test('the session, cooldown and cap steppers reach overnight ranges', () => {
+  // the point of the ranges is "leave it fishing while I sleep", so assert the numbers a
+  // sleeper needs are actually reachable through the steppers, not just parseable.
+  const conf = src.slice(src.indexOf('function keyConf(key)'), src.indexOf('function clamp('));
+  const dur = /field: 'durationMs', min: (\d+) \* 60000, max: (\d+) \* 60000/.exec(conf);
+  const cool = /field: 'cooldownMs', min: (\d+) \* 60000, max: (\d+) \* 60000/.exec(conf);
+  const cap = /field: 'dailyCapMs', min: (\d+) \* 60000, max: (\d+) \* 60000/.exec(conf);
+  assert.ok(dur && cool && cap, 'all three steppers declare explicit minute bounds');
+  assert.ok(Number(dur[2]) >= 720, 'a session can run at least 12 hours');
+  assert.ok(Number(cap[2]) >= 1440, 'the daily cap can cover a full day');
+  assert.ok(Number(cool[1]) <= 1, 'the cooldown floor is one minute');
+  assert.ok(Number(cap[2]) >= Number(dur[2]), 'the cap must be able to outlast one session, or it stops the run');
+});
+
 test('the panel reads the catch ledger for the rarity strip and the last catch', () => {
   // the strip is fed by __fish.log(), never by the live counters: history has to survive a reload
   assert.ok(src.includes('fish().log'), 'renderLog reads the ledger');

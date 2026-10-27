@@ -2722,10 +2722,13 @@ const SPECIES = [
     document.addEventListener('pointercancel', stop, true);
   }
 
+  // Ranges are for people who want to leave it fishing overnight: a 12 h session and a
+  // 24 h daily cap are reachable, and the cooldown can go down to one minute. The cap is
+  // still the thing that stops an abandoned tab from fishing for days.
   function keyConf(key) {
-    if (key === 'dur') return { field: 'durationMs', min: 5 * 60000, max: 240 * 60000, unit: 5 * 60000 };
-    if (key === 'cool') return { field: 'cooldownMs', min: 5 * 60000, max: 120 * 60000, unit: 5 * 60000 };
-    return { field: 'dailyCapMs', min: 30 * 60000, max: 480 * 60000, unit: 15 * 60000 };
+    if (key === 'dur') return { field: 'durationMs', min: 5 * 60000, max: 720 * 60000, unit: 5 * 60000 };
+    if (key === 'cool') return { field: 'cooldownMs', min: 1 * 60000, max: 120 * 60000, unit: 1 * 60000 };
+    return { field: 'dailyCapMs', min: 30 * 60000, max: 1440 * 60000, unit: 60 * 60000 };
   }
 
   function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }

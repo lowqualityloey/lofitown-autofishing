@@ -105,12 +105,23 @@ bookmarks bar. On the game page, click the bookmark once: a small **AutoFish** c
 corner of the game and runs from there.
 
 - **Session / Cooldown / Daily cap** — set with `−` / `+` steppers (hold to accelerate). Defaults
-  60 min, 30 min, 4 h.
+  60 min, 30 min, 4 h. Ranges: session 5 min – **12 h**, cooldown **1 min** – 2 h, daily cap 30 min –
+  **24 h**. A long session still stops at the cap, and the panel restarts itself after a cooldown until
+  the cap is spent.
 - **Clock window** — optional "only fish between HH:MM and HH:MM"; times move in 15-minute steps and
   the stop time wins over the duration.
 - **Start / Stop** — one button. Every Stop starts the cooldown; a pause does not.
 - **Meters** — time left, catches this session, presses this session, and today's total against the
   daily cap.
+
+**Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
+the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a
+backgrounded or minimised tab freezes both, and the panel stops the session when it sees the page
+hidden. The panel asks for a screen wake lock while a session is running, which keeps the display on
+when the page is visible and focused; a locked screen or a sleeping machine still ends the run. So an
+overnight run means the window stays open and visible, the display stays awake, and the OS is told not
+to sleep. Two known ways a long run can quietly stop: the after-catch cast stall (no cast prompt is
+pressed for a minute or more while the loop still ticks) and a missed reels left waiting for a bite.
 
 The panel never draws over the play area: it asks the core for the live bubble/dial/card rectangles
 (`__fish.zones()`) and slides to a free corner every 250 ms, collapsing to a pill if there is no
