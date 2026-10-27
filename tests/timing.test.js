@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias']) {
+  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -165,6 +165,30 @@ test('sweepBias cycles the probe offsets in order', () => {
   assert.deepEqual([0, 1].map((i) => T.sweepBias({ biases: [10, -10] }, i)), [10, -10]);
 });
 
+
+test('cardShapeOk accepts a measured catch card and rejects the reel panel', () => {
+  // Measured live: real cards 296-336 wide, ink 0.12-0.23. The 204x272 reel panel: ink 0.47-0.59.
+  assert.deepEqual(T.cardShapeOk({ w: 300, h: 440, ink: 0.18 }), { card: true, why: 'ok' });
+  assert.deepEqual(T.cardShapeOk({ w: 336, h: 436, ink: 0.12 }), { card: true, why: 'ok' });
+  assert.equal(T.cardShapeOk({ w: 204, h: 272, ink: 0.5 }).card, false);
+  assert.equal(T.cardShapeOk({ w: 204, h: 272, ink: 0.5 }).why, 'narrow');
+});
+
+test('cardShapeOk separates on ink once the panel is wide enough', () => {
+  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.5 }).card, false);
+  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.5 }).why, 'inky');
+  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.47 }).card, false);
+  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.3 }).card, false);   // strictly under 0.3
+  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.29 }).card, true);
+});
+
+test('cardShapeOk thresholds are overridable and a missing match is not a card', () => {
+  assert.equal(T.cardShapeOk({ w: 100, h: 400, ink: 0.1 }, { minW: 90 }).card, true);
+  assert.equal(T.cardShapeOk({ w: 300, h: 400, ink: 0.4 }, { maxInk: 0.5 }).card, true);
+  assert.equal(T.cardShapeOk(null).card, false);
+  assert.equal(T.cardShapeOk(null).why, 'none');
+  assert.equal(T.cardShapeOk(undefined).card, false);
+});
 
 test('omegaBand splits presses into the four speed bands', () => {
   assert.equal(T.omegaBand(0), 'slow');

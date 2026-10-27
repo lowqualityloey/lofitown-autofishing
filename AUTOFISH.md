@@ -416,6 +416,9 @@ out and unreadable.
 
 ## 2026-10-27 live verified verdicts - what a press is actually worth
 
+> **Withdrawn.** The 600 ms "card = win" rule below scored a piece of reel UI, not a catch: see
+> *one fish is many presses* further down. Kept for the record.
+
 Until now the bot scored a press by whether the dial ended within 1.5 s. That is not a hit signal:
 the game ends the dial on a win *and* on a timeout-triggered miss, so 60 "hits" and 0 "misses" over
 90 dials said nothing. A press is now scored by what follows it: a **catch card within 600 ms = win**,
@@ -463,6 +466,88 @@ did not win, `outcome.trace` plus `outcome.reasons` (how many frames the planner
 `wait` / `now-inside` / `disarmed` / `static`). A ghost shows the frozen trace above; a mistimed
 press shows a normal rotation with the press near a window edge; a dial the bot never locked shows
 up as no record at all.
+
+## 2026-10-27 one fish is many presses - the reel is a level bar, and the counters had to move
+
+The game's own minigame code (Next chunk `_next/static/chunks/3763-052bcc751d1d9507.js`) settles
+what the capture never could:
+
+```js
+handleMinigameClick = () => {
+  let e = 180 * this.rotatingTriangle.rotation / Math.PI % 360, t = (e + this.triangleThickness) % 360;
+  this.isAngleInWedge(this.arrowAngle, e, t) ? this.successfulPress() : this.failedPress();
+};
+handleSpaceKey = e => { if (isFishingKeybind(e)) this.handleMinigameClick(); };   // the fixed pin
+successfulPress() { updateFishLevel(+gain); if (fishLevel >= 100) this.win(); else spawnTriangle(); }
+failedPress()     { updateFishLevel(-lastLevelGained); consecutiveSuccesses = 0; spawnTriangle(); }
+```
+
+- The click **position is irrelevant**: the game compares the wedge `[rotation, rotation + thickness]`
+  against a fixed pin at 270 deg. `arrowAngle = 270`, `fishLevelTarget = 100`, level starts at 0.
+- **One fish is 5-7 correct presses**, not one. A press that pays out no card is the normal case.
+- Per-rarity gain / time limit / wedge thickness, from the same file:
+
+| rarity | time limit (s) | gain per press | wedge (deg) |
+|---|---|---|---|
+| Common | 15 | 15-25 | 50-179 |
+| Uncommon | 15 | 12-22 | 45-150 |
+| Rare | 16 | 10-20 | 40-120 |
+| Epic | 22 | 8-18 | 40-90 |
+| Legendary | 30 | 6-15 | 30-70 |
+| Secret | 40 | 2-10 | 30-50 |
+
+- A **failed** press undoes the previous gain and zeroes the streak bonus
+  (`startFromStreak 2, bonusPerStreak 2, maxBonus 16`), so a miss costs far more than a pass.
+
+### What that invalidates
+
+The 204x272 panel that followed every press - and that made "63 wins / 0 losses" in run C above -
+is the reel UI itself, red-flashed by `failedPress()` for 50 ms. **That table is withdrawn**: the
+oracle was measuring the minigame panel, not a catch. Only parsed card text counts now
+(`__fish.accuracy().oracle`).
+
+Per-press scoring is withdrawn for the same reason. A 600 ms / 3 s "no card = loss" rule scores five
+healthy presses of one Flounder as five failures; the live log shows exactly that (six presses with
+"press failed" immediately followed by `catch logged Flounder`).
+
+### What replaced it: the fish attempt
+
+`F.attempt` opens when a dial appears with none in progress and closes:
+
+- **caught** - `parseCatch()` returned a species (the only oracle);
+- **lost** - the cast prompt came back (with a 2.5 s grace, because a win's card is read up to ~3 s
+  after the last press) or no dial and no press for 25 s (a stalled flow).
+
+An A/B arm is now chosen **per fish**, not per dial: one fish is several dials of the same minigame,
+so alternating by dial put both arms inside one attempt. Report shape:
+
+```
+__fish.accuracy()  -> { attempts, caught, lost, catchRate, presses, pressesPerCatch, byArm, byBand }
+__fish.armReport() -> per arm: attempts, caught, lost, presses, dials, catchRate, pressesPerCatch
+```
+
+Live first run of the attempt metric (contain vs angle, midDeg 6, interleaved per fish):
+
+| arm | attempts | caught | lost | presses | dials | presses/catch |
+|-----|----------|--------|------|---------|-------|---------------|
+| contain | 4 | 4 | 0 | 20 | 25 | 5.0 |
+| angle | 3 | 2 | 1 | 13 | 21 | 6.5 |
+
+7 attempts, 6 caught (Salmon, Oyster, Coelacanth, Clown Fish, Sardine x2), 1 lost, **5.5 presses per
+catch**, ~1.3 attempts/minute. n=7 decides nothing: at this rate a 30-attempts-per-arm A/B is ~45
+minutes of visible play.
+
+### Two things that silently stop the run
+
+1. **The tab must be visible.** `step()` returns early and `requestAnimationFrame` stops when
+   `document.visibilityState !== 'visible'`; 56 s were lost that way in one session. For an unattended
+   run, keep the tab in front (`__fish.status().hidden` shows it).
+2. **A missed cast stalls everything.** Observed 60+ s with no dial and no press after a catch: the
+   cast control is a small bubble and the caught-indicator is the same shape, so the detector
+   sometimes taps an indicator that is not a button. `castRetryMs` (5 s) now falls back to the game's
+   own fishing keybind, which casts only while its cast button is visible and is ignored while chat
+   has focus. Live: `stats.castRetries` counts those recoveries (34 in the first ~6 minutes of the
+   run above, i.e. the bite wait is longer than the retry gap, and the retry is harmless then).
 
 ## Measured facts
 

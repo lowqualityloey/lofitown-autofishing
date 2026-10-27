@@ -235,6 +235,24 @@
     if (a < 500) return 'fast';
     return 'blur';
   }
+  /**
+   * Is this solid panel the catch card, or a piece of reel UI that looks like one?
+   *
+   * Measured in the live game on 2026-10-27: a real catch card was 296-336 px wide and 430-440
+   * tall with a dark-ink share of 0.12-0.23 (cream paper, a few lines of text). The panel that
+   * followed every press was 204x272 with an ink share of 0.47-0.59 - a dark reel-UI box. Size
+   * alone was not enough (204 > the old 180 px floor), so ink is the separator and width is the
+   * backstop. Pure on purpose: the thresholds are the reason the win counter lied.
+   */
+  function cardShapeOk(m, o) {
+    const cfg = o || {};
+    const minW = cfg.minW != null ? cfg.minW : 260;
+    const maxInk = cfg.maxInk != null ? cfg.maxInk : 0.3;
+    if (!m) return { card: false, why: 'none' };
+    if (!(m.w >= minW)) return { card: false, why: 'narrow' };
+    if (!(m.ink < maxInk)) return { card: false, why: 'inky' };
+    return { card: true, why: 'ok' };
+  }
   // </timing-core>
 
   /* ------------------------------------------------------------- log ----- */
@@ -537,7 +555,11 @@
     const r = readUI(x0 * SDOWN, y0 * SDOWN, W, H);
     if (!r) return null;
     const ink = inkMix(r);
-    if (ink.dark < 0.003) return null;                                 // a card always prints text
+    const shape = cardShapeOk({ w: W, h: H, ink: ink.dark });
+    if (!shape.card) {                                                 // reel UI, not a card
+      L('shape rejected', { why: shape.why, w: W, h: H, ink: +ink.dark.toFixed(3) });
+      return null;
+    }
     const fill = sum(x0, y0, x1, y1) / ((x1 - x0) * (y1 - y0));
     const cand = {
       cx: Math.round(seed.x * SDOWN + (CW * SDOWN) / 2),
@@ -628,6 +650,18 @@
     F.catches.push(row);
     if (F.catches.length > 400) F.catches.shift();
     L('catch logged', { species: row.species, rarity: row.rarity, quality: row.quality, weight: row.weight, value: row.value });
+    // Parsed catch text is the only oracle in this system: it closes the fish attempt that earned it.
+    if (F.pendingWin) {
+      const pr = F.pendingWin;
+      pr.cardMs = pr.closedAt != null ? Math.round(now() - pr.closedAt) : null;
+      pr.landed = true;
+      clearPendingWin();
+    }
+    if (F.attempt) {
+      F.attempt.species = row.species;
+      F.attempt.rarity = row.rarity;
+      resolveAttempt('caught', now(), null);
+    }
     try {
       fetch(F.logUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(row) }).catch(function () {});
     } catch (e) {}
@@ -851,6 +885,13 @@
     F.armed = false;
     F.lastPress = now();
     F.stats.presses++; F.pressesThisDial++;
+    if (F.attempt) {
+      F.attempt.presses++;
+      F.attempt.touched = F.lastPress;
+      F.attempt.pendingLoss = null;
+      const om = Math.abs((s && s.omega) || 0);
+      if (om > F.attempt.maxOmega) F.attempt.maxOmega = om;
+    }
     F.dialLastPress = { t: F.lastPress, via, biasMs: (s && s.biasMs) || 0, omega: s && s.omega };
     const pend = F.pend;
     cancelPend();
@@ -891,13 +932,14 @@
       : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
     F.stats.dialsClosed++;
     F.stats[verdict === 'hit' ? 'hits' : verdict === 'miss' ? 'misses' : verdict === 'ghost' ? 'ghosts' : verdict === 'skipped' ? 'skipped' : 'noPress']++;
-    if (skipped) F.stats.losses++;
+    if (skipped && F.attempt) F.attempt.skipped++;
     const rec = {
       heldMs, presses, verdict, sincePress,
       width: Math.round((F.geo && F.geo.width) || 0),
       omega: last && last.omega != null ? Math.round(last.omega) : null,
       biasMs: last ? last.biasMs : null,
       reasons: F.geoReasons || null,
+      arm: F.dialArm || null,
       trace: F.geoReasons && !(verdict === 'hit') ? F.geoTrace.slice() : null,
     };
     if (last && last.omega != null) rec.omega = Math.round(last.omega);
@@ -909,41 +951,19 @@
       cell.presses++;
       if (verdict === 'hit') cell.hits++; else cell.misses++;
     }
-    // Verified outcome. The 1.5 s rule cannot tell a win from a loss - the game ends the dial
-    // either way - so every press is scored by what actually follows: a catch card within
-    // winWindowMs means the click landed, no card means the fish got away.
+    // A press is NOT a fish. The game grows its level bar to 100 over several triangles, so a press
+    // that pays out no card immediately is the normal case - scoring it a loss is what turned five
+    // healthy presses of one Flounder into five failures. Keep the press only as the record that a
+    // following catch stamps with its card delay, and let the fish attempt decide the outcome.
     if (presses > 0) {
       rec.closedAt = t;
       rec.biasMs = last ? last.biasMs : null;
+      clearPendingWin();
       F.pendingWin = rec;
-      rec.timer = setTimeout(() => {
-        if (F.pendingWin !== rec) return;
-        F.pendingWin = null;
-        tallyVerified(rec, false, null);
-      }, F.opts.winWindowMs || 600);
     }
     L('dial gone', {
       ring: ring == null ? null : +ring.toFixed(2),
       presses, heldMs, verdict, sincePress, width: rec.width, omega: rec.omega,
-    });
-  }
-
-  /** Count one press as won or lost, in the totals and in its speed band and bias cell. */
-  function tallyVerified(rec, won, cardMs) {
-    rec.won = won;
-    if (cardMs != null) rec.cardMs = cardMs;
-    const band = omegaBand(rec.omega);
-    const cell = F.bands[band] || (F.bands[band] = { band, presses: 0, wins: 0, losses: 0 });
-    cell.presses++;
-    cell[won ? 'wins' : 'losses']++;
-    if (rec.biasMs != null) {
-      const s = F.sweep[rec.biasMs] || (F.sweep[rec.biasMs] = { biasMs: rec.biasMs, presses: 0, hits: 0, misses: 0, wins: 0, losses: 0 });
-      s[won ? 'wins' : 'losses']++;
-    }
-    F.stats[won ? 'wins' : 'losses']++;
-    L(won ? 'dial won' : 'dial lost', {
-      omega: rec.omega, width: rec.width, biasMs: rec.biasMs,
-      cardMs: cardMs == null ? null : cardMs,
     });
   }
 
@@ -952,12 +972,17 @@
     F.pendingWin = null;
   }
 
-  /** A catch card arrived: the dial that just closed was a hit. */
-  function markWin(t) {
+  /**
+   * A card-shaped panel arrived. That is a SIGHTING, not a catch: the panel that followed every
+   * press turned out to be reel UI, so scoring off this function is what made 21 "wins" out of
+   * 2 fish. Count it apart and let the parsed catch text decide.
+   */
+  function markShapeHit(t) {
+    F.stats.shapeHits = (F.stats.shapeHits || 0) + 1;
     const rec = F.pendingWin;
     if (!rec) return;
-    clearPendingWin();
-    tallyVerified(rec, true, rec.closedAt != null ? Math.round(t - rec.closedAt) : null);
+    if (rec.cardMs == null && rec.closedAt != null) rec.cardMs = Math.round(t - rec.closedAt);
+    rec.shapeSeen = true;
   }
 
   /* ----------------------------------------------------------- input ----- */
@@ -1009,10 +1034,13 @@
       replanMs: 8,                  // re-aim the timer only when the plan moved this much
       pressGapMs: 120,
       hitMs: 1500,                  // a press the game acts on ends the dial within this
-      winWindowMs: 600,             // a winning press is followed by a catch card within this
       skipMs: 300,                  // an unpressed dial that lived this long lost a fish (fades are ~100 ms)
+      attemptIdleMs: 25000,         // an attempt with no dial and no press this long is over
       sweep: null,                  // e.g. { min: -60, max: 60, step: 15 } - one probe per press
+      ab: null,                     // { arms: [{name:'contain',trigger:'contain'},{name:'angle',trigger:'angle',midDeg:6}] } - one arm per FISH
       bubbleDebounceMs: 900,
+      castRetryMs: 5000,            // nothing has happened this long: cast with the game's own keybind
+      lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
       maxMinutes: 240,
     }, opts || {});
@@ -1020,9 +1048,11 @@
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
-      wins: 0, losses: 0, skipped: 0, ghosts: 0,
+      attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
+      shapeHits: 0,
     };
+    F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.geo = null; F.hint = { x: 861, y: 372 }; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
     F.txtAt = now(); F.cardWait = null;                        // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
@@ -1041,6 +1071,7 @@
     F.running = false;
     cancelPend();
     clearPendingWin();
+    if (F.attempt) { L('attempt abandoned', { n: F.attempt.n, presses: F.attempt.presses }); F.attempt = null; }
     if (F._raf) cancelAnimationFrame(F._raf);
     F._raf = null;
     L('stop', { stats: F.stats });
@@ -1069,9 +1100,11 @@
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
-      wins: 0, losses: 0, skipped: 0, ghosts: 0,
+      attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
+      shapeHits: 0,
     };
+    F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.sweep = {};
     F.bands = {};
     clearPendingWin();
@@ -1114,6 +1147,14 @@
     if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
     if (F.paused) return;
     if (t - F.startedAt > F.opts.maxMinutes * 60000) { L('maxMinutes'); F.stop(); return; }
+    // A fish that has shown no dial and taken no press for a long time is over; the client's own
+    // timer is 15-40 s, so this only fires when the flow itself stalled (a missed re-cast).
+    if (F.attempt && F.attempt.pendingLoss && t - F.attempt.pendingLoss > (F.opts.lossGraceMs || 2500)) {
+      resolveAttempt('lost', t, 'cast prompt');
+    }
+    if (F.attempt && t - (F.attempt.touched || F.attempt.startedAt) > (F.opts.attemptIdleMs || 25000)) {
+      resolveAttempt('lost', t, 'idle');
+    }
 
     // 0. a catch card blocks the next cast until it is tapped away. Its paper appears before its
     // text is drawn, so the card is held open until the catch has been read - tapping on sight
@@ -1122,7 +1163,7 @@
     if (!F.geo && t - (F.lastCard || 0) > 1500) {
       const card = F.findCatch();
       if (card) {
-        markWin(t);
+        markShapeHit(t);
         // half-sizes measured on the 1522x954 layout; good enough to keep the panel clear
         F.lastCardRect = card.w && card.h
           ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
@@ -1150,7 +1191,7 @@
       F.cardScan = t;
       const c = F.findCatch();
       if (c) {
-        markWin(t);
+        markShapeHit(t);
         F.cardUntil = t + 2200;
         F.lastCardRect = c.w && c.h
           ? { x: c.cx - c.w / 2, y: c.cy - c.h / 2, w: c.w, h: c.h }
@@ -1162,7 +1203,18 @@
     // 1. a bubble is always the next thing to press (CAST! or REEL!, same shape)
     const b = F.findBubble();
     if (b) {
-      F.lastBubble = b;
+      F.lastBubble = b; F.lastBubbleAt = t;
+      // The cast prompt means the minigame is over, so an attempt still open is a fish that got
+      // away. But the prompt is a bubble-shaped sprite and the card of a WIN is read up to ~3 s
+      // after the last press, so a loss is only declared once no card can still be on its way.
+      if (F.attempt && !F.attempt.pendingLoss) {
+        if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
+          resolveAttempt('lost', t, 'cast prompt');
+        } else {
+          F.attempt.pendingLoss = t;
+          L('attempt loss pending', { n: F.attempt.n });
+        }
+      }
       if (t - F.lastPress > F.opts.bubbleDebounceMs) {
         tap(b.cx, b.cy);
         F.lastPress = t;
@@ -1193,8 +1245,8 @@
         armed: F.armed && s.tracked && t - F.lastPress > (F.opts.pressGapMs || 120),
         pendingAt: F.pend ? F.pend.at : null,
       }, {
-        trigger: F.opts.trigger,
-        midDeg: F.opts.midDeg,
+        trigger: (F.armCfg && F.armCfg.trigger) || F.opts.trigger,
+        midDeg: F.armCfg && F.armCfg.midDeg != null ? F.armCfg.midDeg : F.opts.midDeg,
         marginDeg: F.opts.marginDeg,
         leadMs: F.opts.leadMs,
         biasMs: s.biasMs,
@@ -1216,7 +1268,9 @@
         if (F.geoTrace.length > 48) F.geoTrace.shift();
       }
       // Re-arm only once the wedge has left the window, so one rotation gets one press.
-      if (Math.abs(plan.delta) > plan.win + 12) F.armed = true;   // wedge left the window
+      // One press per dial: a second press cannot help (the game already judged the first) and
+      // only shows up as an unexplained extra click.
+      if (F.pressesThisDial === 0 && Math.abs(plan.delta) > plan.win + 12) F.armed = true;
       if (plan.cancel) cancelPend();
       if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
       if (plan.press) doPress(s, 'frame');
@@ -1231,9 +1285,78 @@
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0;
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.stats.dials++;
-        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width) });
+        // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
+        // dialect by dial would put both arms inside one attempt and the A/B would compare nothing.
+        if (!F.attempt) startAttempt(t);
+        F.attempt.dials++;
+        F.attempt.touched = t;
+        F.attempt.pendingLoss = null;
+        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n });
       }
     }
+
+    // 4. Cast recovery. The cast control is a small bubble, and the caught-indicator is the same
+    // shape, so the shape detector sometimes taps an indicator that is not a button - after which
+    // nothing at all happens and the run silently stops fishing (observed: 60+ s of no dial and no
+    // press while frames kept advancing). The game's own fishing keybind casts whenever its cast
+    // button is visible and is ignored while chat has focus, so it is a safe fallback.
+    if (F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
+      F.lastCastTry = t;
+      F.stats.castRetries = (F.stats.castRetries || 0) + 1;
+      const consumed = !space(F.opts.spaceTarget);
+      L('cast retry', { consumed });
+    }
+  }
+
+  /* -------------------------------------------------------- attempts ----- */
+  /**
+   * One FISH, not one dial. The game grows a hidden level bar to 100 over several triangle
+   * presses (see AUTOFISH.md: gain per press, 100 target), so a press that pays out no card
+   * immediately is normal. The fish attempt is therefore the unit an A/B arm is chosen for and
+   * the unit accuracy is scored on: it opens when a dial appears with none in progress and
+   * closes at a parsed catch ("caught") or when the cast prompt / a long idle gap says the
+   * minigame is over ("lost").
+   */
+  function startAttempt(t) {
+    const arms = F.opts.ab && F.opts.ab.arms;
+    const cfg = arms && arms.length ? arms[F.stats.attempts % arms.length] : null;
+    const name = cfg ? (cfg.name || cfg.trigger || String(F.stats.attempts % arms.length)) : null;
+    F.attempt = {
+      n: F.stats.attempts + 1, startedAt: t, touched: t,
+      presses: 0, dials: 0, skipped: 0, maxOmega: 0,
+      arm: name, armCfg: cfg,
+    };
+    F.armCfg = cfg;
+    F.dialArm = name;
+    return F.attempt;
+  }
+
+  function resolveAttempt(verdict, t, why) {
+    const a = F.attempt;
+    if (!a) return null;
+    F.attempt = null;
+    a.verdict = verdict;
+    a.why = why || null;
+    a.ms = Math.round(t - a.startedAt);
+    F.stats.attempts++;
+    const key = verdict === 'caught' ? 'caught' : 'lost';
+    F.stats[key]++;
+    // wins/losses stay in the stats object because the HUD and older logs read them.
+    F.stats.wins = F.stats.caught; F.stats.losses = F.stats.lost;
+    const band = omegaBand(a.maxOmega || null);
+    const b = F.bands[band] || (F.bands[band] = { band, attempts: 0, caught: 0, lost: 0, presses: 0 });
+    b.attempts++; b[key]++; b.presses += a.presses;
+    if (a.arm) {
+      const c = F.arms[a.arm] || (F.arms[a.arm] = { arm: a.arm, attempts: 0, caught: 0, lost: 0, presses: 0, dials: 0 });
+      c.attempts++; c[key]++; c.presses += a.presses; c.dials += a.dials;
+    }
+    F.attempts.push(a);
+    while (F.attempts.length > 200) F.attempts.shift();
+    L(verdict === 'caught' ? 'attempt caught' : 'attempt lost', {
+      n: a.n, ms: a.ms, presses: a.presses, dials: a.dials, skipped: a.skipped,
+      arm: a.arm, band, why: a.why, species: a.species || null,
+    });
+    return a;
   }
 
   /* ------------------------------------------------------- reporting ----- */
@@ -1246,6 +1369,11 @@
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,
       hint: F.hint,
       stats: F.stats,
+      accuracy: {
+        attempts: F.stats.attempts, caught: F.stats.caught, lost: F.stats.lost,
+        presses: F.stats.presses, shapeHits: F.stats.shapeHits,
+        openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses } : null,
+      },
       pressesThisDial: F.pressesThisDial,
       pendingMs: F.pend ? Math.round(F.pend.at - now()) : null,
       logTail: F.log.slice(-8),
@@ -1268,24 +1396,62 @@
       }));
   };
 
-  /** Verified win rate per speed band - the number that says WHERE accuracy is lost. */
+  /** Fish attempts caught/lost per closing speed band - the number that says WHERE fish are lost. */
   F.bandReport = function () {
     const order = ['slow', 'mid', 'fast', 'blur'];
     return order.filter((k) => F.bands && F.bands[k]).map((k) => {
       const b = F.bands[k];
-      return { band: b.band, presses: b.presses, wins: b.wins, losses: b.losses, winRate: b.presses ? +(b.wins / b.presses).toFixed(2) : null };
+      return { band: b.band, attempts: b.attempts, caught: b.caught, lost: b.lost, presses: b.presses,
+        catchRate: b.attempts ? +(b.caught / b.attempts).toFixed(3) : null };
     });
   };
+  /**
+   * Per-arm performance for an interleaved A/B, scored on FISH: attempts caught against attempts
+   * lost. Presses are reported too, because a faster arm that lands more presses per fish is only
+   * better if it also catches more fish.
+   */
+  F.armReport = function () {
+    return Object.keys(F.arms || {}).map((k) => {
+      const a = F.arms[k];
+      return { arm: a.arm, attempts: a.attempts, caught: a.caught, lost: a.lost, presses: a.presses,
+        dials: a.dials,
+        catchRate: a.attempts ? +(a.caught / a.attempts).toFixed(3) : null,
+        pressesPerCatch: a.caught ? +(a.presses / a.caught).toFixed(2) : null };
+    });
+  };
+
+  /**
+   * The honesty layer. A "win" here means a parsed catch card, nothing else: shape hits are
+   * counted separately because they were once mistaken for wins and produced a 100% hit rate
+   * against 2 real fish.
+   */
+  F.accuracy = function () {
+    const s = F.stats || {};
+    const presses = s.presses || 0;
+    const caught = (F.attempts || []).filter((a) => a.verdict === 'caught').length;
+    const lost = (F.attempts || []).filter((a) => a.verdict === 'lost').length;
+    return {
+      attempts: (F.attempts || []).length, caught, lost,
+      catchRate: caught + lost ? +(caught / (caught + lost)).toFixed(3) : null,
+      presses, pressesPerCatch: caught ? +(presses / caught).toFixed(2) : null,
+      openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses, dials: F.attempt.dials, ms: Math.round(now() - F.attempt.startedAt) } : null,
+      shapeHits: s.shapeHits || 0,
+      byBand: F.bandReport(), byArm: F.armReport(),
+      oracle: 'parsed catch text closes a fish attempt; a press alone is never a win or a loss',
+    };
+  };
+
   F.report = function () {
     return {
-      version: F.version, stats: F.stats, opts: F.opts,
+      version: F.version, accuracy: F.accuracy(), stats: F.stats, opts: F.opts,
       sweep: F.sweepReport(), bands: F.bandReport(), outcomes: F.outcomes.slice(-60),
+      attempts: (F.attempts || []).slice(-40),
       log: F.log.slice(-250),
     };
   };
 
   /** The timing maths, exposed so a live console can re-plan against a captured dial. */
-  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand };
+  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk };
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
