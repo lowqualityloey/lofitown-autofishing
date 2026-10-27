@@ -944,6 +944,13 @@ reason `no-seat` instead of leaving it paused forever, so a forgotten character 
 a night: measured in node, one unseated minute left `fishingMs` at 60 000, twenty more left it
 there, sitting down resumed at 60 000 and the next 30 s brought it to 90 000.
 
+**Verified on the shipped userscript** (2026-10-28, after the user re-imported `dist/autofish.user.js` and
+reloaded): one panel mounted, `opts.seatWatchdogMs` 45000 present, and with `status()` forced to report
+`needsSeat` the panel went `paused`/`seat` while `fishingMs` stayed at 898 993 through 2.6 s of ticking,
+then returned to `running` with the same clock when the flag came back false. The catch ledger survived
+the reload (121 catches, 39 species) and the bot kept fishing afterwards (26 caught that session,
+0 errors).
+
 **The daily cap and the clock window ignore seat time too** (2026-10-28, same reducer). The character's
 clock stops during a seat pause; the wall clock does not, so the pause branch re-checks the schedule:
 a seat pause that outlives the window now ends the session with reason `window` (22:00 start, 23:01

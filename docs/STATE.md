@@ -198,13 +198,12 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. The user re-imports `dist/autofish.user.js` into Tampermonkey and reloads. Their page still runs
-   the pre-seat build and currently has two mounted panels (their copy plus a test copy); a reload
-   leaves exactly one and activates the seat pause, the cap/window rules and the dial-search fix.
-2. Prove the seat pause live end to end: remount the panel from the current build, force
-   `status().needsSeat`, and confirm `paused`/`seat` with `fishingMs` frozen, the window stop past the
-   schedule, and the resume when a prompt returns. Node tests cover the reducer; the page has not run
-   this code yet.
+1. ~~Re-import and reload~~ (done 2026-10-28): the page now runs the shipped userscript with one
+   panel, and the seat pause was measured live - `paused`/`seat` with `fishingMs` frozen at 898 993
+   across 2.6 s, then `running` again on the same clock. The window/cap branches are still reducer
+   tests only, because they need a schedule boundary to actually pass.
+2. Watch a real overnight run: the 30-minute seat cap, the window stop and the cap stop have never
+   fired in the field, and only a night will show whether a stall costs hours or nothing.
 3. Settle the two lost fish in the 28/30 sample. Both scored `cast prompt`; one showed a
    shape-accepted card (304x420 / 320x436, ink 0.115-0.116) that never produced parsed text, so
    `parseCatch` can still drop a win silently when no dial is locked - fix that path or prove the
