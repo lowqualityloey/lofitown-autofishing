@@ -557,6 +557,11 @@
 
   function startDrag(e) {
     if (e.button != null && e.button !== 0) return;
+    // The head is the drag handle AND the home of the collapse button. setPointerCapture(host)
+    // retargets the later pointerup to the host, so the browser computes the click against the host
+    // and the button's own click handler never runs - a dead button that looks alive. Leave
+    // interactive children alone: no drag, no capture, and their click lands normally.
+    if (e.target && e.target.closest && e.target.closest('button')) return;
     var r = host.getBoundingClientRect();
     dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
     try { host.setPointerCapture(e.pointerId); } catch (ignored) {}

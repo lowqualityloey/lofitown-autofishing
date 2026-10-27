@@ -27,6 +27,8 @@ npm run build:userscript      # same thing
    (Or, while `fishserve` is running, open `http://127.0.0.1:8731/autofish.user.js` and press Install.)
 3. Open https://app.lofi.town. The **AutoFish panel** appears top-left, marked `IDLE`.
 4. Press **Start** in the panel. Stop / Pause / Resume and the session rules all work offline.
+   Drag it by the header; the `–` in the header collapses it to a 48 px 🎣 pill, and clicking the
+   pill brings it back.
 
 Why the first load is OFF on purpose: an install must never start pressing keys in a tab you just
 opened. The remembered choice lives in `localStorage` (`autofish:on`, `autofish.prefs`,
@@ -740,6 +742,13 @@ finally produced clean detections. Do not go back to luminance.
 3. **Do not trust `app.render()` for UI.** It renders the world and silently omits the minigame.
 4. **Do not read the UI canvas outside rAF.** It comes back empty, which looks identical to
    "no dial", and cost hours of false negatives.
+5. **A drag handle that captures the pointer kills the buttons inside it.** The panel header is both
+   the drag handle and the home of the collapse button; `host.setPointerCapture(pointerId)` retargets
+   the later `pointerup` to the host, so the browser computes the `click` against the host and the
+   button's own handler never runs. The button looks alive and does nothing (reported live
+   2026-10-28, "I can't collapse the window"). `startDrag` now bails out when the pointerdown target
+   is a `button` (panel.js), before the capture. Same shape of bug would hit any future header
+   control, so the guard is on the drag handler, not on the one button.
 
 ## Next step
 
