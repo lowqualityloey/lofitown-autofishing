@@ -49,3 +49,54 @@ test('the bubble height and width do not shadow the buffer stride', () => {
   assert.ok(!/const w = x - s;/.test(fn), 'the bubble width must not shadow the buffer width');
   assert.ok(!/const h = y1 - y0;/.test(fn), 'the bubble height must not shadow the buffer height');
 });
+// The dial search, not the dial sample, was the second lag (measured live 2026-10-28): 83 ms per
+// lockDial call at 8 calls a second, i.e. two thirds of the main thread whenever no dial was on
+// screen. These guards keep the fixed shape: precomputed direction tables, index-only predicates,
+// one rim mask per read, and a throttled catch-card scan.
+
+function slice(from, to) {
+  const a = CORE.indexOf(from);
+  assert.ok(a >= 0, from + ' is missing');
+  const b = CORE.indexOf(to, a);
+  assert.ok(b > a, to + ' is missing after ' + from);
+  return CORE.slice(a, b);
+}
+
+test('the dial search counts a rim mask instead of test-allocating per sample', () => {
+  const fn = slice('F.lockDial = function (hintX, hintY)', 'F.sample = function');
+  assert.match(fn, /rimMask\(r\)/, 'lockDial must mark the rim once');
+  assert.match(fn, /rimHits\(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20\)/);
+  assert.ok(!/Math\.cos|Math\.sin/.test(fn), 'the direction tables must replace per-sample trig');
+  assert.ok(!/PX\(/.test(fn), 'lockDial must not allocate a pixel array per sample');
+  assert.ok(!/RIM\(/.test(fn), 'lockDial must read the mask, not the raw predicate');
+});
+
+test('the dial sample reads its three rings by index, without per-sample arrays', () => {
+  const fn = slice('F.sample = function (geo)', 'function cancelPend');
+  assert.ok(!/PX\(/.test(fn), 'F.sample must not allocate a pixel array per sample');
+  assert.ok(!/Math\.cos\(|Math\.sin\(/.test(fn), 'F.sample must use the DIAL_/PIN_ tables');
+  assert.match(fn, /isRim\(d, \(y \* rw \+ x\) \* 4\)/);
+  assert.match(fn, /isGreen\(d, \(y \* rw \+ x\) \* 4\)/);
+  assert.match(fn, /isPin\(d, \(y \* rw \+ x\) \* 4\)/);
+});
+
+test('the rim helpers are built from tables and read channels by index', () => {
+  assert.match(CORE, /const RIM_C20 = new Float64Array\(20\)/);
+  assert.match(CORE, /const RIM_C40 = new Float64Array\(40\)/);
+  assert.match(CORE, /const DIAL_N = 72/);
+  assert.match(CORE, /const PIN_N = PIN_F\.length;/);
+  for (const name of ['isRim', 'isGreen', 'isPin', 'rimMask', 'rimHits']) {
+    const fn = slice('function ' + name + '(', '\n  }');
+    assert.ok(!/PX\(/.test(fn), name + ' must not call PX()');
+    assert.ok(!/\[d\[i\]/.test(fn), name + ' must not build a pixel array');
+  }
+  const mix = slice('function inkMix(r)', 'let promptAt = 0;');
+  assert.ok(!/PX\(/.test(mix), 'inkMix must not allocate a pixel array per pixel');
+});
+
+test('the catch-card scan is throttled to about 10 Hz', () => {
+  const fn = slice('F.findCatch = function ()', 'F.lockDial = function (');
+  const m = fn.match(/cardCheckMs \|\| (\d+)/);
+  assert.ok(m, 'the card-scan throttle is missing');
+  assert.ok(Number(m[1]) >= 100, 'a card waits for a tap; there is nothing to win by scanning faster');
+});

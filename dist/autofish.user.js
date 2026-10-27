@@ -725,13 +725,14 @@ const SPECIES = [
 
   /** Dark glyphs on a white field — what separates a prompt from any other white blob. */
   function inkMix(r) {
-    let dark = 0, white = 0, n = 0;
-    for (let y = 0; y < r.h; y++) {
-      for (let x = 0; x < r.w; x++) {
-        const c = PX(r, x + r.x, y + r.y);
-        n++;
-        if (c[3] > 120 && LU(c) < 150) dark++;
-        if (WHT(c)) white++;
+    // Index reads only. A card is 304x420, so the array-per-pixel version allocated 127,000 arrays
+    // per call and this runs on every whole-surface card scan.
+    const d = r.d, n = r.w * r.h;
+    let dark = 0, white = 0;
+    for (let p = 0, i = 0; p < n; p++, i += 4) {
+      if (d[i + 3] > 120) {
+        if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 150) dark++;
+        if (d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) white++;
       }
     }
     return n ? { dark: dark / n, white: white / n } : { dark: 0, white: 0 };
@@ -875,7 +876,16 @@ const SPECIES = [
     return cand;
   }
 
+  /**
+   * A catch card waits for a tap, so finding it 38 times a second buys nothing: the idle branch of
+   * step() asks every frame, and each ask re-reads a 365x405 box plus (every 400 ms) the whole
+   * downscaled surface. That measured 157 ms of every second at 4.1 ms a call. 10 Hz is ten
+   * chances before the cast prompt could matter.
+   */
   F.findCatch = function () {
+    const t = now();
+    if (t - (F.cardCheckAt || 0) < (F.opts.cardCheckMs || 100)) return null;
+    F.cardCheckAt = t;
     return cardInBox() || cardByShape();
   };
   /**
@@ -988,22 +998,89 @@ const SPECIES = [
   };
 
 
+  /* --------------------------------------------------------- rim mask ---- */
+  /**
+   * The dial search tests ~99,000 rim samples per attempt (225 centres x 22 radii x 20 angles).
+   * Measured live 2026-10-28: 83 ms per call, 8 calls a second - two thirds of the main thread, and
+   * the reason the page fell to 16-32 fps whenever no dial was on screen. Three costs, all
+   * removable without touching the geometry: Math.cos/sin per sample (measured 14 ms), a 4-element
+   * array per sample (10 ms), and re-testing the same pixels for every candidate circle. So the
+   * direction tables are built once, the predicates read the buffer by index, and one pass marks
+   * every rim pixel for the search to count.
+   */
+  const RIM_C20 = new Float64Array(20), RIM_S20 = new Float64Array(20);
+  for (let k = 0; k < 20; k++) { const a = k * Math.PI / 10; RIM_C20[k] = Math.cos(a); RIM_S20[k] = Math.sin(a); }
+  const RIM_C40 = new Float64Array(40), RIM_S40 = new Float64Array(40);
+  for (let k = 0; k < 40; k++) { const a = k * Math.PI / 20; RIM_C40[k] = Math.cos(a); RIM_S40[k] = Math.sin(a); }
+  const DIAL_N = 72, DIAL_C = new Float64Array(DIAL_N), DIAL_S = new Float64Array(DIAL_N);
+  for (let k = 0; k < DIAL_N; k++) { const a = k * 2 * Math.PI / DIAL_N; DIAL_C[k] = Math.cos(a); DIAL_S[k] = Math.sin(a); }
+  const PIN_F = [], PIN_C = [], PIN_S = [];
+  for (let f = 0.58; f <= 0.881; f += 0.075) {
+    for (let deg = -9; deg <= 9.1; deg += 4.5) {
+      const a = deg * Math.PI / 180;
+      PIN_F.push(f); PIN_C.push(Math.cos(a)); PIN_S.push(Math.sin(a));
+    }
+  }
+  const PIN_N = PIN_F.length;
+
+  /** RIM() read off the buffer: the same predicate, without allocating a pixel array. */
+  function isRim(d, i) {
+    if (d[i + 3] <= 60) return false;
+    const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
+    const mx = r0 > g0 ? (r0 > b0 ? r0 : b0) : (g0 > b0 ? g0 : b0);
+    const mn = r0 < g0 ? (r0 < b0 ? r0 : b0) : (g0 < b0 ? g0 : b0);
+    if (mx - mn > 22) return false;
+    const lu = 0.299 * r0 + 0.587 * g0 + 0.114 * b0;
+    return lu >= 158 && lu <= 246;
+  }
+  /** GRN() by index: nearest-tone match, wedge has to win by the same margin. */
+  function isGreen(d, i) {
+    if (d[i + 3] <= 60) return false;
+    const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
+    const wr = r0 - 182, wg = g0 - 188, wb = b0 - 132;
+    const w = wr * wr + wg * wg + wb * wb;
+    if (w >= 1100) return false;
+    const br = r0 - 142, bg = g0 - 138, bb = b0 - 111;
+    return w * 1.8 < br * br + bg * bg + bb * bb;
+  }
+  /** PIN() by index. */
+  function isPin(d, i) {
+    if (d[i + 3] <= 60) return false;
+    const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
+    return r0 > 185 && g0 > 85 && g0 < 165 && b0 < 135 && r0 - g0 > 55;
+  }
+  /** One pass per read: 1 where a rim pixel sits, indexed y * w + x. */
+  function rimMask(r) {
+    const d = r.d, n = r.w * r.h, m = new Uint8Array(n);
+    for (let p = 0, i = 0; p < n; p++, i += 4) if (isRim(d, i)) m[p] = 1;
+    return m;
+  }
+  /** How many of `steps` rim directions around (cx, cy, R) land on a rim pixel. */
+  function rimHits(m, r, cx, cy, R, cos, sin, steps) {
+    const w = r.w, h = r.h, ox = r.x, oy = r.y;
+    let hit = 0;
+    for (let k = 0; k < steps; k++) {
+      const x = Math.round(cx + R * cos[k]) - ox, y = Math.round(cy + R * sin[k]) - oy;
+      if (x >= 0 && y >= 0 && x < w && y < h && m[y * w + x]) hit++;
+    }
+    return hit;
+  }
+
   /* ------------------------------------------------------------ dial ----- */
   /** Find the dial near a hint: grey annulus + two-tone interior, else null. */
   F.lockDial = function (hintX, hintY) {
     const S = 240, hw = S / 2;
     const r = readUI(hintX - hw, hintY - hw, S, S);
     if (!r) return null;
+    // Mark the rim pixels once, then count them per candidate circle instead of re-testing the
+    // same ~4,950 circles pixel by pixel (that was 83 ms a call; this is ~10 ms).
+    const mask = rimMask(r);
     let best = null;
     for (let dy = -22; dy <= 22; dy += 3) {
       for (let dx = -22; dx <= 22; dx += 3) {
         const cx = Math.round(hintX + dx), cy = Math.round(hintY + dy);
         for (let R = 78; R <= 120; R += 2) {
-          let hit = 0;
-          for (let k = 0; k < 20; k++) {
-            const a = k * Math.PI / 10;
-            if (RIM(PX(r, Math.round(cx + R * Math.cos(a)), Math.round(cy + R * Math.sin(a))))) hit++;
-          }
+          const hit = rimHits(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20);
           if (hit >= 17 && (!best || hit > best.score)) best = { cx, cy, R, score: hit };
         }
       }
@@ -1011,11 +1088,7 @@ const SPECIES = [
     if (!best) return null;
     let bestR = best.R, bestN = -1;
     for (let R = Math.max(74, best.R - 8); R <= best.R + 8; R++) {
-      let n = 0;
-      for (let k = 0; k < 40; k++) {
-        const a = k * Math.PI / 20;
-        if (RIM(PX(r, Math.round(best.cx + R * Math.cos(a)), Math.round(best.cy + R * Math.sin(a))))) n++;
-      }
+      const n = rimHits(mask, r, best.cx, best.cy, R, RIM_C40, RIM_S40, 40);
       if (n > bestN) { bestN = n; bestR = R; }
     }
     const geo = { cx: best.cx, cy: best.cy, R: bestR };
@@ -1034,41 +1107,41 @@ const SPECIES = [
     const r = readUI(geo.cx - half, geo.cy - half, half * 2, half * 2);
     if (!r) return null;
 
+    const d = r.d, rw = r.w, rh = r.h, ox = r.x, oy = r.y;
     let bestR = geo.R, bestHit = -1;
     for (let dR = -6; dR <= 8; dR += 2) {
       const R = geo.R + dR;
       let hit = 0;
       for (let k = 0; k < 20; k++) {
-        const a = k * Math.PI / 10;
-        if (RIM(PX(r, Math.round(geo.cx + R * Math.cos(a)), Math.round(geo.cy + R * Math.sin(a))))) hit++;
+        const x = Math.round(geo.cx + R * RIM_C20[k]) - ox, y = Math.round(geo.cy + R * RIM_S20[k]) - oy;
+        if (x >= 0 && y >= 0 && x < rw && y < rh && isRim(d, (y * rw + x) * 4)) hit++;
       }
       if (hit > bestHit) { bestHit = hit; bestR = R; }
     }
     const ring = bestHit / 20;
     if (bestHit >= 15) geo.R = bestR;
 
-    const n = 72, rr = Math.round(geo.R * 0.69);            // 63px at the measured R~91
+    const n = DIAL_N, rr = Math.round(geo.R * 0.69);        // 63px at the measured R~91
     const b = [];
     let greenN = 0;
     for (let k = 0; k < n; k++) {
-      const a = k * 2 * Math.PI / n;                        // 0 = 12 oclock, clockwise
-      const c = PX(r, Math.round(geo.cx + rr * Math.sin(a)), Math.round(geo.cy - rr * Math.cos(a)));
+      // 0 = 12 oclock, clockwise
+      const x = Math.round(geo.cx + rr * DIAL_S[k]) - ox, y = Math.round(geo.cy - rr * DIAL_C[k]) - oy;
+      const inside = x >= 0 && y >= 0 && x < rw && y < rh;
       // 1 = wedge, 2 = pin (wildcard), 0 = disc base. Only the pin own +-10 deg band is
       // blanked; a stray orange elsewhere must not manufacture a phantom arc.
       const nearPin = k <= 2 || k >= n - 2;
-      const v = GRN(c) ? 1 : (nearPin ? 2 : 0);            // the whole pin band is unknown
+      const v = inside && isGreen(d, (y * rw + x) * 4) ? 1 : (nearPin ? 2 : 0);
       if (v === 1) greenN++;
       b.push(v);
     }
     // The pin is fixed at 12 oclock and always painted, so it doubles as a geometry check:
     // if no orange appears anywhere in that band, this circle is not the dial.
     let pinN = 0;
-    for (let f = 0.58; f <= 0.881; f += 0.075) {
-      const pr = geo.R * f;
-      for (let deg = -9; deg <= 9.1; deg += 4.5) {
-        const a = deg * Math.PI / 180;
-        if (PIN(PX(r, Math.round(geo.cx + pr * Math.sin(a)), Math.round(geo.cy - pr * Math.cos(a))))) pinN++;
-      }
+    for (let k = 0; k < PIN_N; k++) {
+      const pr = geo.R * PIN_F[k];
+      const x = Math.round(geo.cx + pr * PIN_S[k]) - ox, y = Math.round(geo.cy - pr * PIN_C[k]) - oy;
+      if (x >= 0 && y >= 0 && x < rw && y < rh && isPin(d, (y * rw + x) * 4)) pinN++;
     }
     if (!pinN) return { ring, valid: false, greenN, pin: false };
     if (greenN < 3) return { ring, valid: false, greenN };
@@ -1368,6 +1441,7 @@ const SPECIES = [
       castRetryMs: 5000,            // nothing has happened this long: cast with the game's own keybind
       lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
+    cardCheckMs: 100,
       maxMinutes: 240,
     }, opts || {});
     surfaces();
