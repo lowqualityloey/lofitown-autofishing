@@ -9,6 +9,8 @@
  *   GET  /install          the bookmarklet page          (text/html)
  *   POST /catch            { t, species, rarity, quality, weight, value } -> a catches.csv row
  *   POST /session          { started_at, minutes, catches, reason }      -> a sessions.csv row
+ *   POST /diag             { png: data:image/png;base64,... , note, stats } -> shots/diag/ui-<time>.png
+ *                          (a run that never sees a prompt uploads one frame so the detector can be fixed)
  *   GET  /sessions?day=    { day, rows, minutes }        minutes = total logged that day
  *   GET  /recent?n=5       the last n catches as JSON
  *
@@ -32,6 +34,7 @@ const JS = Object.assign({ 'Content-Type': 'text/javascript; charset=utf-8', 'Ca
 const fileOf = (env, fallback) => process.env[env] || path.join(__dirname, fallback);
 const CATCHES = () => fileOf('FISHSERVE_CATCHES', 'catches.csv');
 const SESSIONS = () => fileOf('FISHSERVE_SESSIONS', 'sessions.csv');
+const SHOTS = () => fileOf('FISHSERVE_SHOTS', 'shots');
 
 // url -> file on disk, all siblings of this script
 const STATIC = {
@@ -92,6 +95,18 @@ function readBody(req, done) {
   req.on('end', () => done(body));
 }
 
+/** Same, but large enough for a full-window PNG (a 1600x1000 screenshot base64s to a few MB). */
+function readBigBody(req, done) {
+  let body = '';
+  let over = false;
+  req.on('data', (c) => {
+    body += c;
+    if (body.length > 1.2e7) { over = true; body = ''; req.destroy(); }
+  });
+  req.on('end', () => done(over ? null : body));
+  req.on('error', () => done(null));
+}
+
 function createServer() {
   ensure(CATCHES(), CATCH_HEAD);
   ensure(SESSIONS(), SESSION_HEAD);
@@ -141,6 +156,31 @@ function createServer() {
           fs.appendFileSync(SESSIONS(), row.map(cell).join(',') + '\n');
           console.log(['session', row[4], row[2] + ' min', row[3] + ' catches'].join('  '));
           json(res, 200, { ok: true });
+        } catch (e) {
+          json(res, 400, { ok: false, e: String((e && e.message) || e) });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && route === '/diag') {
+      readBigBody(req, (body) => {
+        if (!body) return json(res, 413, { ok: false, e: 'payload too large or unreadable' });
+        try {
+          const rec = JSON.parse(body);
+          const m = /^data:image\/png;base64,(.+)$/.exec(String(rec.png || ''));
+          if (!m) throw new Error('png must be a data:image/png;base64 URL');
+          const dir = path.join(SHOTS(), 'diag');
+          fs.mkdirSync(dir, { recursive: true });
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const file = path.join(dir, 'ui-' + stamp + '.png');
+          fs.writeFileSync(file, Buffer.from(m[1], 'base64'));
+          fs.writeFileSync(file.replace(/\.png$/, '.json'), JSON.stringify({
+            note: rec.note || '', stats: rec.stats || null, viewport: rec.viewport || null, dpr: rec.dpr || null
+          }, null, 2));
+          const rel = path.relative(__dirname, file);
+          console.log('diag  saved ' + rel + (rec.note ? '  (' + rec.note + ')' : ''));
+          json(res, 200, { ok: true, file: rel });
         } catch (e) {
           json(res, 400, { ok: false, e: String((e && e.message) || e) });
         }
