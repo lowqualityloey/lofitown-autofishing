@@ -36,3 +36,14 @@ test('collapsing actually hides the card and shows the 48px pill', () => {
   // the choice has to survive a reload
   assert.match(setCollapsed, /pos\.collapsed = collapsed/);
 });
+test('the panel reads the catch ledger for the rarity strip and the last catch', () => {
+  // the strip is fed by __fish.log(), never by the live counters: history has to survive a reload
+  assert.ok(src.includes('fish().log'), 'renderLog reads the ledger');
+  assert.ok(src.includes('TIER_NAMES.map'), 'every rarity tier gets a cell, empty ones included');
+  assert.ok(src.includes('renderLog();'), 'render() refreshes the strip');
+  const fn = src.slice(src.indexOf('function renderLog('), src.indexOf('function render()'));
+  assert.ok(fn.length > 0, 'renderLog exists');
+  // a broken or blocked ledger must not take the panel down with it
+  assert.ok(fn.includes('catch (e) { book = null; }'), 'renderLog swallows a ledger read failure');
+  assert.ok(fn.includes("ui.lastCatch.textContent = bits.join"), 'the last catch line is text, not markup');
+});

@@ -251,9 +251,23 @@
     '.primary:disabled{opacity:.45;cursor:default}',
     '.banner{font-size:11px;color:#f2c14e;background:rgba(242,193,78,.10);border-top:1px solid rgba(242,193,78,.22);padding:6px 10px}',
     '.banner:empty{display:none}',
+    '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
+    '.strip{display:flex;gap:4px}',
+    '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
+    '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
+    '.tier span{font-size:8px;letter-spacing:.4px;text-transform:uppercase;color:#8b95a0}',
+    '.last{font-size:10.5px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.hide{display:none}'
   ].join('\n');
+
+  // The eight rarity tiers the game uses, in ascending order. The strip shows all of them so an
+  // empty tier reads as "none yet" instead of vanishing.
+  var TIER_NAMES = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas'];
+  var TIER_COLORS = {
+    Common: '#aab4bf', Uncommon: '#7fd6a1', Rare: '#6cb6ff', Epic: '#b58cff',
+    Legendary: '#f2c14e', Secret: '#ff8fa3', Halloween: '#ff9f5a', Christmas: '#8fe3e0'
+  };
 
   function build() {
     ui = {};
@@ -304,6 +318,24 @@
     );
     body.appendChild(meters);
 
+    // Catch history. The core writes it on every parsed catch; the panel only reads it, so a
+    // reload of the game still shows yesterday's ledger.
+    var logBox = el('div', 'logbox');
+    var strip = el('div', 'strip');
+    var tierCells = TIER_NAMES.map(function (name) {
+      var cell = el('div', 'tier');
+      var num = el('b', null, '0');
+      var tag = el('span', null, name.slice(0, 3));
+      cell.title = name + ' caught';
+      cell.style.color = TIER_COLORS[name];
+      cell.append(num, tag);
+      strip.appendChild(cell);
+      return { name: name, num: num };
+    });
+    var lastCatch = el('div', 'last', 'no catches yet');
+    logBox.append(strip, lastCatch);
+    body.appendChild(logBox);
+
     var primary = el('button', 'primary', 'Start');
     body.appendChild(primary);
 
@@ -320,7 +352,8 @@
     // merge rather than replace, or every one of those references is lost.
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
-      winToggle: winToggle, timeRow: timeRow, primary: primary, banner: bannerEl, pill: pill
+      winToggle: winToggle, timeRow: timeRow, primary: primary, banner: bannerEl, pill: pill,
+      tierCells: tierCells, lastCatch: lastCatch
     });
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
@@ -450,6 +483,35 @@
     return total + ' min';
   }
 
+  /**
+   * The ledger is the panel's only real history: fill the rarity strip and the last-catch line.
+   * Everything here is a read - a broken ledger must never make the panel throw.
+   */
+  function renderLog() {
+    if (!ui.tierCells) return;
+    var book = null;
+    try { book = (fish() && fish().log) ? fish().log() : null; } catch (e) { book = null; }
+    var byTier = {};
+    (book && book.byRarity || []).forEach(function (r) { byTier[r.rarity] = r.n || 0; });
+    ui.tierCells.forEach(function (cell) {
+      var n = byTier[cell.name] || 0;
+      cell.num.textContent = String(n);
+      cell.num.style.opacity = n ? '1' : '.35';
+    });
+    var last = book && book.last;
+    if (!last) {
+      ui.lastCatch.textContent = 'no catches yet';
+      ui.lastCatch.title = 'the ledger fills as the bot lands fish';
+      return;
+    }
+    var bits = [last.species];
+    if (last.weight) bits.push(last.weight);
+    if (last.rarity && last.rarity !== 'Unknown') bits.push((last.derived ? '~' : '') + last.rarity);
+    if (last.at) bits.push(new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    ui.lastCatch.textContent = bits.join(' · ');
+    ui.lastCatch.title = 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
+  }
+
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
@@ -476,6 +538,7 @@
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));
     ui.mPresses.textContent = String(stats.presses || 0);
     ui.mToday.textContent = minutesText(baseTodayMs + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
+    renderLog();
 
     var primary = ui.primary;
     if (phase === 'running' || phase === 'paused' || phase === 'waiting') {

@@ -6,7 +6,7 @@
 - **Overall Status**: ACTIVE
 - **Target Release / Deadline**: v1.0.0 usable panel / not tracked
 - **Current Working Branch**: main
-- **Last Updated**: 2026-10-27
+- **Last Updated**: 2026-10-28
 - **Engine Version**: v2.0.1 @ unknown
 
 ---
@@ -179,14 +179,15 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-10-27 | Control surface | In-game floating DOM panel (shadow root) instead of a local dashboard page, because a separate window would cover the game and a hidden/covered game freezes. | `docs/specs/2026-10-27-in-game-panel-design.md` |
 | 2026-10-27 | Session history | Records live in the server (`sessions.csv`, `GET /sessions?day=`), never in localStorage. | same spec |
 | 2026-10-27 | Pause semantics | Pause is not a stop: no cooldown, and paused/waiting time never counts toward session length or the daily cap. | same spec |
+| 2026-10-28 | Catch history | Per-catch ledger in `localStorage` (`autofish:log:v1`), written only from parsed catch text. Session records stay server-only; the ledger is history, never a scoreboard, and rarity may be filled from the embedded catalogue with `derived:true`. | `docs/specs/2026-10-28-catch-log.md` |
 | 2026-10-27 | Placement | Panel position comes from the live exclusion rect (`__fish.zones()`) at runtime, not from fixed coordinates; no room means collapse to the pill. | same spec |
 
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. Have the user reload the game page, re-run the bookmarklet from http://127.0.0.1:8741/install
-   and fish one real session. If the bot still finds nothing, read `shots/diag/ui-*.png` (the panel
-   uploads one frame 20 s into a blind run) and correct the detector from those pixels.
+1. The user re-imports `dist/autofish.user.js` into Tampermonkey (their copy predates the panel
+   embed and the collapse fix) and fishes one real session. Then read `__fish.log()` and
+   `__fish.logCsv()` to confirm the ledger fills from real catches, not from the injected test.
 2. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
    bubbles) at window sizes nobody has tested yet.
 

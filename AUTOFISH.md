@@ -707,6 +707,57 @@ What this does and does not say:
 - This **replaces** the withdrawn 63/65 table - that one counted the minigame panel as a catch card.
   It does not resurrect the old claim; 28/30 is what the honest oracle measured.
 
+## 2026-10-28 catch log: a local ledger, an embedded catalogue, a rarity strip
+
+The server-free userscript kept no history at all: `POST /catch` needs fishserve, so a player who
+imported the userscript got a live counter and lost everything on a reload. Catch log v1 adds a
+`localStorage` ledger written once per **parsed catch** - the only thing that has ever been allowed
+to score a fish.
+
+**The ledger.** Key `autofish:log:v1`, shape
+`{v:1, createdAt, updatedAt, total, shiny, golden, species:{name:{n,best,bestAt,first,last,shiny,rarity,derived}}, rarity:{tier:count}, days:{'YYYY-MM-DD':{n,rarity}}, last:{species,rarity,derived,shiny,weight,weightKg,value,at}}`.
+One write per catch, inside try/catch: a blocked or full store logs `ledger not saved (storage
+blocked or full)` and the fishing loop is untouched. `days` is trimmed to the newest 60 so the
+blob cannot grow without bound; species totals are never trimmed.
+
+**Rarity without pixels.** The catch card prints a tier word for non-common fish. When it prints
+none, the tier comes from a **135-species catalogue generated offline from the game bundle**
+(`scripts/gen-catalogue.js`, rows `[name, tier, minWeight, maxWeight, baseGold]`) and is flagged
+`derived: true`. A printed word always wins (`derived: false`); a species the catalogue does not
+know stays `Unknown` - the bot never guesses a rarity from colour. Shiny and Golden are *name
+prefixes* in the game's own display name (`Shiny Blobfish`), so the base species is recovered by
+stripping the prefix and the tier follows the base species.
+
+Catalogue facts (bundle `3763-*.js`): 135 real species. A naive regex finds 136 `name/rarityTier`
+objects, but the 136th is the `{name:"Empty"}` placeholder on `currentFish`, so it is excluded.
+Tiers: Common 23, Uncommon 22, Rare 19, Epic 25, Legendary 26, Secret 8, Halloween 6, Christmas 6.
+
+**API.** `__fish.log()` (summary: totals, `byRarity` for all eight tiers, `top` five, `best`,
+`today`, `last`), `__fish.logCsv()` (one row per species:
+`species,rarity,derived,shiny,count,best_kg,first_seen,last_seen`), `__fish.logReset()`,
+`__fish.status().ledger` (`{total, species, shiny}`), `__fish.report().catchLog`. Nothing else reads
+the ledger, so it costs zero per frame.
+
+**Panel.** Eight cells (COM/UNC/RAR/EPI/LEG/SEC/HAL/CHR) plus a last-catch line that reads
+`Shiny Tuna · 22.1 kg · ~Uncommon · 01:09`; a `~` before the tier means derived. The strip is fed
+from the ledger rather than the live counters, so it keeps showing history while the bot is idle,
+and a failed ledger read is swallowed instead of blanking the HUD.
+
+**Measured live** (page 2, the built `dist/autofish.user.js` injected, a seeded three-catch ledger):
+the strip rendered `COM 1 / UNC 1 / RAR 1 / EPI 0 / LEG 0 / SEC 0 / HAL 0 / CHR 0` and the line
+`Shiny Tuna · 22.1 kg · ~Uncommon · 01:09`; `__fish.log()` returned total 3, speciesCount 3,
+shiny 1 and eight `byRarity` rows; `logCsv()` returned the header plus three rows. Injecting this
+build also exposed a pre-existing bug: `__fish.status()` threw before the first `start()`
+(`F.stats` is created by `start`), which blanked every panel meter while idle. `status()` now
+defaults to an empty stats object.
+
+**Tests.** `tests/catchlog.test.js` - 17 tests over the sentinel block with a stubbed
+`localStorage`: catalogue integrity, `speciesInfo` (case-insensitive, shiny/golden/unknown),
+`normTier`, `parseWeightKg` (kg/g/t/lb), `describeCatch` printed-vs-derived, `addToLog` best-weight
+and day buckets, `logSummary` ranking, `logCsv` escaping, `trimLog`, JSON round trip, and corrupt /
+foreign / blocked stores. Plus a `tests/panel.test.js` guard that the strip reads `__fish.log()`.
+`node --test` = 85 pass / 0 fail.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

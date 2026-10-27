@@ -272,11 +272,269 @@
   }
   // </timing-core>
 
+  /* ---- catch log --------------------------------------------------------
+   * A durable, server-free record of every parsed catch. The data helpers in the block below are
+   * pure (no DOM, no storage), so tests/catchlog.test.js pulls them out under node; the browser
+   * storage calls sit underneath.
+   *
+   * Why a catalogue: the catch card prints a rarity word only for non-common fish, so commons
+   * arrive blank. The game ships its own fish table (name, tier, weight range, gold), extracted
+   * by scripts/gen-catalogue.js - a lookup, never a pixel guess.
+   */
+  // <catch-log>
+  // <species-catalogue>
+const SPECIES = [
+  ["Anchovy","Common",0.1,0.3,5], ["Bass","Common",1,8,8], ["Bluegills","Common",0.1,2,6], ["Catfish","Common",2,20,12],
+  ["Cod","Common",2,15,10], ["Flounder","Common",1,5,7], ["Golden Shiner","Common",0.05,0.5,5], ["Herring","Common",0.5,2,7],
+  ["Largemouth Bass","Common",1,10,10], ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9],
+  ["Minnow","Common",0.01,0.1,5], ["Mud Crab","Common",0.1,1,7], ["Sardine","Common",0.2,1,6], ["Sea Urchin","Common",0.5,3,8],
+  ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6], ["Swamp Barb","Common",0.05,0.3,6],
+  ["Tadpole","Common",0.01,0.05,5], ["White Sucker","Common",0.5,3,8], ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30],
+  ["Asian Swamp Eel","Uncommon",0.5,5,18], ["Clown Fish","Uncommon",0.2,1,19], ["Crawfish","Uncommon",0.02,0.2,15], ["Eel","Uncommon",2,25,25],
+  ["European Toad","Uncommon",0.02,0.15,16], ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20],
+  ["Mudskipper","Uncommon",0.05,0.3,17], ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19],
+  ["Salmon","Uncommon",5,30,28], ["Seahorse","Uncommon",0.1,1,17], ["Squid","Uncommon",1,15,24], ["Sturgeon","Uncommon",20,350,35],
+  ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22], ["Tuna","Uncommon",20,400,35],
+  ["Walleye","Uncommon",1,10,24], ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50],
+  ["Bull Frog","Rare",0.2,0.8,48], ["Coelacanth","Rare",15,180,75], ["Flying Fish","Rare",1,5,42], ["Frog Fish","Rare",0.1,1,50],
+  ["Goldfish","Rare",0.5,2,45], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Mekong Catfish","Rare",50,300,75],
+  ["Nurse Shark","Rare",50,150,70], ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60],
+  ["Snapping Turtle","Rare",5,35,58], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
+  ["American Alligator","Epic",200,1000,200], ["Arowana","Epic",3,20,110], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120],
+  ["Fried Egg Jellyfish","Epic",5,35,95], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
+  ["Lais Tembiring","Epic",5,50,120], ["Lion Fish","Epic",1,5,85], ["Manta Ray","Epic",600,5000,200], ["Marlin","Epic",100,1800,175],
+  ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Paddle Fish","Epic",25,200,165],
+  ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
+  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Wels Catfish","Epic",50,300,190],
+  ["Whale Shark","Epic",15000,40000,220], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600], ["Cthulhu","Legendary",50000,200000,1000],
+  ["Definitely not Catfish","Legendary",50,300,750], ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500],
+  ["Kappa","Legendary",50,200,900], ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950],
+  ["Marlin's Boot","Legendary",50,300,20], ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800],
+  ["Nyarlathotep","Legendary",1000,50000,1000], ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750],
+  ["Phantom Jellyfish","Legendary",10,100,500], ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800],
+  ["Swamp Monster","Legendary",5000,50000,950], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700], ["Barreleye Fish","Secret",1,5,1500],
+  ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000], ["Ghost Shark","Secret",1,16,1750],
+  ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100],
+  ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150], ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200],
+  ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180], ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250],
+  ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75], ["Walrus","Christmas",500,1500,200]
+];
+  // </species-catalogue>
+
+  const TIER_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas'];
+  const LOG_KEY = 'autofish:log:v1';
+  const TIER_BY_LOWER = {};
+  for (const tier of TIER_ORDER) TIER_BY_LOWER[tier.toLowerCase()] = tier;
+  const SPECIES_BY_NAME = {};
+  for (const row of SPECIES) SPECIES_BY_NAME[row[0].toLowerCase()] = row;
+
+  function tidyName(s) {
+    return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  }
+
+  /** 'COMMON' / 'common' / ' Common ' -> 'Common'; anything else -> ''. */
+  function normTier(s) {
+    return TIER_BY_LOWER[tidyName(s).toLowerCase()] || '';
+  }
+
+  /**
+   * Card weight -> kilograms. The card prints '13.7 kg' or '350 g' (also t / lb); a blank or
+   * unparseable weight stays null so it never poisons the best-weight comparison.
+   */
+  function parseWeightKg(text) {
+    const m = /([0-9]+(?:\.[0-9]+)?)\s*(kg|g|t|lb)\b/i.exec(String(text == null ? '' : text));
+    if (!m) return null;
+    const n = Number(m[1]);
+    if (!isFinite(n)) return null;
+    const unit = m[2].toLowerCase();
+    if (unit === 'g') return n / 1000;
+    if (unit === 't') return n * 1000;
+    if (unit === 'lb') return +(n * 0.45359237).toFixed(3);
+    return n;
+  }
+
+  /**
+   * Split a display name into variant and base species. The game renders a shiny catch as
+   * 'Shiny <name>' and a special fish as 'Golden <name>', so the prefix is data, not a species.
+   */
+  function splitVariant(name) {
+    const full = tidyName(name);
+    const m = /^(Shiny|Golden)\s+(.+)$/i.exec(full);
+    if (m) return { variant: m[1].toLowerCase() === 'shiny' ? 'Shiny' : 'Golden', base: tidyName(m[2]) };
+    return { variant: '', base: full };
+  }
+
+  /** {name, base, variant, shiny, golden, rarity, minWeight, maxWeight, baseGold, known} */
+  function speciesInfo(name) {
+    const parts = splitVariant(name);
+    const row = SPECIES_BY_NAME[parts.base.toLowerCase()] || null;
+    return {
+      name: tidyName(name),
+      base: parts.base,
+      variant: parts.variant,
+      shiny: parts.variant === 'Shiny',
+      golden: parts.variant === 'Golden',
+      rarity: row ? normTier(row[1]) : '',
+      minWeight: row ? row[2] : null,
+      maxWeight: row ? row[3] : null,
+      baseGold: row ? row[4] : null,
+      known: !!row,
+    };
+  }
+
+  /**
+   * One parsed catch -> the record the ledger, the CSV and the panel read. Rarity is the card's
+   * own word when it printed one; otherwise it is the catalogue's tier and 'derived' says so.
+   */
+  function describeCatch(rec) {
+    const r = rec || {};
+    const info = speciesInfo(r.species);
+    const printed = normTier(r.rarity);
+    return {
+      species: info.name || 'Unknown',
+      base: info.base,
+      variant: info.variant,
+      shiny: info.shiny,
+      golden: info.golden,
+      rarity: printed || info.rarity || 'Unknown',
+      derived: !printed,
+      known: info.known,
+      weightKg: parseWeightKg(r.weight),
+      weight: r.weight || '',
+      value: r.value || '',
+      quality: r.quality || '',
+    };
+  }
+
+  /** Local calendar day, so 'today' matches the player's clock rather than UTC. */
+  function logDay(ms) {
+    const d = new Date(ms == null ? Date.now() : ms);
+    const p = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  function emptyLog(t) {
+    const at = t == null ? Date.now() : t;
+    const rarity = {};
+    for (const tier of TIER_ORDER) rarity[tier] = 0;
+    return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, days: {}, last: null };
+  }
+
+  /** Append one described catch in place and return the same ledger. */
+  function addToLog(log, e, t) {
+    const at = t == null ? Date.now() : t;
+    const book = log && log.v === 1 ? log : emptyLog(at);
+    const name = e.species || 'Unknown';
+    book.total = (book.total || 0) + 1;
+    book.updatedAt = at;
+    const s = book.species[name] || (book.species[name] = { n: 0, best: null, bestAt: null, first: at, last: at, shiny: false, rarity: e.rarity, derived: !!e.derived });
+    s.n += 1;
+    s.last = at;
+    s.rarity = e.rarity;
+    s.derived = !!e.derived;
+    if (e.shiny) s.shiny = true;
+    if (typeof e.weightKg === 'number' && isFinite(e.weightKg) && (s.best == null || e.weightKg > s.best)) {
+      s.best = e.weightKg;
+      s.bestAt = at;
+    }
+    book.rarity[e.rarity] = (book.rarity[e.rarity] || 0) + 1;
+    if (e.shiny) book.shiny = (book.shiny || 0) + 1;
+    if (e.golden) book.golden = (book.golden || 0) + 1;
+    const key = logDay(at);
+    const day = book.days[key] || (book.days[key] = { n: 0, rarity: {} });
+    day.n += 1;
+    day.rarity[e.rarity] = (day.rarity[e.rarity] || 0) + 1;
+    book.last = {
+      species: name, rarity: e.rarity, derived: !!e.derived, shiny: !!e.shiny,
+      weight: e.weight, weightKg: typeof e.weightKg === 'number' ? e.weightKg : null,
+      value: e.value, at,
+    };
+    return book;
+  }
+
+  /** Keep the newest maxDays day buckets so the ledger cannot grow forever. */
+  function trimLog(log, maxDays) {
+    const keep = maxDays == null ? 60 : maxDays;
+    const days = Object.keys(log.days || {}).sort();
+    while (days.length > keep) delete log.days[days.shift()];
+    return log;
+  }
+
+  /** What the panel and __fish.log() show: totals, tiers, today, best, last. */
+  function logSummary(log, t) {
+    const book = log && log.v === 1 ? log : emptyLog(t);
+    const byRarity = TIER_ORDER.map((tier) => ({ rarity: tier, n: book.rarity[tier] || 0 }));
+    for (const key of Object.keys(book.rarity)) if (TIER_ORDER.indexOf(key) < 0) byRarity.push({ rarity: key, n: book.rarity[key] });
+    const names = Object.keys(book.species);
+    let best = null;
+    for (const name of names) {
+      const s = book.species[name];
+      if (s.best != null && (!best || s.best > best.weightKg)) best = { species: name, weightKg: s.best, at: s.bestAt };
+    }
+    const top = names
+      .map((name) => ({ species: name, n: book.species[name].n }))
+      .sort((a, b) => b.n - a.n || (a.species < b.species ? -1 : 1))
+      .slice(0, 5);
+    const key = logDay(t == null ? Date.now() : t);
+    const today = book.days[key] || { n: 0, rarity: {} };
+    return {
+      total: book.total || 0,
+      speciesCount: names.length,
+      shiny: book.shiny || 0,
+      golden: book.golden || 0,
+      byRarity, top, best,
+      last: book.last || null,
+      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })) },
+      updatedAt: book.updatedAt || null,
+      days: Object.keys(book.days || {}).length,
+    };
+  }
+
+  function csvCell(v) {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  /** One row per species, newest counts first - the thing you paste into a spreadsheet. */
+  function logCsv(log) {
+    const book = log && log.v === 1 ? log : emptyLog();
+    const head = ['species', 'rarity', 'derived', 'shiny', 'count', 'best_kg', 'first_seen', 'last_seen'];
+    const rows = Object.keys(book.species)
+      .map((name) => ({ name, s: book.species[name] }))
+      .sort((a, b) => b.s.n - a.s.n || (a.name < b.name ? -1 : 1))
+      .map((r) => [r.name, r.s.rarity, r.s.derived ? 'yes' : 'no', r.s.shiny ? 'yes' : 'no',
+        r.s.n, r.s.best == null ? '' : r.s.best,
+        new Date(r.s.first).toISOString(), new Date(r.s.last).toISOString()]);
+    return [head].concat(rows).map((r) => r.map(csvCell).join(',')).join('\n') + '\n';
+  }
+  /* ---- catch ledger storage --------------------------------------------
+   * localStorage is the whole persistence story of the one-file userscript: a few kilobytes, one
+   * write per catch, never able to break the loop. A blocked or full store just means no history.
+   */
+  let ledger = null;
+  function loadLedger() {
+    if (ledger) return ledger;
+    let raw = null;
+    try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+    if (!raw) return (ledger = emptyLog());
+    try {
+      const parsed = JSON.parse(raw);
+      ledger = parsed && parsed.v === 1 && parsed.species && parsed.rarity ? parsed : emptyLog();
+    } catch (e) { ledger = emptyLog(); }
+    return ledger;
+  }
+  function saveLedger(book) {
+    ledger = book;
+    try { window.localStorage.setItem(LOG_KEY, JSON.stringify(book)); return true; } catch (e) { return false; }
+  }
+
+  // </catch-log>
+
   /* ------------------------------------------------------------- log ----- */
-  F.log = [];
+  F.events = [];
   function L(msg, extra) {
-    F.log.push(Object.assign({ t: Math.round(now()), msg }, extra || {}));
-    if (F.log.length > 600) F.log.shift();
+    F.events.push(Object.assign({ t: Math.round(now()), msg }, extra || {}));
+    if (F.events.length > 600) F.events.shift();
   }
 
   /* -------------------------------------------------------- surfaces ----- */
@@ -663,10 +921,23 @@
     const rec = F.parseCatch();
     if (!rec) return 'pending';
     F.txtAt = now();
+    const info = describeCatch(rec);
+    // The card prints a rarity word only for non-common fish. Fill the blank from the catalogue
+    // and carry the source, never a pixel guess.
+    if (!rec.rarity) rec.rarity = info.rarity;
     const row = Object.assign({ t: Date.now(), frac: card && card.frac }, rec);
+    row.rarity = info.rarity;
+    row.raritySource = info.derived ? 'catalogue' : 'card';
+    row.shiny = info.shiny;
     F.catches.push(row);
     if (F.catches.length > 400) F.catches.shift();
-    L('catch logged', { species: row.species, rarity: row.rarity, quality: row.quality, weight: row.weight, value: row.value });
+    L('catch logged', { species: row.species, rarity: row.rarity, derived: info.derived, shiny: info.shiny, quality: row.quality, weight: row.weight, value: row.value });
+    // Local ledger: the only history the server-free install keeps. Never allowed to throw.
+    try {
+      const book = addToLog(loadLedger(), info, Date.now());
+      trimLog(book, 60);
+      if (!saveLedger(book)) L('ledger not saved (storage blocked or full)');
+    } catch (e) { L('ledger failed', { err: String((e && e.message) || e) }); }
     // Parsed catch text is the only oracle in this system: it closes the fish attempt that earned it.
     if (F.pendingWin) {
       const pr = F.pendingWin;
@@ -1398,6 +1669,10 @@
 
   /* ------------------------------------------------------- reporting ----- */
   F.status = function () {
+    const book = loadLedger();
+    // Callable before the first start(): the panel and the chip both poll it while idle, and a
+    // status() that throws blanks the whole HUD.
+    const s = F.stats || {};
     return {
       running: !!F.running,
       paused: !!F.paused,
@@ -1405,15 +1680,16 @@
       hidden: !!F.hidden,
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,
       hint: F.hint,
-      stats: F.stats,
+      stats: F.stats || {},
       accuracy: {
-        attempts: F.stats.attempts, caught: F.stats.caught, lost: F.stats.lost,
-        presses: F.stats.presses, shapeHits: F.stats.shapeHits,
+        attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
+        presses: s.presses || 0, shapeHits: s.shapeHits || 0,
         openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses } : null,
       },
       pressesThisDial: F.pressesThisDial,
       pendingMs: F.pend ? Math.round(F.pend.at - now()) : null,
-      logTail: F.log.slice(-8),
+      ledger: { total: book.total || 0, species: Object.keys(book.species || {}).length, shiny: book.shiny || 0 },
+      logTail: F.events.slice(-8),
     };
   };
 
@@ -1478,17 +1754,39 @@
     };
   };
 
+  /**
+   * The catch ledger, as the panel and the console read it. This is history, not a scoreboard: it
+   * only ever contains catches whose card text parsed. It survives a reload because it lives in
+   * localStorage, and it needs no server.
+   */
+  F.log = function () {
+    return logSummary(loadLedger(), Date.now());
+  };
+  /** The same ledger as one CSV row per species (paste it anywhere). */
+  F.logCsv = function () {
+    return logCsv(loadLedger());
+  };
+  /** Wipe the local catch history. fishserve's own CSVs are untouched. */
+  F.logReset = function () {
+    saveLedger(emptyLog());
+    return true;
+  };
+
   F.report = function () {
     return {
       version: F.version, accuracy: F.accuracy(), stats: F.stats, opts: F.opts,
       sweep: F.sweepReport(), bands: F.bandReport(), outcomes: F.outcomes.slice(-60),
       attempts: (F.attempts || []).slice(-40),
-      log: F.log.slice(-250),
+      log: F.events.slice(-250),
+      catchLog: F.log(),
     };
   };
 
   /** The timing maths, exposed so a live console can re-plan against a captured dial. */
   F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle };
+
+  /** The embedded species table, for a console that wants to check a rarity by hand. */
+  F.catalogue = { count: SPECIES.length, tiers: TIER_ORDER.slice(), info: speciesInfo, describe: describeCatch };
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
