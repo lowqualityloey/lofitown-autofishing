@@ -566,7 +566,7 @@
     // again will. Say that plainly, ahead of the log-offline chatter.
     var seatNote = '';
     if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
-      seatNote = 'nothing to bite — sit on a chair by the water, then Start again';
+      seatNote = 'clock paused — nothing to bite: sit on a chair by the water';
     }
     ui.banner.textContent = seatNote || banner;
     ui.banner.className = seatNote ? 'banner seat' : 'banner';
@@ -679,7 +679,7 @@
     if (state.phase === 'idle' || state.phase === 'cooldown') {
       // keep wall clocks honest and let a cooldown end on its own
       if (state.phase === 'cooldown' && state.cooldownUntil && Date.now() >= state.cooldownUntil) {
-        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs });
+        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs, seat: false });
         banner = '';
       } else {
         render();
@@ -693,7 +693,9 @@
       visible: document.visibilityState === 'visible',
       catches: status ? status.catchCount || 0 : 0,
       errors: status && status.stats ? status.stats.errors || 0 : 0,
-      todayMs: baseTodayMs
+      todayMs: baseTodayMs,
+      // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
+      seat: !!(status && status.needsSeat)
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the

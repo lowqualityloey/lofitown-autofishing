@@ -928,11 +928,21 @@ than tapping the prompt.
 again — the bot will not move your character for you.
 
 **The panel says it too** (2026-10-28): while a session is running or paused and `status().needsSeat`
-is set, the card's footer banner turns orange and reads *"nothing to bite — sit on a chair by the
-water, then Start again"*. It outranks the log-offline banner because it is the reason nothing is
+is set, the card's footer banner turns orange and reads *"clock paused — nothing to bite: sit on a
+chair by the water"*. It outranks the log-offline banner because it is the reason nothing is
 happening, and `host.dataset.needsSeat = '1'` exposes the same flag outside the closed shadow root.
 Verified live by forcing the flag through `status()`: the footer rendered the orange notice on the
 running card.
+
+**The clock pauses with it** (2026-10-28, `session.js`): a tick carrying `seat: true` while running
+enters `paused` with reason `seat` *before* any fishing time is credited, so an unseated character
+burns neither `durationMs` nor `dailyCapMs`. That pause is the one case that does NOT emit
+`pauseCore`: the core is the only thing watching for the cast prompt, and it clears `needsSeat`
+when the player sits down again, which is what resumes the session (`seat: false` -> `running`
+with `resumeCore`). A seat pause longer than 30 minutes (`SEAT_STOP_MS`) stops the session with
+reason `no-seat` instead of leaving it paused forever, so a forgotten character never silently eats
+a night: measured in node, one unseated minute left `fishingMs` at 60 000, twenty more left it
+there, sitting down resumed at 60 000 and the next 30 s brought it to 90 000.
 
 ## Measured facts
 

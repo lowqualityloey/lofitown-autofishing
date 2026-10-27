@@ -130,6 +130,44 @@ test('an error burst stops the session', () => {
   assert.equal(r.state.stopReason, 'errors');
 });
 
+test('an unseated character pauses the clock instead of burning the session', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 60_000));
+  assert.equal(state.fishingMs, 60_000);
+  const r = tick(state, T0 + 120_000, { seat: true });
+  assert.equal(r.state.phase, 'paused');
+  assert.equal(r.state.pauseReason, 'seat');
+  assert.equal(r.state.fishingMs, 60_000, 'the unseated minute was not counted');
+  assert.deepEqual(r.actions.map(a => a.type), ['persist'], 'the core keeps running: it is what spots the prompt');
+  // half an hour of waiting burns nothing
+  const later = tick(r.state, T0 + 120_000 + 20 * 60_000, { seat: true });
+  assert.equal(later.state.phase, 'paused');
+  assert.equal(later.state.fishingMs, 60_000);
+});
+
+test('sitting down again resumes the session where it left off', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 60_000));
+  ({ state } = tick(state, T0 + 120_000, { seat: true }));
+  const r = tick(state, T0 + 900_000, { seat: false });
+  assert.equal(r.state.phase, 'running');
+  assert.equal(r.state.pauseReason, null);
+  assert.ok(r.actions.some(a => a.type === 'resumeCore'));
+  assert.equal(r.state.fishingMs, 60_000, 'the pause itself added no time');
+  const after = tick(r.state, T0 + 930_000, { seat: false });
+  assert.equal(after.state.fishingMs, 90_000, 'time counts again once seated');
+});
+
+test('a seat pause longer than half an hour ends the session instead of waiting forever', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 120_000, { seat: true }));
+  const still = tick(state, T0 + 120_000 + 29 * 60_000, { seat: true });
+  assert.equal(still.state.phase, 'paused');
+  const r = tick(state, T0 + 120_000 + 31 * 60_000, { seat: true });
+  assert.equal(r.state.phase, 'cooldown');
+  assert.equal(r.state.stopReason, 'no-seat');
+});
+
 test('the session stops at its duration', () => {
   let { state } = reduce(createState({ durationMs: 60_000 }), { type: 'start', at: T0 });
   ({ state } = tick(state, T0 + 59_000));

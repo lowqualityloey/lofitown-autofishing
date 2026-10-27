@@ -110,6 +110,7 @@
   var RESUME_AFTER_MS = 3000;         // stay back this long before trusting the tab again
   var ERR_WINDOW_MS = 60 * 1000;
   var ERR_LIMIT = 20;
+  var SEAT_STOP_MS = 30 * 60 * 1000;   // an unseated character cannot bite; give up rather than sit there forever
 
   function paused(s, at, reason) {
     s.phase = 'paused';
@@ -117,7 +118,10 @@
     s.lastTickAt = null;
     s.visibleSince = null;
     if (reason === 'no-catch') s.retryAt = at + RETRY_DELAY_MS;
-    var actions = [{ type: 'pauseCore' }];
+    // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
+    // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
+    var actions = reason === 'seat' ? [] : [{ type: 'pauseCore' }];
+    if (reason === 'seat') s.seatSince = at;
     if (reason === 'hidden') actions.push({ type: 'releaseWakeLock' });
     actions.push({ type: 'persist' });
     return { state: s, actions: actions };
@@ -129,6 +133,7 @@
     s.retryAt = null;
     s.visibleSince = null;
     s.hiddenSince = null;
+    s.seatSince = null;
     s.lastTickAt = at;
     return { state: s, actions: [{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }] };
   }
@@ -144,6 +149,14 @@
       }
       if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
       if (at - s.visibleSince >= RESUME_AFTER_MS) return runningAgain(s, at);
+      return { state: s, actions: [] };
+    }
+    if (s.pauseReason === 'seat') {
+      // still unseated: burn no time, but do not nag forever
+      if (fact.seat === false) return runningAgain(s, at);
+      if (s.seatSince != null && at - s.seatSince > SEAT_STOP_MS) {
+        return { state: s, actions: stopSession(s, at, 'no-seat') };
+      }
       return { state: s, actions: [] };
     }
     if (s.pauseReason === 'no-catch') {
@@ -272,6 +285,10 @@
         return { state: s, actions: [] };
       }
       s.hiddenSince = null;
+
+      // 1b. not seated means the game will never offer a cast prompt: pause before crediting any
+      // time, so an overnight session does not spend its budget waiting for a chair.
+      if (fact.seat === true) return paused(s, at, 'seat');
 
       if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
       s.lastTickAt = at;

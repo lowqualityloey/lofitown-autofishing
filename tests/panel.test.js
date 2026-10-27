@@ -74,3 +74,14 @@ test('a running session that cannot bite says so: sit down, the game is seat-bas
   assert.ok(fn.includes("host.dataset.needsSeat = '1'"), 'needsSeat is observable from outside the shadow root');
   assert.match(src, /\.banner\.seat\{/, 'the seat style exists');
 });
+
+test('the seat fact reaches the reducer so the clock pauses instead of burning', () => {
+  // session.js pauses on fact.seat and resumes when it goes false; the panel is the only caller of
+  // that reducer, so it must pass the flag on every tick or the pause can never happen.
+  assert.ok(src.includes('seat: !!(status && status.needsSeat)'), 'the live tick passes needsSeat as seat');
+  assert.ok(src.includes('catches: 0, errors: 0, todayMs: baseTodayMs, seat: false'), 'the cooldown tick passes seat: false');
+  assert.ok(src.includes('clock paused'), 'the notice says the clock is paused, not that the run stopped');
+  const sessionSrc = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'session.js'), 'utf8');
+  assert.ok(sessionSrc.includes("reason === 'seat' ? [] : [{ type: 'pauseCore' }]"), 'a seat pause keeps the core alive to spot the prompt');
+  assert.ok(sessionSrc.includes("if (fact.seat === true) return paused(s, at, 'seat')"), 'the runner pauses on the seat fact');
+});

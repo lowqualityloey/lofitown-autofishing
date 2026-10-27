@@ -2114,6 +2114,7 @@ const SPECIES = [
   var RESUME_AFTER_MS = 3000;         // stay back this long before trusting the tab again
   var ERR_WINDOW_MS = 60 * 1000;
   var ERR_LIMIT = 20;
+  var SEAT_STOP_MS = 30 * 60 * 1000;   // an unseated character cannot bite; give up rather than sit there forever
 
   function paused(s, at, reason) {
     s.phase = 'paused';
@@ -2121,7 +2122,10 @@ const SPECIES = [
     s.lastTickAt = null;
     s.visibleSince = null;
     if (reason === 'no-catch') s.retryAt = at + RETRY_DELAY_MS;
-    var actions = [{ type: 'pauseCore' }];
+    // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
+    // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
+    var actions = reason === 'seat' ? [] : [{ type: 'pauseCore' }];
+    if (reason === 'seat') s.seatSince = at;
     if (reason === 'hidden') actions.push({ type: 'releaseWakeLock' });
     actions.push({ type: 'persist' });
     return { state: s, actions: actions };
@@ -2133,6 +2137,7 @@ const SPECIES = [
     s.retryAt = null;
     s.visibleSince = null;
     s.hiddenSince = null;
+    s.seatSince = null;
     s.lastTickAt = at;
     return { state: s, actions: [{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }] };
   }
@@ -2148,6 +2153,14 @@ const SPECIES = [
       }
       if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
       if (at - s.visibleSince >= RESUME_AFTER_MS) return runningAgain(s, at);
+      return { state: s, actions: [] };
+    }
+    if (s.pauseReason === 'seat') {
+      // still unseated: burn no time, but do not nag forever
+      if (fact.seat === false) return runningAgain(s, at);
+      if (s.seatSince != null && at - s.seatSince > SEAT_STOP_MS) {
+        return { state: s, actions: stopSession(s, at, 'no-seat') };
+      }
       return { state: s, actions: [] };
     }
     if (s.pauseReason === 'no-catch') {
@@ -2276,6 +2289,10 @@ const SPECIES = [
         return { state: s, actions: [] };
       }
       s.hiddenSince = null;
+
+      // 1b. not seated means the game will never offer a cast prompt: pause before crediting any
+      // time, so an overnight session does not spend its budget waiting for a chair.
+      if (fact.seat === true) return paused(s, at, 'seat');
 
       if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
       s.lastTickAt = at;
@@ -2996,7 +3013,7 @@ const SPECIES = [
     // again will. Say that plainly, ahead of the log-offline chatter.
     var seatNote = '';
     if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
-      seatNote = 'nothing to bite — sit on a chair by the water, then Start again';
+      seatNote = 'clock paused — nothing to bite: sit on a chair by the water';
     }
     ui.banner.textContent = seatNote || banner;
     ui.banner.className = seatNote ? 'banner seat' : 'banner';
@@ -3109,7 +3126,7 @@ const SPECIES = [
     if (state.phase === 'idle' || state.phase === 'cooldown') {
       // keep wall clocks honest and let a cooldown end on its own
       if (state.phase === 'cooldown' && state.cooldownUntil && Date.now() >= state.cooldownUntil) {
-        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs });
+        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs, seat: false });
         banner = '';
       } else {
         render();
@@ -3123,7 +3140,9 @@ const SPECIES = [
       visible: document.visibilityState === 'visible',
       catches: status ? status.catchCount || 0 : 0,
       errors: status && status.stats ? status.stats.errors || 0 : 0,
-      todayMs: baseTodayMs
+      todayMs: baseTodayMs,
+      // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
+      seat: !!(status && status.needsSeat)
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the
