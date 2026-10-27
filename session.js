@@ -37,6 +37,7 @@
       catchCount: 0,
       errWindowAt: null,
       errCount: 0,
+      errTotal: 0,
       stopReason: null
     };
     if (overrides) {
@@ -101,6 +102,61 @@
     ];
   }
 
+  var NO_CATCH_MS = 10 * 60 * 1000;   // nothing bites for this long -> check the page
+  var RETRY_DELAY_MS = 60 * 1000;
+  var MAX_RETRIES = 3;
+  var HIDDEN_PAUSE_MS = 5000;         // the game freezes while the tab is hidden
+  var HIDDEN_STOP_MS = 120 * 1000;
+  var RESUME_AFTER_MS = 3000;         // stay back this long before trusting the tab again
+  var ERR_WINDOW_MS = 60 * 1000;
+  var ERR_LIMIT = 20;
+
+  function paused(s, at, reason) {
+    s.phase = 'paused';
+    s.pauseReason = reason;
+    s.lastTickAt = null;
+    s.visibleSince = null;
+    if (reason === 'no-catch') s.retryAt = at + RETRY_DELAY_MS;
+    var actions = [{ type: 'pauseCore' }];
+    if (reason === 'hidden') actions.push({ type: 'releaseWakeLock' });
+    actions.push({ type: 'persist' });
+    return { state: s, actions: actions };
+  }
+
+  function runningAgain(s, at) {
+    s.phase = 'running';
+    s.pauseReason = null;
+    s.retryAt = null;
+    s.visibleSince = null;
+    s.hiddenSince = null;
+    s.lastTickAt = at;
+    return { state: s, actions: [{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }] };
+  }
+
+  function tickPaused(s, at, fact) {
+    if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
+    var visible = fact.visible !== false;
+    if (s.pauseReason === 'hidden') {
+      if (!visible) {
+        if (s.hiddenSince == null) s.hiddenSince = at;
+        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        return { state: s, actions: [] };
+      }
+      if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
+      if (at - s.visibleSince >= RESUME_AFTER_MS) return runningAgain(s, at);
+      return { state: s, actions: [] };
+    }
+    if (s.pauseReason === 'no-catch') {
+      if (s.retryAt != null && at >= s.retryAt) {
+        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
+        s.retries += 1;
+        s.lastCatchAt = at;
+        return runningAgain(s, at);
+      }
+    }
+    return { state: s, actions: [] };
+  }
+
   function reduce(state, fact) {
     var s = clone(state);
     var actions = [];
@@ -137,6 +193,7 @@
       s.retryAt = null;
       s.errCount = 0;
       s.errWindowAt = null;
+      s.errTotal = 0;
       s.pauseReason = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -197,15 +254,63 @@
         }
         return { state: s, actions: [] };
       }
+      if (s.phase === 'paused') return tickPaused(s, at, fact);
       if (s.phase !== 'running') return { state: s, actions: [] };
+
+      var visible = fact.visible !== false;
+      if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
+
+      // 1. the game only runs while the tab is visible: a hidden stretch is not fishing time
+      if (!visible) {
+        if (s.hiddenSince == null) s.hiddenSince = at;
+        s.lastTickAt = at;
+        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        if (at - s.hiddenSince > HIDDEN_PAUSE_MS) return paused(s, at, 'hidden');
+        return { state: s, actions: [] };
+      }
+      s.hiddenSince = null;
 
       if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
       s.lastTickAt = at;
-      if (typeof fact.catches === 'number') s.catchCount = fact.catches;
-      if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
 
+      // 2. catches (also the no-catch clock)
+      if (typeof fact.catches === 'number') {
+        if (fact.catches > s.catchCount) s.lastCatchAt = at;
+        s.catchCount = fact.catches;
+      }
+
+      // 3. an error burst means the page changed under us
+      if (typeof fact.errors === 'number') {
+        var prevErr = s.errTotal || 0;
+        if (fact.errors > prevErr) {
+          if (s.errWindowAt == null || at - s.errWindowAt > ERR_WINDOW_MS) {
+            s.errWindowAt = at;
+            s.errCount = 0;
+          }
+          s.errCount += fact.errors - prevErr;
+          if (s.errCount > ERR_LIMIT) return { state: s, actions: stopSession(s, at, 'errors') };
+        }
+        s.errTotal = fact.errors;
+      }
+
+      // 4. the clock window closing ends the session; 5. so does the daily cap
+      if (s.window.on && !withinWindow(s.window, at)) {
+        return { state: s, actions: stopSession(s, at, 'window') };
+      }
+      if (typeof fact.todayMs === 'number' && s.todayMs + s.fishingMs >= s.dailyCapMs) {
+        return { state: s, actions: stopSession(s, at, 'daily-cap') };
+      }
+
+      // 6. duration
       if (s.fishingMs >= s.durationMs) {
         return { state: s, actions: stopSession(s, at, 'duration') };
+      }
+
+      // 7. nothing has bitten in a while
+      var sinceCatch = at - (s.lastCatchAt == null ? s.startedAt : s.lastCatchAt);
+      if (sinceCatch > NO_CATCH_MS) {
+        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
+        return paused(s, at, 'no-catch');
       }
       return { state: s, actions: [] };
     }
