@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AutoFish — install</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f1216; color: #e8ecef;
+         font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 40px 20px; }
+  main { max-width: 720px; width: 100%; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.lede { color: #9aa4ae; margin: 0 0 26px; }
+  .card { background: #161b21; border: 1px solid #232a33; border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; }
+  ol { padding-left: 20px; margin: 0; }
+  li { margin: 8px 0; }
+  a.bookmark { display: inline-block; margin: 6px 0 2px; padding: 11px 18px; border-radius: 10px; background: #2f7d5a; color: #eafff2;
+               text-decoration: none; font-weight: 600; cursor: grab; }
+  code { background: #0c1014; border: 1px solid #232a33; border-radius: 6px; padding: 1px 6px; font-size: 13px; }
+  .note { color: #9aa4ae; font-size: 13px; }
+  .warn { color: #f2c14e; }
+  .ok { color: #5ad18b; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AutoFish</h1>
+  <p class="lede">A control panel for the lofi.town fishing bot. No DevTools, no pasting code.</p>
+
+  <div class="card">
+    <ol>
+      <li>In a terminal, run <code>node fishserve.js</code> and leave it open. <span class="note">(It serves this page, the panel, and the catch log.)</span></li>
+      <li>Drag this link to your bookmarks bar:
+        <br><a class="bookmark" id="bm" href="javascript:void(0)">🎣 AutoFish</a>
+      </li>
+      <li>Open <code>https://app.lofi.town</code> and click the bookmark once.</li>
+      <li>The panel appears in a corner. Press <b>Start</b> when you are ready to fish.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:16px;margin:0 0 10px">What the panel does</h2>
+    <ol>
+      <li><b>Session length</b> — it stops itself after the time you set. The cooldown that follows is enforced: Start stays disabled until it runs out.</li>
+      <li><b>Clock window</b> — optionally only run between two times, including across midnight. A session that starts outside its window waits for it.</li>
+      <li><b>Guards</b> — it pauses when the tab is hidden (the game freezes), stops after two minutes hidden, retries when nothing has bitten for ten minutes, and stops itself at the daily cap.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:16px;margin:0 0 10px">Leaving it alone</h2>
+    <ul style="margin:0;padding-left:20px">
+      <li class="ok">The panel asks the browser to keep the screen awake while it fishes.</li>
+      <li class="warn">If the screen still locks, the game freezes — nothing bites until you come back, and the panel stops the session rather than burning the clock on frozen frames.</li>
+      <li class="note">Keep the game window visible; a hidden tab is a frozen game.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:16px;margin:0 0 10px">Prefer a userscript?</h2>
+    <p class="note" style="margin:0">Point Tampermonkey at <code>http://127.0.0.1:8731/autofish.user.js</code> — same panel, loads on page open so you never click anything.</p>
+  </div>
+</main>
+<script>
+  // The bookmarklet points at whichever address served this page. That matters because the game
+  // runs in the browser on the Windows side while the server may live in WSL: the port that works
+  // is the port you opened this page on.
+  (function () {
+    var origin = location.origin;
+    var code = "javascript:(()=>{if(window.__panel&&window.__panel.mounted)return;"
+      + "const s=document.createElement('script');"
+      + "s.src='" + origin + "/panel.js?'+Date.now();"
+      + "s.onerror=()=>alert('AutoFish: fishserve is not running');"
+      + "document.documentElement.appendChild(s)})()";
+    document.getElementById('bm').setAttribute('href', code);
+  })();
+</script>
+</body>
+</html>

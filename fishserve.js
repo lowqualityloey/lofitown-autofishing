@@ -22,7 +22,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 8731;
+const PORT = Number(process.env.FISHSERVE_PORT) || 8731;
 const CATCH_HEAD = ['time', 'species', 'rarity', 'quality', 'weight', 'value'];
 const SESSION_HEAD = ['time', 'started_at', 'minutes', 'catches', 'reason'];
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' };

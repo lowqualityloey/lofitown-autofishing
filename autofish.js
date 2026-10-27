@@ -523,7 +523,7 @@
       ? { x: F.lastBubble.cx - F.lastBubble.w / 2, y: F.lastBubble.cy - F.lastBubble.h / 2, w: F.lastBubble.w, h: F.lastBubble.h }
       : null;
     const dial = F.geo ? { x: F.geo.cx - F.geo.R, y: F.geo.cy - F.geo.R, w: F.geo.R * 2, h: F.geo.R * 2 } : null;
-    const hintZone = (!bubble && !dial) ? { x: F.hint.x - 90, y: F.hint.y - 90, w: 180, h: 180 } : null;
+    const hintZone = (!bubble && !dial && F.hint) ? { x: F.hint.x - 90, y: F.hint.y - 90, w: 180, h: 180 } : null;
     return { bubble, dial, card: F.lastCardRect || null, hintZone };
   };
 
