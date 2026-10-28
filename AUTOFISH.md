@@ -114,6 +114,9 @@ corner of the game and runs from there.
 - **Start / Stop** — one button. Every Stop starts the cooldown; a pause does not.
 - **Meters** — time left, catches this session, presses this session, and today's total against the
   daily cap.
+- **Loop stall** — when the game stops handing the bot frames (an occluded or throttled tab), the
+  loop can die while the panel still says RUNNING. The panel now says **stalled** in red instead and
+  stops the session clock; the bot re-arms itself as soon as frames come back.
 - **Cozier popup** — **off** by default. Set it **on** to hide the *Fish while you focus with Cozier*
   upsell (and the full-screen scrim that comes with it) while a focus session is running. **Cosmetic
   only — see below.**
@@ -909,6 +912,80 @@ quietly reintroduce a per-pixel array or a per-sample `Math.cos`.
 first fix removed 6.3M array allocations a second and took the dial-locked frame rate from 27.6 to
 111 - and left the *idle* frame rate at 32, because the expensive call only ever ran when no dial was
 on screen. Measure the state you are actually in.
+
+## 2026-10-28 four copies of the UI layer a second: one shared grab, and a watchdog for a dead loop
+
+The dial fix above removed the arithmetic. It did not remove the **readbacks**: every detector still
+pulled its own copy of the UI canvas through `getImageData`, and a readback is a GPU-to-CPU
+sync, so it costs about 3 ms whatever its size. Wrapping the prototype and tallying by box, with the
+bot hunting (no dial on screen) on the live tab:
+
+| Read | Size | 3.4.0, hunting | 3.5.0, hunting | 3.5.0, dial locked |
+|---|---|---|---|---|
+| bubble box, `bubbleInBox` | 360x210 | 23.4 a second | **0** | 2.2 |
+| card box, `cardInBox` | 365x405 | 9.6 a second | **0** | 0.2 |
+| shape scan, `downscale` | 364x238 | 5.1 a second | 11.9 | 10.2 |
+| dial check, `lockDial` | 240x240 | 8.0 a second | 8.0 | 2.7 |
+| locked-dial wedge, `sample` | 228x228 | - (no dial) | - (no dial) | 76.9 |
+| **total** | | **46.1 reads/s, 172 ms/s** | **19.8 reads/s, 58 ms/s** | 93 reads/s |
+
+The two hunting columns are the same tab, the same spot, the same build otherwise: 20.1 s on 3.4.0 and
+15 s on 3.5.0. Halving the readbacks is what the change below bought; the third column is honest about
+the rest - with a dial locked the bot reads a 228x228 wedge every frame to play it, and that path is
+untouched on purpose.
+
+**What changed.**
+
+1. **One grab a tick (`snapshot()`).** A quarter-scale read of the whole UI layer is taken at most
+   once per `scanTickMs` (66 ms, ~15 Hz) and every detector reads *that*. It is now the only caller
+   of `downscale()` in the file, which `tests/perf.test.js` asserts.
+2. **A cheap gate before an expensive read.** `bubbleGate()` / `cardGate()` decide from the snapshot
+   whether the full-resolution box read is worth spending: ten white pixels for the *CAST!* prompt, 8%
+   cream pixels for a catch card. When the gate says no, the finder still falls through to the shape
+   search - no detection is skipped, only the read is.
+3. **Full resolution only on a hit.** `bubbleInBox()` and `cardInBox()` now run behind their gate;
+   `bubbleAnywhere()` and `cardByShape()` read the shared snapshot instead of pulling their own copy;
+   a found bubble's centre and a locked dial's wedge are still read at full resolution, because those
+   are the cases where the pixels are actually needed.
+4. **Reused scratch.** `blobs()` clears and reuses one `Uint8Array` instead of allocating one per call.
+
+Fishing logic is untouched: the same throttles as defaults (`dialCheckMs` 120, `cardCheckMs` 100, the
+90/40 ms bubble throttle, the 350/400 ms shape throttles), the same rim classification, the same press
+rules. The Cozier / focus-session path was not touched at all.
+
+**Behaviour held.** In a 13 s active window on 3.5.0: 3 dials read, 1 caught, 10 presses, 0 stalls;
+over the first ~70 s of running: 5 dials, 3 catches, 16 presses - the same dials-per-minute and the same
+win rate as the 3.4.0 numbers above.
+
+**A loop that dies without an exception.** The review also caught the failure that no counter showed:
+`__fish.status()` said `running: true, frames: 61909` while `lastTickAgoMs` was 645 331 (10.7
+minutes) and a 3 s rAF sample recorded zero bot frames. An occluded window had suspended
+`requestAnimationFrame`; `document.visibilityState` stayed `visible`, so the hidden-tab pause never fired,
+and `loop()` only guards exceptions - so the bot sat there reporting RUNNING and charging session
+time for ten minutes of nothing. Now:
+
+- `step()` stamps `F.lastTickAt` (the only fact the watchdog needs);
+- a 1 s `setInterval(checkStall, 1000)` compares it with `now()`; with `F.running` and no tick for
+  more than `STALL_MS` (2000 ms) it sets `F.stalled`, logs `loop stalled {ms}` **once**, counts
+  `stats.stalls`, then cancels any pending frame and re-arms `requestAnimationFrame(loop)` - the
+  cancel is what stops a second loop from being started on top of a live one;
+- while stalled the session clock is **not** credited (`session.js` skips the tick's `fishingMs` and
+  keeps `lastTickAt` current, so the next live tick resumes from now, not from the stall);
+- the panel shows **stalled** instead of RUNNING, paints a red line instead of the usual banner, and
+  sets `data-stalled="1"`; `__fish.status().stalled` and `.lastTickAgoMs` expose the same facts;
+- a hidden tab is excluded on purpose: that is the existing hidden-pause path, not a stall.
+
+**Verified live** by stubbing `requestAnimationFrame` to a no-op: within 3.6 s `stalled: true`,
+`loop stalled 2545ms` logged exactly once, `stalls: 1`, the panel read `stalled` with
+`data-stalled` set, and the session clock froze at 57 961 ms across 2.2 s of silence. Restoring rAF gave
+`loop resumed`, `stalled: false`, and the clock picked up 57 961 -> 58 957 -> 66 957 ms with fishing
+continuing. `node --test` is 123 pass; `tests/watchdog.test.js` pins the stamp, the threshold, the
+once-only log, the re-arm and the panel line, and `tests/session.test.js` proves the clock is not
+charged for a stalled stretch.
+
+**Lesson.** The expensive thing was not the pixels, it was the sync: four small reads a second cost more
+than one bigger one. And the counter that lied was the one nobody watched - a loop with no tick
+timestamp cannot tell *slow* from *dead*.
 
 ## 2026-10-28 why the bot stops casting: fishing is seat-based
 

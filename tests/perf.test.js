@@ -94,6 +94,41 @@ test('the rim helpers are built from tables and read channels by index', () => {
   assert.ok(!/PX\(/.test(mix), 'inkMix must not allocate a pixel array per pixel');
 });
 
+// Measured live 2026-10-28: the detectors pulled four copies of the UI layer a second between them
+// - bubble box, card box, prompt fallback, card shape - 107-117 ms of every second spent in
+// blocking GPU readbacks. They all read one quarter-scale grab now, and a full-resolution read is
+// spent only on something that grab already saw.
+
+test('one quarter-scale grab per scan tick feeds every detector', () => {
+  const snap = slice('function snapshot()', 'function spx(p)');
+  assert.match(snap, /scanTickMs\) \|\| 66/, 'the snapshot must throttle itself to one grab per tick');
+  assert.match(CORE, /scanTickMs: 66/, 'the shared scan tick is missing from the defaults');
+  assert.equal((CORE.match(/!downscale\(\)/g) || []).length, 1, 'a detector took its own copy of the layer again');
+  for (const start of ['function bubbleAnywhere()', 'function cardByShape()']) {
+    const fn = fnBody(start);
+    assert.match(fn, /snapshot\(\)/, start + ' must read the shared snapshot');
+    assert.doesNotMatch(fn, /downscale\(\)/, start + ' must not pull its own copy of the layer');
+  }
+  for (const start of ['F.findBubble = function ()', 'F.findCatch = function ()']) {
+    const fn = fnBody(start);
+    assert.match(fn, /if \(!snapshot\(\)\) return null;/, start + ' must ask for the shared grab');
+  }
+});
+
+test('a full-resolution read is spent only on something the snapshot already saw', () => {
+  const bubble = fnBody('F.findBubble = function ()');
+  const bGate = bubble.indexOf('bubbleGate()'), bBox = bubble.indexOf('bubbleInBox()');
+  assert.ok(bGate > 0 && bBox > bGate, 'the bubble box read must sit behind the snapshot gate');
+  const card = fnBody('F.findCatch = function ()');
+  const cGate = card.indexOf('cardGate()'), cBox = card.indexOf('cardInBox()');
+  assert.ok(cGate > 0 && cBox > cGate, 'the card box read must sit behind the snapshot gate');
+  // one definition plus one call site: nothing else may spend the readback directly
+  assert.equal((CORE.match(/bubbleInBox\(\)/g) || []).length, 2, 'a second bubble box read came back');
+  assert.equal((CORE.match(/cardInBox\(\)/g) || []).length, 2, 'a second card box read came back');
+  assert.match(fnBody('function bubbleGate()'), /BUBBLE_GATE_PX/);
+  assert.match(fnBody('function cardGate()'), /hit \/ n >= 0\.08/);
+});
+
 test('the catch-card scan is throttled to about 10 Hz', () => {
   const fn = slice('F.findCatch = function ()', 'F.lockDial = function (');
   const m = fn.match(/cardCheckMs \|\| (\d+)/);

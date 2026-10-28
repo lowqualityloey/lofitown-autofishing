@@ -348,6 +348,8 @@
     '.banner:empty{display:none}',
     '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
     '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-top-color:rgba(122,162,247,.30)}',
+    '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
+    '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
@@ -628,8 +630,13 @@
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
-    ui.chip.textContent = phase;
-    ui.dot.className = 'dot ' + phase;
+    var status = null;
+    try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+    // A stalled core still looks like "running" from the outside - the phase never changed, the
+    // frames did. Say what is actually happening, in the place the phase is printed.
+    var stalled = !!(status && status.running && status.stalled);
+    ui.chip.textContent = stalled ? 'stalled' : phase;
+    ui.dot.className = 'dot ' + (stalled ? 'stalled' : phase);
     ui.winToggle.textContent = state.window.on ? 'on' : 'off';
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
     ui.timeRow.style.display = state.window.on ? '' : 'none';
@@ -641,8 +648,6 @@
     ui.time_from.val.textContent = state.window.start;
     ui.time_to.val.textContent = state.window.stop;
 
-    var status = null;
-    try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
     var stats = (status && status.stats) || {};
 
     if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
@@ -674,6 +679,9 @@
     // character is standing up. Fishing in lofi.town is seat-based (the CAST! prompt is only emitted
     // from the sit-down path), so nothing the bot can click will start a cast - only sitting down
     // again will. Say that plainly, ahead of the log-offline chatter.
+    // A stall outranks everything: the session is not running however the phase reads, and the
+    // clock has stopped, so the player needs to know before the budget does.
+    var stallNote = stalled ? 'loop stalled — the game stopped giving the bot frames; the clock is paused' : '';
     var seatNote = '';
     if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
       seatNote = 'clock paused — nothing to bite: sit on a chair by the water';
@@ -682,9 +690,10 @@
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
     var focusNote = focus ? FOCUS_NOTE : '';
-    var note = seatNote || focusNote || banner;
+    var note = stallNote || seatNote || focusNote || banner;
     ui.banner.textContent = note;
-    if (seatNote) ui.banner.className = 'banner seat';
+    if (stallNote) ui.banner.className = 'banner stall';
+    else if (seatNote) ui.banner.className = 'banner seat';
     else if (focus && !banner) ui.banner.className = 'banner focus';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
@@ -695,6 +704,7 @@
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
+      if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
     }
 
     place();
@@ -813,7 +823,9 @@
       errors: status && status.stats ? status.stats.errors || 0 : 0,
       todayMs: baseTodayMs,
       // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
-      seat: !!(status && status.needsSeat)
+      seat: !!(status && status.needsSeat),
+      // a stalled core must not be charged for time it never fished
+      stalled: !!(status && status.running && status.stalled)
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the

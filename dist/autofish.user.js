@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.4.0
+// @version      3.5.0
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -681,6 +681,28 @@ const SPECIES = [
     return best;
   }
 
+  /**
+   * Is anything prompt-bright inside the fixed box? Pure CPU on the shared snapshot, no readback.
+   * The box scan below costs a 360x210 GPU readback, and the box is empty for most of a session, so
+   * the snapshot says "maybe" first and only then is the full-resolution read spent.
+   */
+  const BUBBLE_GATE_PX = 10;
+  function bubbleGate() {
+    const x0 = Math.max(0, Math.floor(BOX_BUBBLE.x / SDOWN));
+    const y0 = Math.max(0, Math.floor(BOX_BUBBLE.y / SDOWN));
+    const x1 = Math.min(sw, Math.ceil((BOX_BUBBLE.x + BOX_BUBBLE.w) / SDOWN));
+    const y1 = Math.min(sh, Math.ceil((BOX_BUBBLE.y + BOX_BUBBLE.h) / SDOWN));
+    let n = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0, i = (y * sw + x0) * 4; x < x1; x++, i += 4) {
+        if (sdata[i + 3] > 120 && sdata[i] >= 225 && sdata[i + 1] >= 225 && sdata[i + 2] >= 225) {
+          if (++n >= BUBBLE_GATE_PX) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   /* -------------------------------------------------- adaptive search ---- */
   /**
    * The prompts hang off the play area, not the window: the bubble floats above the player and
@@ -709,14 +731,36 @@ const SPECIES = [
     return true;
   }
 
+  /**
+   * ONE shared quarter-scale look at the layer, refreshed at most once per scan tick.
+   * Every detector used to pull its own copy - the prompt fallback and the card shape scan both
+   * called downscale() on the same tick, i.e. two blocking readbacks for one frame of information -
+   * and the two box scans added a full-resolution readback on top. They all read this buffer now,
+   * and a full-resolution read is spent only to refine something the snapshot already found.
+   */
+  let snapAt = 0;
+  function snapshot() {
+    const t = now();
+    if (sdata && t - snapAt < ((F.opts && F.opts.scanTickMs) || 66)) return true;
+    if (!downscale()) return false;
+    snapAt = t;
+    return true;
+  }
+
   function spx(p) {
     const i = p * 4;
     return [sdata[i], sdata[i + 1], sdata[i + 2], sdata[i + 3]];
   }
 
   /** 4-connected components on the downscaled surface: bbox and pixel count per blob. */
+  let seenBuf = null;
   function blobs(match, minPx) {
-    const total = sw * sh, seen = new Uint8Array(total), out = [];
+    // One scratch buffer, cleared per scan: this runs on every shared scan tick, so a fresh
+    // 86 KB Uint8Array per call was pure garbage pressure.
+    const total = sw * sh;
+    if (!seenBuf || seenBuf.length !== total) seenBuf = new Uint8Array(total);
+    else seenBuf.fill(0);
+    const seen = seenBuf, out = [];
     for (let p0 = 0; p0 < total; p0++) {
       if (seen[p0] || !match(spx(p0))) continue;
       const stack = [p0];
@@ -766,7 +810,7 @@ const SPECIES = [
     if (t - promptAt < 350) return null;          // full-surface readback: 3 Hz is plenty for a prompt
     promptAt = t;
     if (F.geo) return null;                       // a dial on screen means the prompt is already gone
-    if (!downscale()) return null;
+    if (!snapshot()) return null;                 // shared quarter read, no second copy of the layer
     let best = null;
     const comps = blobs(WHT_S, 30);
     for (let i = 0; i < comps.length; i++) {
@@ -794,12 +838,20 @@ const SPECIES = [
    * REEL!) stay on screen for seconds, so there is nothing to gain from scanning 84 times a
    * second - 25 Hz while idle and 11 Hz while a dial is locked (a dial on screen means the cast
    * prompt is gone) detects a prompt tens of milliseconds after it appears.
+   *
+   * The order is the point: the shared snapshot answers "is there anything there" for free, and
+   * only a yes buys the full-resolution read that refines the centre.
    */
   F.findBubble = function () {
     const t = now();
     if (t - (F.bubbleScanAt || 0) < (F.geo ? 90 : 40)) return null;
     F.bubbleScanAt = t;
-    return bubbleInBox() || bubbleAnywhere();
+    if (!snapshot()) return null;
+    if (bubbleGate()) {
+      const b = bubbleInBox();
+      if (b) return b;
+    }
+    return bubbleAnywhere();
   };
 
   /**
@@ -808,6 +860,28 @@ const SPECIES = [
    * wide centre rect. The dial cannot trip this: it covers well under the 45% threshold.
    */
   const BOX_CARD = { x: 620, y: 315, w: 365, h: 405 };
+
+  /**
+   * Cheap "might a card be up?" test on the shared snapshot: a card is a big parchment panel, so a
+   * sparse cream count over its box answers without a readback, and the full-resolution card read
+   * only happens when this says yes. A tinted card can slip past it, which is why the shape scan
+   * below still runs on every card tick.
+   */
+  function cardGate() {
+    const x0 = Math.max(0, Math.floor(BOX_CARD.x / SDOWN));
+    const y0 = Math.max(0, Math.floor(BOX_CARD.y / SDOWN));
+    const x1 = Math.min(sw, Math.ceil((BOX_CARD.x + BOX_CARD.w) / SDOWN));
+    const y1 = Math.min(sh, Math.ceil((BOX_CARD.y + BOX_CARD.h) / SDOWN));
+    let hit = 0, n = 0;
+    for (let y = y0; y < y1; y += 2) {
+      for (let x = x0, i = (y * sw + x0) * 4; x < x1; x += 2, i += 8) {
+        n++;
+        if (sdata[i + 3] > 60 && sdata[i] > 195 && sdata[i + 1] > 175 && sdata[i + 2] > 105 && sdata[i + 2] < 252) hit++;
+      }
+    }
+    return n > 0 && hit / n >= 0.08;
+  }
+
   function creamFraction(r) {
     let hit = 0, n = 0;
     for (let y = 6; y < r.h - 6; y += 8) {
@@ -844,7 +918,7 @@ const SPECIES = [
     const t = now();
     if (t - shapeAt < 400) return null;
     shapeAt = t;
-    if (!downscale()) return null;
+    if (!snapshot()) return null;              // shared quarter read, no second copy of the layer
     const stride = sw + 1;
     const I = new Int32Array(stride * (sh + 1));
     for (let y = 0; y < sh; y++) {
@@ -903,12 +977,20 @@ const SPECIES = [
    * step() asks every frame, and each ask re-reads a 365x405 box plus (every 400 ms) the whole
    * downscaled surface. That measured 157 ms of every second at 4.1 ms a call. 10 Hz is ten
    * chances before the cast prompt could matter.
+   *
+   * Both detectors now read the one shared snapshot: the box read is spent only when the snapshot
+   * sees parchment, and the shape scan costs no readback at all until it has grown a candidate.
    */
   F.findCatch = function () {
     const t = now();
     if (t - (F.cardCheckAt || 0) < (F.opts.cardCheckMs || 100)) return null;
     F.cardCheckAt = t;
-    return cardInBox() || cardByShape();
+    if (!snapshot()) return null;
+    if (cardGate()) {
+      const c = cardInBox();
+      if (c) return c;
+    }
+    return cardByShape();
   };
   /**
    * Text capture. The card is canvas-drawn: no DOM node, no scene text, no local save. But every
@@ -1467,7 +1549,8 @@ const SPECIES = [
       seatWatchdogMs: 45000,        // no dial, no press, no prompt this long -> the character is not seated
       lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
-    cardCheckMs: 100,
+      cardCheckMs: 100,
+      scanTickMs: 66,               // the shared quarter-scale grab is refreshed at most this often (~15 Hz)
       maxMinutes: 240,
     }, opts || {});
     surfaces();
@@ -1476,7 +1559,7 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
-      shapeHits: 0, castRetries: 0,
+      shapeHits: 0, castRetries: 0, stalls: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.geo = null; F.hint = { x: 861, y: 372 }; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
@@ -1490,8 +1573,11 @@ const SPECIES = [
     F.paused = false; F.lastBubble = null; F.lastCardRect = null;
     F.pressesThisDial = 0; F.pressesAtThisDial = 0;
     F.running = true; F.startedAt = now(); F.hiddenPauses = 0;
+    F.lastTickAt = now(); F.stalled = false;
     L('start', { opts: F.opts, ui: !!uiCanvas, game: !!gameCanvas });
     if (!F._raf) F._raf = requestAnimationFrame(loop);
+    if (F._stallTimer) clearInterval(F._stallTimer);
+    F._stallTimer = setInterval(checkStall, 1000);
     return F.status();
   };
 
@@ -1503,6 +1589,8 @@ const SPECIES = [
     if (F.attempt) { L('attempt abandoned', { n: F.attempt.n, presses: F.attempt.presses }); F.attempt = null; }
     if (F._raf) cancelAnimationFrame(F._raf);
     F._raf = null;
+    if (F._stallTimer) { clearInterval(F._stallTimer); F._stallTimer = null; }
+    F.stalled = false;
     L('stop', { stats: F.stats });
     return F.status();
   };
@@ -1531,7 +1619,7 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
-      shapeHits: 0, castRetries: 0,
+      shapeHits: 0, castRetries: 0, stalls: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bubbleMiss = 0; F.stallRetry = 0;
@@ -1570,8 +1658,38 @@ const SPECIES = [
     try { step(); } catch (e) { F.stats.errors++; L('error', { e: String((e && e.message) || e) }); }
   }
 
+  /**
+   * A stolen animation frame is invisible from the inside. The browser can suspend rAF for an
+   * occluded window while document.visibilityState still reads "visible"; the loop then simply
+   * stops, the panel keeps saying RUNNING, and the session keeps charging its budget for nothing.
+   * Measured live 2026-10-28: 10.7 minutes of silence while status() reported running: true.
+   * One interval watches the tick clock and re-arms the frame - that is the whole repair.
+   */
+  const STALL_MS = 2000;
+  function checkStall() {
+    if (!F.running) return;
+    // A hidden tab is not a stall: the game is frozen by design, and the panel's hidden-tab rule
+    // already pauses the clock. Only a visible window owes frames.
+    if (document.visibilityState !== 'visible') return;
+    const age = F.lastTickAt ? now() - F.lastTickAt : 0;
+    if (age <= STALL_MS) {
+      if (F.stalled) { F.stalled = false; L('loop resumed', { after: Math.round(age) }); }
+      return;
+    }
+    if (!F.stalled) {
+      F.stalled = true;
+      F.stats.stalls = (F.stats.stalls || 0) + 1;
+      L('loop stalled', { ms: Math.round(age) });
+    }
+    // The pending callback may never arrive, so drop it before asking again: otherwise a late
+    // frame would start a second loop and every scan would run twice.
+    if (F._raf) { try { cancelAnimationFrame(F._raf); } catch (e) {} }
+    F._raf = requestAnimationFrame(loop);
+  }
+
   function step() {
     const t = now();
+    F.lastTickAt = t;                       // the watchdog's only fact: the loop got a frame
     F.stats.frames++;
     if (document.visibilityState !== 'visible') { F.hidden = true; return; }
     if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
@@ -1844,6 +1962,8 @@ const SPECIES = [
     return {
       running: !!F.running,
       paused: !!F.paused,
+      stalled: !!F.stalled,
+      lastTickAgoMs: F.lastTickAt ? Math.round(now() - F.lastTickAt) : null,
       catchCount: F.catches ? F.catches.length : 0,
       hidden: !!F.hidden,
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,
@@ -2042,7 +2162,8 @@ const SPECIES = [
       errWindowAt: null,
       errCount: 0,
       errTotal: 0,
-      stopReason: null
+      stopReason: null,
+      stalled: false
     };
     if (overrides) {
       for (var k in overrides) {
@@ -2303,8 +2424,17 @@ const SPECIES = [
       // time, so an overnight session does not spend its budget waiting for a chair.
       if (fact.seat === true) return paused(s, at, 'seat');
 
-      if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
-      s.lastTickAt = at;
+      // 1c. a stalled core is not fishing. The loop can lose its animation frames while the tab
+      // still reads as visible (an occluded window), and the panel used to keep charging the budget
+      // for frames that never happened - measured live 2026-10-28 at 10.7 minutes of silence.
+      if (fact.stalled === true) {
+        s.stalled = true;
+        s.lastTickAt = at;                 // no credit: no frames, no fishing time
+      } else {
+        s.stalled = false;
+        if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+        s.lastTickAt = at;
+      }
 
       // 2. catches (also the no-catch clock)
       if (typeof fact.catches === 'number') {
@@ -2804,6 +2934,8 @@ const SPECIES = [
     '.banner:empty{display:none}',
     '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
     '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-top-color:rgba(122,162,247,.30)}',
+    '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
+    '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
@@ -3084,8 +3216,13 @@ const SPECIES = [
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
-    ui.chip.textContent = phase;
-    ui.dot.className = 'dot ' + phase;
+    var status = null;
+    try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+    // A stalled core still looks like "running" from the outside - the phase never changed, the
+    // frames did. Say what is actually happening, in the place the phase is printed.
+    var stalled = !!(status && status.running && status.stalled);
+    ui.chip.textContent = stalled ? 'stalled' : phase;
+    ui.dot.className = 'dot ' + (stalled ? 'stalled' : phase);
     ui.winToggle.textContent = state.window.on ? 'on' : 'off';
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
     ui.timeRow.style.display = state.window.on ? '' : 'none';
@@ -3097,8 +3234,6 @@ const SPECIES = [
     ui.time_from.val.textContent = state.window.start;
     ui.time_to.val.textContent = state.window.stop;
 
-    var status = null;
-    try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
     var stats = (status && status.stats) || {};
 
     if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
@@ -3130,6 +3265,9 @@ const SPECIES = [
     // character is standing up. Fishing in lofi.town is seat-based (the CAST! prompt is only emitted
     // from the sit-down path), so nothing the bot can click will start a cast - only sitting down
     // again will. Say that plainly, ahead of the log-offline chatter.
+    // A stall outranks everything: the session is not running however the phase reads, and the
+    // clock has stopped, so the player needs to know before the budget does.
+    var stallNote = stalled ? 'loop stalled — the game stopped giving the bot frames; the clock is paused' : '';
     var seatNote = '';
     if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
       seatNote = 'clock paused — nothing to bite: sit on a chair by the water';
@@ -3138,9 +3276,10 @@ const SPECIES = [
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
     var focusNote = focus ? FOCUS_NOTE : '';
-    var note = seatNote || focusNote || banner;
+    var note = stallNote || seatNote || focusNote || banner;
     ui.banner.textContent = note;
-    if (seatNote) ui.banner.className = 'banner seat';
+    if (stallNote) ui.banner.className = 'banner stall';
+    else if (seatNote) ui.banner.className = 'banner seat';
     else if (focus && !banner) ui.banner.className = 'banner focus';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
@@ -3151,6 +3290,7 @@ const SPECIES = [
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
+      if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
     }
 
     place();
@@ -3269,7 +3409,9 @@ const SPECIES = [
       errors: status && status.stats ? status.stats.errors || 0 : 0,
       todayMs: baseTodayMs,
       // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
-      seat: !!(status && status.needsSeat)
+      seat: !!(status && status.needsSeat),
+      // a stalled core must not be charged for time it never fished
+      stalled: !!(status && status.running && status.stalled)
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the

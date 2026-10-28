@@ -38,7 +38,8 @@
       errWindowAt: null,
       errCount: 0,
       errTotal: 0,
-      stopReason: null
+      stopReason: null,
+      stalled: false
     };
     if (overrides) {
       for (var k in overrides) {
@@ -299,8 +300,17 @@
       // time, so an overnight session does not spend its budget waiting for a chair.
       if (fact.seat === true) return paused(s, at, 'seat');
 
-      if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
-      s.lastTickAt = at;
+      // 1c. a stalled core is not fishing. The loop can lose its animation frames while the tab
+      // still reads as visible (an occluded window), and the panel used to keep charging the budget
+      // for frames that never happened - measured live 2026-10-28 at 10.7 minutes of silence.
+      if (fact.stalled === true) {
+        s.stalled = true;
+        s.lastTickAt = at;                 // no credit: no frames, no fishing time
+      } else {
+        s.stalled = false;
+        if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+        s.lastTickAt = at;
+      }
 
       // 2. catches (also the no-catch clock)
       if (typeof fact.catches === 'number') {

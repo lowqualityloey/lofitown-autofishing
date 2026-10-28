@@ -26,6 +26,20 @@ test('only running time counts toward the session length', () => {
   assert.equal(state.fishingMs, 60_000);
 });
 
+test('a stalled loop is not charged for the time it never fished', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'tick', at: T0 + 60_000, visible: true, catches: 0, errors: 0, todayMs: 0 }));
+  assert.equal(state.fishingMs, 60_000);
+  // 40 s with the loop stalled: the frames never happened, so the budget must not move
+  ({ state } = reduce(state, { type: 'tick', at: T0 + 100_000, visible: true, catches: 0, errors: 0, todayMs: 0, stalled: true }));
+  assert.equal(state.fishingMs, 60_000, 'a stalled stretch was charged as fishing time');
+  assert.equal(state.stalled, true);
+  // and the clock picks up again from the moment the frames come back
+  ({ state } = reduce(state, { type: 'tick', at: T0 + 110_000, visible: true, catches: 0, errors: 0, todayMs: 0 }));
+  assert.equal(state.fishingMs, 70_000);
+  assert.equal(state.stalled, false);
+});
+
 test('stop enters cooldown and logs the session', () => {
   const { state } = reduce(createState(), { type: 'start', at: T0 });
   const r = reduce(state, { type: 'stop', at: T0 + 600_000, reason: 'user' });
