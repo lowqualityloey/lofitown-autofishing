@@ -135,6 +135,15 @@ normally outside a session. So the toggle is for a clear view and working clicks
 clock runs — a free account still cannot focus-fish. The bot's own `no-catch` watchdog notices this
 and pauses rather than burning the session.
 
+**The panel says so up front.** A running focus session puts `FOCUS` in the page title
+(`12:34 FOCUS | lofi.town`), the only part of the session state a page script can read, and the panel
+checks it every tick: while it is there, a blue *focus session active — focus fishing needs Cozier,
+casts are refused* line takes the banner, ahead of the log-offline chatter. It is also observable from
+outside the shadow root (`window.__panel.focus()`, and `data-focus="1"` on the host). The panel does
+**not** refuse to start, because a Cozier subscriber fishes in sessions normally and the panel cannot
+read the account type; what it removes is the mystery, so a gated run is a decision instead of a
+25-minute wait for the dial that never comes.
+
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a
 backgrounded or minimised tab freezes both, and the panel stops the session when it sees the page

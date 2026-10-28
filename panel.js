@@ -166,6 +166,25 @@
     renderUpsellToggle();
   }
 
+  /* ---------------------------------------------- focus-session notice ---- */
+  /*
+   * The game publishes the session clock in the page title ("12:34 FOCUS | lofi.town") and drops it
+   * when the session ends, so the title is the only signal a page script can see. It matters because
+   * focus fishing is a Cozier perk: a free account can join a session and press Start, and the run
+   * will look perfectly alive (presses climb, dials do not) while the game refuses every cast. Both
+   * the bot and six hand inputs produced 0 dials in 25+ minutes on 2026-10-28.
+   *
+   * So the panel says it out loud instead of leaving the user to wonder. It does not refuse to
+   * start: a Cozier subscriber can fish in a session, and the panel cannot read the account type.
+   * The run watchdog already pauses after a run of no catches (pauseReason 'no-catch'), which keeps
+   * a gated session from burning the whole budget.
+   */
+  var FOCUS_NOTE = 'focus session active — focus fishing needs Cozier, casts are refused';
+
+  function inFocusSession() {
+    try { return /\bFOCUS\b/.test(document.title); } catch (e) { return false; }
+  }
+
   /* ------------------------------------------------------------ server ---- */
 
   function dayKey(d) {
@@ -328,6 +347,7 @@
     '.banner{font-size:11px;color:#f2c14e;background:rgba(242,193,78,.10);border-top:1px solid rgba(242,193,78,.22);padding:6px 10px}',
     '.banner:empty{display:none}',
     '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
+    '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-top-color:rgba(122,162,247,.30)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
@@ -658,15 +678,23 @@
     if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
       seatNote = 'clock paused — nothing to bite: sit on a chair by the water';
     }
-    ui.banner.textContent = seatNote || banner;
-    ui.banner.className = seatNote ? 'banner seat' : 'banner';
-    ui.banner.style.display = (seatNote || banner) ? '' : 'none';
+    // A focus session outranks the log-offline chatter: the run will look alive while the game
+    // refuses every cast, which is the most expensive way to spend a budget.
+    var focus = inFocusSession();
+    var focusNote = focus ? FOCUS_NOTE : '';
+    var note = seatNote || focusNote || banner;
+    ui.banner.textContent = note;
+    if (seatNote) ui.banner.className = 'banner seat';
+    else if (focus && !banner) ui.banner.className = 'banner focus';
+    else ui.banner.className = 'banner';
+    ui.banner.style.display = note ? '' : 'none';
 
     // Observable from the outside even though the shadow root is closed.
     if (host) {
       host.dataset.phase = phase;
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
+      if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
     }
 
     place();
@@ -849,6 +877,7 @@
     window.__panel.dispatch = dispatch;
     window.__panel.unmount = unmount;
     window.__panel.captureDiag = captureDiag;
+    window.__panel.focus = inFocusSession;
     tick();
   }
 

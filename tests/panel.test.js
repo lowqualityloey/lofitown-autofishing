@@ -69,7 +69,7 @@ test('a running session that cannot bite says so: sit down, the game is seat-bas
   assert.ok(fn.length > 0, 'render() exists');
   assert.ok(fn.includes('status.needsSeat'), 'render() reads needsSeat from the core status');
   assert.ok(fn.includes("'paused'"), 'the notice also shows while paused, not only while running');
-  assert.match(fn, /seatNote \|\| banner/, 'the seat notice outranks the log-offline banner');
+  assert.match(fn, /seatNote \|\| focusNote \|\| banner/, 'the seat notice outranks the log-offline banner');
   assert.ok(fn.includes("'banner seat'"), 'the seat notice gets its own colour, not the amber warning style');
   assert.ok(fn.includes("host.dataset.needsSeat = '1'"), 'needsSeat is observable from outside the shadow root');
   assert.match(src, /\.banner\.seat\{/, 'the seat style exists');
@@ -84,6 +84,28 @@ test('the seat fact reaches the reducer so the clock pauses instead of burning',
   const sessionSrc = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'session.js'), 'utf8');
   assert.ok(sessionSrc.includes("reason === 'seat' ? [] : [{ type: 'pauseCore' }]"), 'a seat pause keeps the core alive to spot the prompt');
   assert.ok(sessionSrc.includes("if (fact.seat === true) return paused(s, at, 'seat')"), 'the runner pauses on the seat fact');
+});
+
+test('a focus session is announced, because a free account cannot fish in one', () => {
+  // The session clock is in the page title, and 25 minutes in a session with the modal hidden gave
+  // 0 dials from both the bot and six hand inputs. The panel cannot lift that gate, so the least it
+  // can do is say it before the budget is spent.
+  assert.ok(src.includes("function inFocusSession()"), 'the title check exists');
+  assert.match(src, /\/\\bFOCUS\\b\/\.test\(document\.title\)/, 'it matches FOCUS in the page title, the only session signal');
+  assert.match(src, /var FOCUS_NOTE = 'focus session active/, 'the notice names the state');
+  assert.ok(src.includes('needs Cozier'), 'and says why fishing will not happen');
+  const fn = src.slice(src.indexOf('function render()'), src.indexOf('/* ------------------------------------------------------------ layout'));
+  assert.match(fn, /seatNote \|\| focusNote \|\| banner/, 'the focus notice outranks the log-offline banner');
+  assert.ok(fn.includes("'banner focus'"), 'it gets its own colour, not the amber seat warning');
+  assert.ok(fn.includes("host.dataset.focus = '1'"), 'the state is observable from outside the shadow root');
+  assert.match(src, /\.banner\.focus\{/, 'the focus style exists');
+  assert.ok(src.includes('window.__panel.focus = inFocusSession'), 'the check is callable from the console');
+  // a reporter, never a gate: a Cozier subscriber can fish in a session, so Start stays free
+  const start = src.slice(src.indexOf("primary.addEventListener('click'"), src.indexOf("winToggle.addEventListener('click'"));
+  const buttons = fn.slice(fn.indexOf('var primary = ui.primary;'), fn.indexOf('// The single most confusing stop'));
+  assert.ok(buttons.length > 0 && !buttons.includes('inFocusSession'), 'the notice is not wired into the button states');
+  assert.ok(!start.includes('inFocusSession'), 'Start is not blocked in a focus session');
+  assert.ok(!/fetch\(/.test(start), 'the start path makes no network call');
 });
 
 test('the Cozier popup hider is opt-in, cosmetic, and tags only what it recognises', () => {
