@@ -16,6 +16,11 @@ test('it installs itself on the game page only, with no grants', () => {
   assert.match(src, /^\/\/ @noframes$/m);
 });
 
+test('the userscript version matches package.json, so a bump cannot half-happen', () => {
+  const pkg = require('../package.json');
+  assert.match(src, new RegExp('^// @version\\s+' + pkg.version.replace(/\./g, '\\.') + '$', 'm'));
+});
+
 test('the bot core is inlined exactly once', () => {
   const n = src.split('window.__fish = F').length - 1;
   assert.strictEqual(n, 1);

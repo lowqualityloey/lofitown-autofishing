@@ -22,12 +22,14 @@ const path = require('path');
 
 const ROOT = __dirname;
 const OUT = path.join(ROOT, 'dist', 'autofish.user.js');
+// One source of truth: the header version is package.json's, so a bump cannot half-happen.
+const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 const HEADER = [
   '// ==UserScript==',
   '// @name         lofi.town AutoFish',
   '// @namespace    lofitown-autofishing',
-  '// @version      3.2.0',
+  '// @version      ' + VERSION,
   '// @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.',
   '// @match        https://app.lofi.town/*',
   '// @run-at       document-idle',

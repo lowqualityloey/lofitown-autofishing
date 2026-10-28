@@ -85,3 +85,24 @@ test('the seat fact reaches the reducer so the clock pauses instead of burning',
   assert.ok(sessionSrc.includes("reason === 'seat' ? [] : [{ type: 'pauseCore' }]"), 'a seat pause keeps the core alive to spot the prompt');
   assert.ok(sessionSrc.includes("if (fact.seat === true) return paused(s, at, 'seat')"), 'the runner pauses on the seat fact');
 });
+
+test('the Cozier popup hider is opt-in, cosmetic, and tags only what it recognises', () => {
+  // The in-session upsell cannot be dismissed; hiding it is the only lever a free account has. It
+  // must stay off by default, and it must never blank an overlay it cannot identify: the game
+  // reuses overlay roots for other modals.
+  assert.match(src, /prefs\.hideUpsell = !!p\.hideUpsell/, 'the pref is read');
+  assert.match(src, /hideUpsell: !!window\.__panel\.hideUpsell/, 'the pref is saved');
+  assert.ok(src.includes("if (prefs.hideUpsell) setUpsellHidden(true)"), 'mount honours the pref');
+  const fn = src.slice(src.indexOf('function upsellRoot()'), src.indexOf('function renderUpsellToggle()'));
+  assert.ok(fn.includes("getElementById(UPSELL_ID)"), 'it looks for the upsell by its own description id');
+  assert.ok(fn.includes('getClientRects().length'), 'a mounted-but-hidden modal is not a reason to tag the overlay');
+  assert.ok(fn.includes("closest('[' + UPSELL_ATTR + ']')"), 'a root we are already hiding still counts as visible, or the sweep flickers');
+  assert.ok(fn.includes("indexOf('inset-0')"), 'it climbs to the scrim-carrying fixed overlay, not the card');
+  const sweep = src.slice(src.indexOf('function sweepUpsell()'), src.indexOf('function renderUpsellToggle()'));
+  assert.ok(sweep.includes('marked[i] !== target'), 'the tag is moved, never left behind on a reused root');
+  assert.ok(sweep.includes("removeAttribute(UPSELL_ATTR)"), 'the tag is dropped when the upsell goes away');
+  assert.ok(src.includes("'[' + UPSELL_ATTR + ']{display:none!important}'"), 'the style is a display:none on the tagged root');
+  assert.ok(src.includes("upsellToggle.textContent = upsellOn ? 'on' : 'off'"), 'the toggle shows state');
+  // cosmetic means cosmetic: nothing here may touch the game or the account
+  assert.ok(!/fetch\(|localStorage\.removeItem/.test(fn + sweep), 'the hider makes no network calls and deletes no state');
+});

@@ -114,6 +114,26 @@ corner of the game and runs from there.
 - **Start / Stop** — one button. Every Stop starts the cooldown; a pause does not.
 - **Meters** — time left, catches this session, presses this session, and today's total against the
   daily cap.
+- **Cozier popup** — **off** by default. Set it **on** to hide the *Fish while you focus with Cozier*
+  upsell (and the full-screen scrim that comes with it) while a focus session is running. **Cosmetic
+  only — see below.**
+
+**Focus sessions and the Cozier popup (measured 2026-10-28, free account).** Joining a public focus
+session — *Open focus menu > Together > Browse > Public Session > Join* — works on a free account, but
+the game then mounts a full-screen *Fish while you focus with Cozier* modal. It is not dismissible in
+any useful sense: **Not now** and the **X** both take it away for about 250 ms and it is back within a
+second, and its scrim sits above both canvases, so every click aimed at the water lands on the scrim
+instead. The panel's **Cozier popup** toggle hides exactly that overlay — it tags a root only while the
+upsell's own `#focus-fishing-upgrade-description` paragraph is visible and untags it as soon as it is
+gone, so another modal reusing the same root is never blanked — and it touches nothing else: no network
+call, no `localStorage` removal, no account or subscription state.
+
+**It does not bring fishing back.** The Cozier gate is in the game, not in the popup: 25+ minutes in a
+session with the modal hidden gave **0 dials** from the bot *and* from six hand-made inputs (three
+pointer clicks at the cast prompt, three Space presses), while the same bot on the same page fished
+normally outside a session. So the toggle is for a clear view and working clicks while the session
+clock runs — a free account still cannot focus-fish. The bot's own `no-catch` watchdog notices this
+and pauses rather than burning the session.
 
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a

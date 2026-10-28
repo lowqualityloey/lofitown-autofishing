@@ -77,6 +77,7 @@
       prefs.window = { on: !!p.window.on, start: p.window.start, stop: p.window.stop };
     }
     prefs.resumeAfterReload = !!p.resumeAfterReload;
+    prefs.hideUpsell = !!p.hideUpsell;
     return prefs;
   }
 
@@ -86,8 +87,83 @@
       cooldownMs: state.cooldownMs,
       dailyCapMs: state.dailyCapMs,
       window: state.window,
-      resumeAfterReload: !!window.__panel.resumeAfterReload
+      resumeAfterReload: !!window.__panel.resumeAfterReload,
+      hideUpsell: !!window.__panel.hideUpsell
     });
+  }
+
+  /* ------------------------------------------------ cozier upsell hider --- */
+  /*
+   * A free account that joins a focus session gets a full-screen "Fish while you focus with
+   * Cozier" modal. It cannot be dismissed — closing it re-mounts it within a second — and its
+   * scrim covers the game canvas, so it also swallows every click meant for the water.
+   *
+   * Hiding it is COSMETIC ONLY. The game itself refuses the cast for a free account in a focus
+   * session: measured 2026-10-28, 25+ minutes in-session with the modal hidden, real pointer
+   * clicks and Space presses gave 0 dials, while the same bot fished normally outside a session.
+   * What this buys is a clear view and working clicks while the session runs; it does not and
+   * cannot restore focus fishing.
+   *
+   * The overlay root is React's own node and may be reused for other modals, so it is tagged only
+   * while the upsell's description paragraph is actually on screen, and the tag is dropped again
+   * as soon as it is gone. Off by default (pref `hideUpsell`).
+   */
+  var UPSELL_ID = 'focus-fishing-upgrade-description';
+  var UPSELL_ATTR = 'data-autofish-upsell';
+  var upsellOn = false;
+  var upsellTimer = null;
+
+  function upsellRoot() {
+    var desc = document.getElementById(UPSELL_ID);
+    if (!desc) return null;
+    // display:none from our own tag would empty getClientRects() and make the sweep untag the root
+    // it just tagged, i.e. show the modal again every 500 ms. A root we are hiding still counts.
+    if (!desc.closest('[' + UPSELL_ATTR + ']') && !desc.getClientRects().length) return null;
+    var node = desc;
+    var top = null;
+    while (node && node !== document.documentElement) {
+      var style = getComputedStyle(node);
+      if (style.position === 'fixed' && String(node.className || '').indexOf('inset-0') !== -1) top = node;
+      node = node.parentElement;
+    }
+    return top;
+  }
+
+  function sweepUpsell() {
+    var target = upsellRoot();
+    var marked = document.querySelectorAll('[' + UPSELL_ATTR + ']');
+    for (var i = 0; i < marked.length; i++) {
+      if (marked[i] !== target) marked[i].removeAttribute(UPSELL_ATTR);
+    }
+    if (target && !target.hasAttribute(UPSELL_ATTR)) target.setAttribute(UPSELL_ATTR, '');
+  }
+
+  function renderUpsellToggle() {
+    if (!ui.upsellToggle) return;
+    ui.upsellToggle.textContent = upsellOn ? 'on' : 'off';
+    ui.upsellToggle.style.color = upsellOn ? '#5ad18b' : '#9aa4ae';
+  }
+
+  function setUpsellHidden(on) {
+    upsellOn = !!on;
+    if (window.__panel) window.__panel.hideUpsell = upsellOn;
+    var css = document.getElementById('autofish-upsell-css');
+    var marked = document.querySelectorAll('[' + UPSELL_ATTR + ']');
+    if (upsellOn) {
+      if (!css) {
+        css = document.createElement('style');
+        css.id = 'autofish-upsell-css';
+        css.textContent = '[' + UPSELL_ATTR + ']{display:none!important}';
+        document.head.appendChild(css);
+      }
+      sweepUpsell();
+      if (!upsellTimer) upsellTimer = setInterval(sweepUpsell, 500);
+    } else {
+      if (upsellTimer) { clearInterval(upsellTimer); upsellTimer = null; }
+      for (var i = 0; i < marked.length; i++) marked[i].removeAttribute(UPSELL_ATTR);
+      if (css) css.remove();
+    }
+    renderUpsellToggle();
   }
 
   /* ------------------------------------------------------------ server ---- */
@@ -313,6 +389,14 @@
     timeRow.appendChild(stepper('to', 15));
     body.appendChild(timeRow);
 
+    // cosmetic only: quietens the in-session Cozier upsell, see setUpsellHidden()
+    var upsellRow = el('div', 'row');
+    var upsellLabel = el('div', 'label', 'Cozier popup');
+    var upsellToggle = el('button', 'icon', upsellOn ? 'on' : 'off');
+    upsellToggle.title = 'hide the in-session Cozier upsell (cosmetic: a free account still cannot fish in focus)';
+    upsellRow.append(upsellLabel, upsellToggle);
+    body.appendChild(upsellRow);
+
     var meters = el('div', 'meters');
     meters.append(
       meter('left'), meter('catches'), meter('presses'), meter('today')
@@ -353,7 +437,8 @@
     // merge rather than replace, or every one of those references is lost.
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
-      winToggle: winToggle, timeRow: timeRow, primary: primary, banner: bannerEl, pill: pill,
+      winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
+      primary: primary, banner: bannerEl, pill: pill,
       tierCells: tierCells, lastCatch: lastCatch
     });
 
@@ -371,6 +456,10 @@
     });
     winToggle.addEventListener('click', function () {
       dispatch({ type: 'config', at: Date.now(), patch: { window: { on: !state.window.on } } });
+      savePrefs();
+    });
+    upsellToggle.addEventListener('click', function () {
+      setUpsellHidden(!upsellOn);
       savePrefs();
     });
     head.addEventListener('pointerdown', startDrag);
@@ -524,6 +613,7 @@
     ui.winToggle.textContent = state.window.on ? 'on' : 'off';
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
     ui.timeRow.style.display = state.window.on ? '' : 'none';
+    renderUpsellToggle();
 
     ui.dur.val.textContent = minutesText(state.durationMs);
     ui.cool.val.textContent = minutesText(state.cooldownMs);
@@ -745,6 +835,7 @@
     if (before && before.running) { try { fish().stop(); } catch (e) {} banner = 'stopped a session that was already running'; }
 
     build();
+    if (prefs.hideUpsell) setUpsellHidden(true); // cosmetic: see setUpsellHidden()
     mountAdoption();
     banner = checkInterrupted() || banner;
 
