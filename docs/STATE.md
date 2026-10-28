@@ -46,8 +46,8 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-10-27-in-game-panel-design.md` (approved)
-- **Active Task Spec**: `docs/superpowers/plans/2026-10-27-autofish-panel.md` (approved route)
+- **Active RFC / Spec**: `docs/specs/2026-10-28-catch-log.md` (the panel spec itself was never committed; its decisions are the ADR log in §6)
+- **Active Task Spec**: `docs/tasks/autofish-panel.md`
 - **Key Source Files in Flight**: `autofish.js`, `panel.js`, `session.js`, `layout.js`, `build-userscript.js`, `dist/autofish.user.js`, `tests/*.test.js`
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
@@ -184,7 +184,7 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ## 6. Recent Architectural Decisions (ADR Log)
 | Date | Title & Scope | Decision Summary | ADR File |
 | :--- | :--- | :--- | :--- |
-| 2026-10-27 | Control surface | In-game floating DOM panel (shadow root) instead of a local dashboard page, because a separate window would cover the game and a hidden/covered game freezes. | `docs/specs/2026-10-27-in-game-panel-design.md` |
+| 2026-10-27 | Control surface | In-game floating DOM panel (shadow root) instead of a local dashboard page, because a separate window would cover the game and a hidden/covered game freezes. | `docs/tasks/autofish-panel.md` |
 | 2026-10-27 | Session history | Records live in the server (`sessions.csv`, `GET /sessions?day=`), never in localStorage. | same spec |
 | 2026-10-27 | Pause semantics | Pause is not a stop: no cooldown, and paused/waiting time never counts toward session length or the daily cap. | same spec |
 | 2026-10-28 | Catch history | Per-catch ledger in `localStorage` (`autofish:log:v1`), written only from parsed catch text. Session records stay server-only; the ledger is history, never a scoreboard, and rarity may be filled from the embedded catalogue with `derived:true`. | `docs/specs/2026-10-28-catch-log.md` |
@@ -194,6 +194,8 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-10-28 | Seat-based fishing | `showCastButton` is emitted only from the character's sit path, so an unseated character can never be rescued by clicking. The bot never synthesises movement (an earlier walk rung unseated the character and lost the run) and names the condition as `needsSeat` after 45 s without a prompt. | `AUTOFISH.md` why the bot stops casting |
 | 2026-10-28 | Seat pause | `fact.seat` pauses the session before any fishing time is credited, without pausing the core (the core is what spots the returning prompt). The pause honours the clock window and an already-spent daily cap, and ends with `no-seat` after 30 minutes. | this file, section 7 |
 | 2026-10-28 | Frame budget (dial search) | The dominant cost was `lockDial` at 83.3 ms a call eight times a second (670 ms/s, 67% of the main thread) - 99,000 rim samples per call, each with its own trig call and a fresh 4-element array. Geometry unchanged: trig tables, a `Uint8Array` rim mask per read, index-only predicates, and `inkMix` without per-pixel arrays. `findCatch` throttled to 100 ms. Measured: 4.2-4.3 ms a call, idle frame rate 32.2 -> 140.6 fps. | `AUTOFISH.md` 2026-10-28 the dial search was the real lag |
+| 2026-10-29 | Session budget | `autofish:budget:v1` in localStorage is the authority for today's minutes and the cooldown; the server's `/sessions` is merged by `max()` and is no longer required. A stop folds the session into `todayMs`, so a restart counts it. | `AUTOFISH.md` 2026-10-29 |
+| 2026-10-29 | Catch history | The ledger key is per profile (`autofish:log:v1:<profile>`), migrating the pre-profile key to `default`. A species outside the catalogue is logged as `Unknown`, shown in a `UNK` cell and kept in an `unknown` worklist. | `AUTOFISH.md` 2026-10-29 |
 
 ---
 
@@ -210,6 +212,8 @@ Staging area for rules observed during sessions but not yet approved as invarian
    loss genuine.
 4. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
    bubbles) at window sizes nobody has tested yet.
+5. Measure the Zen frame budget with `__fish.perf()` (bot stopped, then running) before changing any
+   scan throttle; a Gecko readback is not a Chromium one.
 
 ---
 

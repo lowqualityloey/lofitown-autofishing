@@ -5,13 +5,23 @@
  *
  * The game ships the whole fish table in its own JS bundle; the bot only needs the part that
  * names a rarity. This script pulls it out and rewrites the block between the catalogue
- * sentinels, so a game update is one command instead of hand-editing 136 rows.
+ * sentinels, so a game update is one command instead of hand-editing 181 rows.
+ *
+ * The bundle carries the table in two shapes: the base fish as literal objects, and the seasonal /
+ * region fish built through a helper (`n("Tubenose Poacher","Uncommon",.1,1)`), whose gold comes
+ * from the bundle's per-tier map. Both are read; a literal-object regex alone silently drops the
+ * seasonal half, which is exactly how a live fish ended up "Unknown".
  *
  *   node scripts/gen-catalogue.js [path/to/bundle.js] [--write]
  *
  * The bundle is a minified Next.js chunk (git-ignored under shots/diag/); fetch it once with
  *   curl -s https://app.lofi.town/_next/static/chunks/<chunk>.js -o shots/diag/c3763.js
  * Default input is shots/diag/c3763.js; without --write it only prints the table.
+ *
+ * The hash in <chunk> changes with every game build, so a stale filename reads an old species list.
+ * Take the current name from the page's <script src> list (or the Network tab) each time; a fish the
+ * catalogue does not know is logged as Unknown and listed in the ledger's `unknown` map, which is the
+ * worklist this script exists to clear.
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -29,11 +39,57 @@ function extract(src) {
   let m;
   while ((m = re.exec(src))) {
     const row = [m[1], m[2], Number(m[3]), Number(m[4]), Number(m[5])];
-    if (seen.has(row[0])) continue;
-    seen.add(row[0]);
+    if (seen.has(row[0].toLowerCase())) continue;
+    seen.add(row[0].toLowerCase());
     rows.push(row);
   }
   return rows;
+}
+
+const TIERS = TIER_ORDER.join('|');
+
+/** Gold per tier from the bundle's `o={Common:7,...}` map, which the helper rows read. */
+function goldByTier(src) {
+  const re = new RegExp('\\bo=\\{Common:([0-9.eE+-]+),Uncommon:([0-9.eE+-]+),Rare:([0-9.eE+-]+),Epic:([0-9.eE+-]+),Legendary:([0-9.eE+-]+),Secret:([0-9.eE+-]+),Halloween:([0-9.eE+-]+),Christmas:([0-9.eE+-]+)\\}');
+  const m = re.exec(src);
+  if (!m) return {};
+  const out = {};
+  TIER_ORDER.forEach((t, i) => { out[t] = Number(m[i + 1]); });
+  return out;
+}
+
+/**
+ * The seasonal / region fish, built as n(name, tier[, minWeight, maxWeight]). Missing weights
+ * default to 1..10 in the bundle's own helper, so they default the same way here.
+ */
+function extractBuilt(src, gold) {
+  const re = new RegExp('n\\("([^"]+)","(' + TIERS + ')"(?:,([0-9.eE+-]+),([0-9.eE+-]+))?\\)', 'g');
+  const seen = new Set();
+  const rows = [];
+  let m;
+  while ((m = re.exec(src))) {
+    const tier = m[2];
+    const row = [m[1], tier, m[3] == null ? 1 : Number(m[3]), m[4] == null ? 10 : Number(m[4]), gold[tier] == null ? 0 : gold[tier]];
+    if (seen.has(row[0].toLowerCase())) continue;
+    seen.add(row[0].toLowerCase());
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** Base table first, so a name in both keeps its explicit gold. Names compare case-insensitively. */
+function merge() {
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; i < arguments.length; i++) {
+    for (const row of arguments[i]) {
+      const key = row[0].toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(row);
+    }
+  }
+  return out;
 }
 
 function order(rows) {
@@ -62,7 +118,10 @@ function main(argv) {
     console.error('bundle not found: ' + file);
     return 2;
   }
-  const rows = order(extract(fs.readFileSync(file, 'utf8')));
+  const text = fs.readFileSync(file, 'utf8');
+  const base = extract(text);
+  const built = extractBuilt(text, goldByTier(text));
+  const rows = order(merge(base, built));
   if (rows.length < 100) {
     console.error('only ' + rows.length + ' species found - the bundle format probably changed');
     return 1;
@@ -70,7 +129,7 @@ function main(argv) {
   const per = {};
   for (const r of rows) per[r[1]] = (per[r[1]] || 0) + 1;
   const block = literal(rows);
-  console.log('species: ' + rows.length);
+  console.log('species: ' + rows.length + ' (base ' + base.length + ', seasonal ' + built.length + ')');
   console.log('tiers: ' + JSON.stringify(per));
   console.log('block: ' + block.length + ' chars');
   if (!write) {
@@ -92,4 +151,4 @@ function main(argv) {
 }
 
 if (require.main === module) process.exit(main(process.argv));
-module.exports = { extract, order, literal };
+module.exports = { extract, extractBuilt, goldByTier, merge, order, literal };

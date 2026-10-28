@@ -125,8 +125,20 @@ function read(name) {
   return fs.readFileSync(path.join(ROOT, name), 'utf8');
 }
 
+/**
+ * Stamp the version into the core itself, not only the header: the panel head and __fish.version
+ * read F.version, and a tab that says 3.5.0 while the file is 3.6.0 is the bug this prevents.
+ * The placeholder is asserted, so a rename cannot silently ship 'dev'.
+ */
+function stamp(core) {
+  const placeholder = "const F = { version: 'dev' };";
+  const n = core.split(placeholder).length - 1;
+  if (n !== 1) throw new Error('expected one version placeholder in autofish.js, found ' + n);
+  return core.replace(placeholder, 'const F = { version: ' + JSON.stringify(VERSION) + ' };');
+}
+
 function build() {
-  const src = read('autofish.js');
+  const src = stamp(read('autofish.js'));
   if (src.indexOf('window.__fish = F') < 0) throw new Error('autofish.js no longer installs window.__fish');
   const session = read('session.js');
   if (session.indexOf('AutoFishSession') < 0) throw new Error('session.js no longer exports AutoFishSession');

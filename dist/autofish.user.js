@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.5.0
+// @version      3.6.0
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -53,8 +53,26 @@ window.__autofishInstalled = true;
 (() => {
   if (window.__fish) { try { window.__fish.stop(); } catch (e) {} }
 
-  const F = { version: 'autofish 3.0' };
+  /**
+   * build-userscript.js replaces 'dev' with package.json's version, so the header, __fish.version
+   * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
+   * the honest answer: that copy has no build step to stamp it.
+   */
+  const F = { version: "3.6.0" };
   const now = () => performance.now();
+
+  /* ---- performance probe -------------------------------------------------
+   * Zen/Gecko pays far more for a canvas readback than Chromium does, and the only honest way to
+   * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
+   * average cost of each detector, so a change can be justified by numbers rather than a guess.
+   */
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0 };
+  function resetPerf() {
+    perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
+    perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
+    perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
+    perf.card = 0; perf.cardN = 0;
+  }
 
   /* ---- timing core -----------------------------------------------------
    * Pure functions, no DOM and no state. tests/timing.test.js extracts this block by its
@@ -308,6 +326,29 @@ window.__autofishInstalled = true;
     if (i === 2) return { tap: true, space: true, walk: false };   // the click did not take: also press the key
     return { tap: false, space: true, walk: false };                // the keybind alone, then hold
   }
+
+  /**
+   * Cumulative counters -> rates, so the perf probe says WHERE the frame time goes (ms/s and share
+   * of wall clock), not just how long one call took. Pure, so the arithmetic is tested.
+   * `share` is the fraction of wall time spent on the main thread; nested calls overlap
+   * (findBubble includes its snapshot), so read it as attribution, not a partition.
+   */
+  function perfRates(calls, totals, uptimeMs) {
+    const secs = uptimeMs > 0 ? uptimeMs / 1000 : 0;
+    const out = {};
+    for (const key of Object.keys(totals)) {
+      const ms = totals[key] || 0;
+      const n = calls[key] || 0;
+      const msPerSec = secs ? ms / secs : null;
+      out[key] = {
+        callsPerSec: secs ? n / secs : null,
+        msPerCall: n ? ms / n : null,
+        msPerSec,
+        share: msPerSec == null ? null : msPerSec / 1000,
+      };
+    }
+    return out;
+  }
   // </timing-core>
 
   /* ---- catch log --------------------------------------------------------
@@ -322,45 +363,62 @@ window.__autofishInstalled = true;
   // <catch-log>
   // <species-catalogue>
 const SPECIES = [
-  ["Anchovy","Common",0.1,0.3,5], ["Bass","Common",1,8,8], ["Bluegills","Common",0.1,2,6], ["Catfish","Common",2,20,12],
-  ["Cod","Common",2,15,10], ["Flounder","Common",1,5,7], ["Golden Shiner","Common",0.05,0.5,5], ["Herring","Common",0.5,2,7],
-  ["Largemouth Bass","Common",1,10,10], ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9],
-  ["Minnow","Common",0.01,0.1,5], ["Mud Crab","Common",0.1,1,7], ["Sardine","Common",0.2,1,6], ["Sea Urchin","Common",0.5,3,8],
-  ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6], ["Swamp Barb","Common",0.05,0.3,6],
-  ["Tadpole","Common",0.01,0.05,5], ["White Sucker","Common",0.5,3,8], ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30],
+  ["Anchovy","Common",0.1,0.3,5], ["Arctic Cod","Common",0.1,1,7], ["Bass","Common",1,8,8], ["Black Sea Bass","Common",1,10,7],
+  ["Bluegills","Common",0.1,2,6], ["Capelin","Common",0.1,1,7], ["Catfish","Common",2,20,12], ["Cod","Common",2,15,10],
+  ["Firefly Squid","Common",0.01,0.1,7], ["Flounder","Common",1,5,7], ["Frozen Fish","Common",1,10,7], ["Golden Shiner","Common",0.05,0.5,5],
+  ["Hatched Fish","Common",0.01,0.1,7], ["Herring","Common",0.5,2,7], ["Lantern Fish","Common",0.1,1,7], ["Largemouth Bass","Common",1,10,10],
+  ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9], ["Minnow","Common",0.01,0.1,5],
+  ["Mud Crab","Common",0.1,1,7], ["Northern Shrimp","Common",0.01,0.1,7], ["Sand Lance","Common",0.01,0.1,7], ["Sardine","Common",0.2,1,6],
+  ["Sea Urchin","Common",0.5,3,8], ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6],
+  ["Swamp Barb","Common",0.05,0.3,6], ["Tadpole","Common",0.01,0.05,5], ["The Deepest Rock","Common",1,10,7], ["White Sucker","Common",0.5,3,8],
+  ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30], ["Arctic Char","Uncommon",1,10,20], ["Arctic Skate","Uncommon",1,10,20],
   ["Asian Swamp Eel","Uncommon",0.5,5,18], ["Clown Fish","Uncommon",0.2,1,19], ["Crawfish","Uncommon",0.02,0.2,15], ["Eel","Uncommon",2,25,25],
-  ["European Toad","Uncommon",0.02,0.15,16], ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20],
-  ["Mudskipper","Uncommon",0.05,0.3,17], ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19],
-  ["Salmon","Uncommon",5,30,28], ["Seahorse","Uncommon",0.1,1,17], ["Squid","Uncommon",1,15,24], ["Sturgeon","Uncommon",20,350,35],
-  ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22], ["Tuna","Uncommon",20,400,35],
-  ["Walleye","Uncommon",1,10,24], ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50],
-  ["Bull Frog","Rare",0.2,0.8,48], ["Coelacanth","Rare",15,180,75], ["Flying Fish","Rare",1,5,42], ["Frog Fish","Rare",0.1,1,50],
-  ["Goldfish","Rare",0.5,2,45], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Mekong Catfish","Rare",50,300,75],
-  ["Nurse Shark","Rare",50,150,70], ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60],
-  ["Snapping Turtle","Rare",5,35,58], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
-  ["American Alligator","Epic",200,1000,200], ["Arowana","Epic",3,20,110], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120],
-  ["Fried Egg Jellyfish","Epic",5,35,95], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
+  ["European Toad","Uncommon",0.02,0.15,16], ["Greenland Halibut","Uncommon",1,10,20], ["Hagfish","Uncommon",0.1,1,20], ["Kelp Snailfish","Uncommon",0.1,1,20],
+  ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20], ["Mudskipper","Uncommon",0.05,0.3,17],
+  ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19], ["Salmon","Uncommon",5,30,28],
+  ["Seahorse","Uncommon",0.1,1,17], ["Snow Crab","Uncommon",1,10,20], ["Spiny Dogfish","Uncommon",1,10,20], ["Squid","Uncommon",1,15,24],
+  ["Sturgeon","Uncommon",20,350,35], ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22],
+  ["Tripod Fish","Uncommon",0.1,1,20], ["Tubenose Poacher","Uncommon",0.1,1,20], ["Tuna","Uncommon",20,400,35], ["Walleye","Uncommon",1,10,24],
+  ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50], ["Bull Frog","Rare",0.2,0.8,48],
+  ["Coelacanth","Rare",15,180,75], ["Dragon Fish","Rare",1,10,55], ["Dumbo Octopus","Rare",0.1,1,55], ["Flying Fish","Rare",1,5,42],
+  ["Frog Fish","Rare",0.1,1,50], ["Giant Isopod","Rare",1,10,55], ["Goldfish","Rare",0.5,2,45], ["Greenland Shark","Rare",100,1000,55],
+  ["Harp Seal","Rare",100,1000,55], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Lumpsucker","Rare",0.1,1,55],
+  ["Mekong Catfish","Rare",50,300,75], ["Nautilus","Rare",0.1,1,55], ["Nurse Shark","Rare",50,150,70], ["Pancake Batfish","Rare",0.1,1,55],
+  ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60], ["Snapping Turtle","Rare",5,35,58],
+  ["Snipe Eel","Rare",0.1,1,55], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
+  ["American Alligator","Epic",200,1000,200], ["Anomalocaris","Epic",1,10,140], ["Arowana","Epic",3,20,110], ["Basking Shark","Epic",1000,10000,140],
+  ["Beluga Whale","Epic",1000,10000,140], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120], ["Fried Egg Jellyfish","Epic",5,35,95],
+  ["Frilled Shark","Epic",100,1000,140], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
   ["Lais Tembiring","Epic",5,50,120], ["Lion Fish","Epic",1,5,85], ["Manta Ray","Epic",600,5000,200], ["Marlin","Epic",100,1800,175],
-  ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Paddle Fish","Epic",25,200,165],
-  ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
-  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Wels Catfish","Epic",50,300,190],
-  ["Whale Shark","Epic",15000,40000,220], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600], ["Cthulhu","Legendary",50000,200000,1000],
-  ["Definitely not Catfish","Legendary",50,300,750], ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500],
-  ["Kappa","Legendary",50,200,900], ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950],
-  ["Marlin's Boot","Legendary",50,300,20], ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800],
-  ["Nyarlathotep","Legendary",1000,50000,1000], ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750],
-  ["Phantom Jellyfish","Legendary",10,100,500], ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800],
-  ["Swamp Monster","Legendary",5000,50000,950], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700], ["Barreleye Fish","Secret",1,5,1500],
-  ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000], ["Ghost Shark","Secret",1,16,1750],
-  ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100],
-  ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150], ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200],
-  ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180], ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250],
-  ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75], ["Walrus","Christmas",500,1500,200]
+  ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Orca","Epic",1000,10000,140],
+  ["Paddle Fish","Epic",25,200,165], ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Polar Bear","Epic",100,1000,140],
+  ["Spider Crab","Epic",1,10,140], ["Stargazer Fish","Epic",1,10,140], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
+  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Viperfish","Epic",1,10,140],
+  ["Wels Catfish","Epic",50,300,190], ["Whale Shark","Epic",15000,40000,220], ["Wolffish","Epic",1,10,140], ["A Penguin?","Legendary",1,10,800],
+  ["Akhlut","Legendary",100,1000,800], ["Amarok","Legendary",100,1000,800], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600],
+  ["Berg","Legendary",1000,10000,800], ["Bowhead Whale","Legendary",1000,10000,800], ["Cthulhu","Legendary",50000,200000,1000], ["Definitely not Catfish","Legendary",50,300,750],
+  ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500], ["Kappa","Legendary",50,200,900],
+  ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950], ["Marlin's Boot","Legendary",50,300,20],
+  ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800], ["Nyarlathotep","Legendary",1000,50000,1000],
+  ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750], ["Phantom Jellyfish","Legendary",10,100,500],
+  ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800], ["Swamp Monster","Legendary",5000,50000,950],
+  ["The Bloop","Legendary",1000,10000,800], ["True Blobfish","Legendary",1,10,800], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700],
+  ["Barreleye Fish","Secret",1,5,1500], ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000],
+  ["Ghost Shark","Secret",1,16,1750], ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Plankton","Secret",0.01,0.1,1500],
+  ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100], ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150],
+  ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200], ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180],
+  ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250], ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75],
+  ["Walrus","Christmas",500,1500,200]
 ];
   // </species-catalogue>
 
   const TIER_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas'];
   const LOG_KEY = 'autofish:log:v1';
+  const LOG_PREFIX = LOG_KEY + ':';
+  // One catch history per profile. The ledger used to be keyed by origin alone, so two accounts in
+  // the same browser silently shared a strip. 'default' keeps the pre-profile key working.
+  let logProfile = 'default';
+  function logKey() { return LOG_PREFIX + logProfile; }
   const TIER_BY_LOWER = {};
   for (const tier of TIER_ORDER) TIER_BY_LOWER[tier.toLowerCase()] = tier;
   const SPECIES_BY_NAME = {};
@@ -455,7 +513,7 @@ const SPECIES = [
     const at = t == null ? Date.now() : t;
     const rarity = {};
     for (const tier of TIER_ORDER) rarity[tier] = 0;
-    return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, days: {}, last: null };
+    return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, unknown: {}, days: {}, last: null };
   }
 
   /** Append one described catch in place and return the same ledger. */
@@ -476,6 +534,12 @@ const SPECIES = [
       s.bestAt = at;
     }
     book.rarity[e.rarity] = (book.rarity[e.rarity] || 0) + 1;
+    // Unknown means the card printed no tier and the catalogue does not know the species. Keep the
+    // names so the gap is a worklist instead of an invisible pile of catches.
+    if (e.rarity === 'Unknown') {
+      if (!book.unknown) book.unknown = {};
+      book.unknown[name] = (book.unknown[name] || 0) + 1;
+    }
     if (e.shiny) book.shiny = (book.shiny || 0) + 1;
     if (e.golden) book.golden = (book.golden || 0) + 1;
     const key = logDay(at);
@@ -521,8 +585,10 @@ const SPECIES = [
       shiny: book.shiny || 0,
       golden: book.golden || 0,
       byRarity, top, best,
+      unknown: book.unknown || {},
+      unknownNames: Object.keys(book.unknown || {}).sort(),
       last: book.last || null,
-      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })) },
+      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })).concat(Object.keys(today.rarity || {}).filter((k) => TIER_ORDER.indexOf(k) < 0).map((k) => ({ rarity: k, n: today.rarity[k] }))) },
       updatedAt: book.updatedAt || null,
       days: Object.keys(book.days || {}).length,
     };
@@ -553,7 +619,13 @@ const SPECIES = [
   function loadLedger() {
     if (ledger) return ledger;
     let raw = null;
-    try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+    try { raw = window.localStorage.getItem(logKey()); } catch (e) { raw = null; }
+    if (!raw && logProfile === 'default') {
+      // The pre-profile ledger (autofish:log:v1) belongs to whoever used this browser first.
+      // Move it to the default profile once, so an upgrade never looks like lost history.
+      try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+      if (raw) { try { window.localStorage.setItem(logKey(), raw); } catch (e) {} }
+    }
     if (!raw) return (ledger = emptyLog());
     try {
       const parsed = JSON.parse(raw);
@@ -563,7 +635,20 @@ const SPECIES = [
   }
   function saveLedger(book) {
     ledger = book;
-    try { window.localStorage.setItem(LOG_KEY, JSON.stringify(book)); return true; } catch (e) { return false; }
+    try { window.localStorage.setItem(logKey(), JSON.stringify(book)); return true; } catch (e) { return false; }
+  }
+  /** Every profile that has a ledger in this browser, newest naming first. */
+  function logProfiles() {
+    const out = [];
+    try {
+      const st = window.localStorage;
+      for (let i = 0; i < (st.length || 0); i++) {
+        const k = st.key(i);
+        if (k && k.indexOf(LOG_PREFIX) === 0) out.push(k.slice(LOG_PREFIX.length));
+      }
+    } catch (e) { /* a blocked store simply has no discoverable profiles */ }
+    if (out.indexOf('default') < 0) out.unshift('default');
+    return out.sort();
   }
 
   // </catch-log>
@@ -740,6 +825,11 @@ const SPECIES = [
    */
   let snapAt = 0;
   function snapshot() {
+    const t0 = now();
+    try { return snapshotInner(); }
+    finally { perf.snap += now() - t0; perf.snapN++; }
+  }
+  function snapshotInner() {
     const t = now();
     if (sdata && t - snapAt < ((F.opts && F.opts.scanTickMs) || 66)) return true;
     if (!downscale()) return false;
@@ -1554,6 +1644,7 @@ const SPECIES = [
       maxMinutes: 240,
     }, opts || {});
     surfaces();
+    resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
@@ -1583,6 +1674,7 @@ const SPECIES = [
 
   F.stop = function () {
     F.running = false;
+    perf.stoppedAt = now();   // freeze the measurement window; a later perf() must not be diluted
     cancelPend();
 
     clearPendingWin();
@@ -1614,6 +1706,7 @@ const SPECIES = [
 
   /** Fresh counters without restarting: used when a panel session begins on a live loop. */
   F.resetStats = function () {
+    resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
@@ -1650,6 +1743,12 @@ const SPECIES = [
   function loop() {
     if (!F.running) { F._raf = null; return; }
     F._raf = requestAnimationFrame(loop);
+    const frameAt = now();
+    if (perf.last) {
+      perf.gaps.push(frameAt - perf.last);
+      if (perf.gaps.length > 600) perf.gaps.shift();   // ~10 s at 60 fps
+    }
+    perf.last = frameAt; perf.n++;
     // Inside rAF, before compositing, is the only moment the UI layer's buffer is still readable.
     if (F._shotWanted && uiCanvas) {
       F._shotWanted = false;
@@ -2051,6 +2150,19 @@ const SPECIES = [
   F.log = function () {
     return logSummary(loadLedger(), Date.now());
   };
+  /** Which catch history the panel reads and writes. No argument reads it. */
+  F.logProfile = function (name) {
+    if (name === undefined) return logProfile;
+    const next = String(name || '').trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 24) || 'default';
+    if (next !== logProfile) {
+      logProfile = next;
+      ledger = null;              // the cache belongs to the old profile
+      F.txtAt = now();            // text drawn before the switch is another card
+    }
+    return logProfile;
+  };
+  /** Every profile this browser has a ledger for. */
+  F.logProfiles = function () { return logProfiles(); };
   /** The same ledger as one CSV row per species (paste it anywhere). */
   F.logCsv = function () {
     return logCsv(loadLedger());
@@ -2117,6 +2229,55 @@ const SPECIES = [
     }));
   };
 
+  /* Wrap the finished detectors last, so their numbers include everything they do. Two
+   * performance.now() calls per call is noise against a readback measured at ~2.1 ms. */
+  const PERF_KEYS = { findBubble: 'bubble', findCatch: 'card', lockDial: 'lock', sample: 'sample' };
+  Object.keys(PERF_KEYS).forEach((name) => {
+    const orig = F[name];
+    if (typeof orig !== 'function') return;
+    const key = PERF_KEYS[name];
+    F[name] = function () {
+      const t0 = now();
+      try { return orig.apply(this, arguments); }
+      finally { perf[key] += now() - t0; perf[key + 'N']++; }
+    };
+  });
+
+  /**
+   * Frame budget and per-detector cost, from the last ~10 s of frames.
+   *
+   * Measure with the bot stopped, then running, and compare: the difference is what the bot costs.
+   * On Chromium the readback is cheap; on Gecko (Zen) the same numbers are often several times
+   * larger, which is a browser fact, not a bug in the detector.
+   */
+  F.perf = function () {
+    const gaps = perf.gaps.slice().sort((a, b) => a - b);
+    const q = (p) => gaps.length ? +gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))].toFixed(1) : null;
+    const sum = gaps.reduce((s, v) => s + v, 0);
+    // Measuring after a stop is normal (stop, then read the report): freeze at the stop.
+    const end = (F.running || !perf.stoppedAt) ? now() : perf.stoppedAt;
+    const uptime = perf.startedAt ? end - perf.startedAt : 0;
+    const calls = { snapshot: perf.snapN, findBubble: perf.bubbleN, lockDial: perf.lockN, sample: perf.sampleN, findCatch: perf.cardN };
+    const totals = { snapshot: perf.snap, findBubble: perf.bubble, lockDial: perf.lock, sample: perf.sample, findCatch: perf.card };
+    const rates = perfRates(calls, totals, uptime);
+    for (const key of Object.keys(rates)) {
+      const r = rates[key];
+      r.callsPerSec = r.callsPerSec == null ? null : +r.callsPerSec.toFixed(1);
+      r.msPerCall = r.msPerCall == null ? null : +r.msPerCall.toFixed(2);
+      r.msPerSec = r.msPerSec == null ? null : +r.msPerSec.toFixed(1);
+      r.share = r.share == null ? null : +r.share.toFixed(3);
+    }
+    return {
+      frames: perf.n,
+      uptimeMs: Math.round(uptime),
+      fps: gaps.length ? +(1000 / (sum / gaps.length)).toFixed(1) : null,
+      p50: q(0.5), p95: q(0.95),
+      worst: gaps.length ? +gaps[gaps.length - 1].toFixed(1) : null,
+      // share is the fraction of wall time; findBubble includes its snapshot, so they overlap.
+      rates,
+    };
+  };
+
   surfaces();
   window.__fish = F;
   return { installed: F.version, ui: !!uiCanvas, game: !!gameCanvas };
@@ -2137,6 +2298,8 @@ const SPECIES = [
     durationMs: 60 * 60 * 1000,
     cooldownMs: 30 * 60 * 1000,
     dailyCapMs: 4 * 60 * 60 * 1000,
+    hiddenStopMs: 2 * 60 * 1000,
+    chain: false,
     window: { on: false, start: '21:00', stop: '23:00' }
   };
 
@@ -2146,6 +2309,8 @@ const SPECIES = [
       durationMs: DEFAULTS.durationMs,
       cooldownMs: DEFAULTS.cooldownMs,
       dailyCapMs: DEFAULTS.dailyCapMs,
+      hiddenStopMs: DEFAULTS.hiddenStopMs,
+      chain: DEFAULTS.chain,
       window: { on: DEFAULTS.window.on, start: DEFAULTS.window.start, stop: DEFAULTS.window.stop },
       fishingMs: 0,
       todayMs: 0,
@@ -2213,6 +2378,11 @@ const SPECIES = [
 
   function stopSession(s, at, reason) {
     if (s.phase === 'running' && s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+    // The session's minutes become today's minutes. Keeping them in fishingMs meant a restart
+    // forgot them: the cap under-counted and the panel's "today" dropped back to the base.
+    var sessionMs = s.fishingMs;
+    s.todayMs = (s.todayMs || 0) + sessionMs;
+    s.fishingMs = 0;
     s.phase = 'cooldown';
     s.cooldownUntil = at + s.cooldownMs;
     s.stopReason = reason || 'user';
@@ -2222,7 +2392,7 @@ const SPECIES = [
     return [
       { type: 'stopCore' },
       { type: 'releaseWakeLock' },
-      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(s.fishingMs / 60000), catches: s.catchCount },
+      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(sessionMs / 60000), catches: s.catchCount },
       { type: 'persist' }
     ];
   }
@@ -2269,7 +2439,7 @@ const SPECIES = [
     if (s.pauseReason === 'hidden') {
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
-        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
         return { state: s, actions: [] };
       }
       if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
@@ -2382,6 +2552,30 @@ const SPECIES = [
     if (fact.type === 'tick') {
       if (s.phase === 'cooldown') {
         if (s.cooldownUntil != null && at >= s.cooldownUntil) {
+          // Optional chaining: rest, then run again, for an unattended night. It is still bounded
+          // by the clock window and the daily cap, and a hidden tab never starts a run.
+          var canChain = s.chain && fact.visible !== false && withinWindow(s.window, at) && (s.todayMs || 0) < s.dailyCapMs;
+          if (canChain) {
+            s.phase = 'running';
+            s.cooldownUntil = null;
+            s.stopReason = null;
+            s.fishingMs = 0;
+            s.catchCount = 0;
+            s.retries = 0;
+            s.errCount = 0;
+            s.errTotal = 0;
+            s.startedAt = at;
+            s.lastTickAt = at;
+            s.lastCatchAt = at;
+            return {
+              state: s,
+              actions: [
+                { type: 'startCore', maxMinutes: Math.ceil(s.durationMs / 60000) + 2 },
+                { type: 'wakeLock' },
+                { type: 'persist' }
+              ]
+            };
+          }
           s.phase = 'idle';
           s.cooldownUntil = null;
           return { state: s, actions: [{ type: 'persist' }] };
@@ -2414,7 +2608,7 @@ const SPECIES = [
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
         s.lastTickAt = at;
-        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
         if (at - s.hiddenSince > HIDDEN_PAUSE_MS) return paused(s, at, 'hidden');
         return { state: s, actions: [] };
       }
@@ -2608,10 +2802,13 @@ const SPECIES = [
   var PREF_KEY = 'autofish.prefs';
   var POS_KEY = 'autofish.panel';
   var LIVE_KEY = 'autofish.live';
+  var BUDGET_KEY = 'autofish:budget:v1';
   var TICK_MS = 1000;
 
   var state = null;
   var baseTodayMs = 0;        // fishing minutes already logged today before this session
+  var budgetAt = 0;           // last periodic write of BUDGET_KEY
+  var budgetDay = '';         // the local day BUDGET_KEY belongs to, for a rollover mid-run
   var banner = '';
   var tickTimer = null;
   var placeTimer = null;
@@ -2664,6 +2861,9 @@ const SPECIES = [
     }
     prefs.resumeAfterReload = !!p.resumeAfterReload;
     prefs.hideUpsell = !!p.hideUpsell;
+    if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
+    prefs.chain = !!p.chain;
+    if (p.profile) prefs.profile = String(p.profile);
     return prefs;
   }
 
@@ -2672,9 +2872,38 @@ const SPECIES = [
       durationMs: state.durationMs,
       cooldownMs: state.cooldownMs,
       dailyCapMs: state.dailyCapMs,
+      hiddenStopMs: state.hiddenStopMs,
+      chain: !!state.chain,
       window: state.window,
       resumeAfterReload: !!window.__panel.resumeAfterReload,
-      hideUpsell: !!window.__panel.hideUpsell
+      hideUpsell: !!window.__panel.hideUpsell,
+      profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
+    });
+  }
+
+  /* ------------------------------------------------------------ budget ---- */
+  /*
+   * Today's fishing time and the cooldown are local facts, not server facts. They used to live
+   * only in memory (cooldown) or only in fishserve's sessions.csv (today's minutes), so a reload
+   * reset the cap to zero and skipped the cooldown entirely. The server is still written to, but
+   * it is a mirror: the browser now knows the budget with or without it.
+   */
+  function loadBudget() {
+    var b = readJSON(BUDGET_KEY, null) || {};
+    var today = dayKey();
+    var ms = typeof b.ms === 'number' && isFinite(b.ms) ? b.ms : 0;
+    if (b.day && b.day !== today) ms = 0;              // a new day starts at zero
+    var cd = typeof b.cooldownUntil === 'number' && b.cooldownUntil > Date.now() ? b.cooldownUntil : null;
+    return { day: today, ms: ms, cooldownUntil: cd };
+  }
+
+  function syncBudget() {
+    if (!state) return;
+    baseTodayMs = state.todayMs || 0;
+    writeJSON(BUDGET_KEY, {
+      day: dayKey(),
+      ms: Math.round((state.todayMs || 0) + (state.fishingMs || 0)),
+      cooldownUntil: state.phase === 'cooldown' && state.cooldownUntil ? state.cooldownUntil : null
     });
   }
 
@@ -2780,11 +3009,15 @@ const SPECIES = [
   }
 
   async function loadToday() {
+    var local = baseTodayMs || 0;
     try {
       var r = await fetch(BASE + '/sessions?day=' + dayKey(), { cache: 'no-store' });
       var j = await r.json();
-      baseTodayMs = (j.minutes || 0) * 60000;
-    } catch (e) { baseTodayMs = 0; }
+      var server = (j.minutes || 0) * 60000;
+      // The server is a mirror, not the authority: whichever knows about more fishing today wins.
+      // A failed fetch keeps the local budget instead of resetting it to zero.
+      baseTodayMs = Math.max(local, server);
+    } catch (e) { baseTodayMs = local; }
   }
 
   function postSessionRow(reason, minutes, catches) {
@@ -2824,6 +3057,33 @@ const SPECIES = [
 
   function fish() { return window.__fish; }
 
+  /** Which build this tab is running. The bundle stamps __fish.version from package.json. */
+  function versionLabel() {
+    var api = fish();
+    var v = api && api.version;
+    if (!v) return '';
+    return v === 'dev' ? 'dev' : 'v' + v;
+  }
+
+  /** The profile picker: every ledger key that exists, plus the one in use. */
+  function fillProfiles() {
+    if (!ui.profile) return;
+    var f = fish();
+    var current = (f && f.logProfile) ? f.logProfile() : 'default';
+    var names = [];
+    try { names = (f && f.logProfiles) ? f.logProfiles() : []; } catch (e) { names = []; }
+    if (names.indexOf('default') < 0) names.unshift('default');
+    if (names.indexOf(current) < 0) names.push(current);
+    ui.profile.textContent = '';
+    names.forEach(function (name) {
+      var opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      ui.profile.appendChild(opt);
+    });
+    ui.profile.value = current;
+  }
+
   var RUNNERS = {
     startCore: function (a) { fish().start({ maxMinutes: a.maxMinutes }); },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
@@ -2831,7 +3091,7 @@ const SPECIES = [
     resumeCore: function () { try { fish().resume(); } catch (e) {} },
     wakeLock: function () { acquireWakeLock(); },
     releaseWakeLock: function () { releaseWakeLock(); },
-    persist: function () { savePrefs(); writeHeartbeat(); },
+    persist: function () { savePrefs(); writeHeartbeat(); syncBudget(); },
     sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches); },
     refuse: function (a) {
       banner = a.reason === 'cooldown' ? 'cooling down — wait for the timer' : 'daily cap reached — no more fishing today';
@@ -2913,6 +3173,8 @@ const SPECIES = [
     '.dot.running{background:#5ad18b;box-shadow:0 0 0 3px rgba(90,209,139,.18)}',
     '.dot.waiting{background:#f2c14e}.dot.paused{background:#f08a4b}.dot.cooldown{background:#7aa2f7}',
     '.title{font-weight:600;letter-spacing:.2px;flex:1}',
+    '.ver{flex:none;font-size:9px;color:#6d7883;letter-spacing:.3px;font-variant-numeric:tabular-nums}',
+    '.ver:empty{display:none}',
     '.chip{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:#aab4bf;border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:1px 7px}',
     '.icon{border:0;background:transparent;color:#9aa4ae;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:6px}',
     '.icon:hover{background:rgba(255,255,255,.08);color:#e8ecef}',
@@ -2934,6 +3196,7 @@ const SPECIES = [
     '.banner:empty{display:none}',
     '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
     '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-top-color:rgba(122,162,247,.30)}',
+    '.banner.info{color:#cfd6dd;background:rgba(255,255,255,.05);border-top-color:rgba(255,255,255,.12)}',
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
@@ -2942,6 +3205,8 @@ const SPECIES = [
     '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
     '.tier span{font-size:8px;letter-spacing:.4px;text-transform:uppercase;color:#8b95a0}',
     '.last{font-size:10.5px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.sel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#e8ecef;font:inherit;font-size:11px;padding:2px 4px;max-width:104px}',
+    '.sel option{background:#12161c;color:#e8ecef}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.hide{display:none}'
   ].join('\n');
@@ -2971,17 +3236,20 @@ const SPECIES = [
     var head = el('div', 'head');
     var dot = el('div', 'dot');
     var title = el('div', 'title', 'AutoFish');
+    var ver = el('div', 'ver', versionLabel());
+    ver.title = 'build ' + ((fish() && fish().version) || 'unknown');
     var chip = el('div', 'chip', 'idle');
     var min = el('button', 'icon', '–');
     min.title = 'collapse';
-    head.append(dot, title, chip, min);
+    head.append(dot, title, ver, chip, min);
 
     var body = el('div', 'body');
 
     body.append(
       stepperRow('Session', 'dur', 5, 240),
       stepperRow('Cooldown', 'cool', 5, 120),
-      stepperRow('Daily cap', 'cap', 30, 480)
+      stepperRow('Daily cap', 'cap', 30, 480),
+      stepperRow('Hidden stop', 'hidden', 2, 60)
     );
 
     // clock window
@@ -3005,6 +3273,26 @@ const SPECIES = [
     upsellRow.append(upsellLabel, upsellToggle);
     body.appendChild(upsellRow);
 
+    // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
+    // window and the cap still bound it.
+    var chainRow = el('div', 'row');
+    var chainLabel = el('div', 'label', 'Chain runs');
+    var chainToggle = el('button', 'icon', 'off');
+    chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
+    chainRow.append(chainLabel, chainToggle);
+    body.appendChild(chainRow);
+
+    // One ledger per profile, because two accounts in one browser used to share one history.
+    var profRow = el('div', 'row');
+    var profLabel = el('div', 'label', 'Profile');
+    var profSel = document.createElement('select');
+    profSel.className = 'sel';
+    profSel.title = 'which catch history this panel reads and writes';
+    var profAdd = el('button', 'icon', '+');
+    profAdd.title = 'new profile with its own catch history';
+    profRow.append(profLabel, profSel, profAdd);
+    body.appendChild(profRow);
+
     var meters = el('div', 'meters');
     meters.append(
       meter('left'), meter('catches'), meter('presses'), meter('today')
@@ -3025,6 +3313,17 @@ const SPECIES = [
       strip.appendChild(cell);
       return { name: name, num: num };
     });
+    // A catch the catalogue does not know is logged as Unknown. It used to have no cell at all, so
+    // the strip read all zeros while the ledger filled - which looks exactly like "not recording".
+    var unknownCell = el('div', 'tier');
+    var unknownNum = el('b', null, '0');
+    var unknownTag = el('span', null, 'UNK');
+    unknownCell.title = 'caught and logged, but the card printed no rarity and the species is not in the built-in catalogue';
+    unknownCell.style.color = TIER_COLORS.Common;
+    unknownCell.style.display = 'none';
+    unknownCell.append(unknownNum, unknownTag);
+    strip.appendChild(unknownCell);
+    tierCells.push({ name: 'Unknown', num: unknownNum, cell: unknownCell });
     var lastCatch = el('div', 'last', 'no catches yet');
     logBox.append(strip, lastCatch);
     body.appendChild(logBox);
@@ -3046,6 +3345,7 @@ const SPECIES = [
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
+      chainToggle: chainToggle, profile: profSel, profileAdd: profAdd,
       primary: primary, banner: bannerEl, pill: pill,
       tierCells: tierCells, lastCatch: lastCatch
     });
@@ -3070,7 +3370,28 @@ const SPECIES = [
       setUpsellHidden(!upsellOn);
       savePrefs();
     });
+    chainToggle.addEventListener('click', function () {
+      dispatch({ type: 'config', at: Date.now(), patch: { chain: !state.chain } });
+      savePrefs();
+    });
+    profSel.addEventListener('change', function () {
+      var f = fish();
+      if (f && f.logProfile) f.logProfile(profSel.value);
+      savePrefs();
+      renderLog();
+    });
+    profAdd.addEventListener('click', function () {
+      var f = fish();
+      if (!f || !f.logProfile) return;
+      var name = prompt('New profile name (its own catch history)', 'alt');
+      if (!name) return;
+      f.logProfile(name);
+      savePrefs();
+      fillProfiles();
+      renderLog();
+    });
     head.addEventListener('pointerdown', startDrag);
+    fillProfiles();
 
     restorePosition();
     render();
@@ -3149,6 +3470,7 @@ const SPECIES = [
   function keyConf(key) {
     if (key === 'dur') return { field: 'durationMs', min: 5 * 60000, max: 720 * 60000, unit: 5 * 60000 };
     if (key === 'cool') return { field: 'cooldownMs', min: 1 * 60000, max: 120 * 60000, unit: 1 * 60000 };
+    if (key === 'hidden') return { field: 'hiddenStopMs', min: 2 * 60000, max: 60 * 60000, unit: 1 * 60000 };
     return { field: 'dailyCapMs', min: 30 * 60000, max: 1440 * 60000, unit: 60 * 60000 };
   }
 
@@ -3198,6 +3520,8 @@ const SPECIES = [
       var n = byTier[cell.name] || 0;
       cell.num.textContent = String(n);
       cell.num.style.opacity = n ? '1' : '.35';
+      // UNK only takes space when it has something to say
+      if (cell.cell) cell.cell.style.display = n ? '' : 'none';
     });
     var last = book && book.last;
     if (!last) {
@@ -3208,9 +3532,12 @@ const SPECIES = [
     var bits = [last.species];
     if (last.weight) bits.push(last.weight);
     if (last.rarity && last.rarity !== 'Unknown') bits.push((last.derived ? '~' : '') + last.rarity);
+    else if (last.rarity === 'Unknown') bits.push('rarity unknown');
     if (last.at) bits.push(new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     ui.lastCatch.textContent = bits.join(' · ');
-    ui.lastCatch.title = 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
+    ui.lastCatch.title = last.rarity === 'Unknown'
+      ? 'caught and logged, but the card printed no rarity and the species is not in the built-in catalogue'
+      : 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
   }
 
   function render() {
@@ -3231,6 +3558,8 @@ const SPECIES = [
     ui.dur.val.textContent = minutesText(state.durationMs);
     ui.cool.val.textContent = minutesText(state.cooldownMs);
     ui.cap.val.textContent = minutesText(state.dailyCapMs);
+    ui.hidden.val.textContent = minutesText(state.hiddenStopMs);
+    ui.chainToggle.textContent = state.chain ? 'on' : 'off';
     ui.time_from.val.textContent = state.window.start;
     ui.time_to.val.textContent = state.window.stop;
 
@@ -3242,7 +3571,7 @@ const SPECIES = [
     else ui.mLeft.textContent = minutesText(state.durationMs);
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));
     ui.mPresses.textContent = String(stats.presses || 0);
-    ui.mToday.textContent = minutesText(baseTodayMs + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
+    ui.mToday.textContent = minutesText((state.todayMs || 0) + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
     renderLog();
 
     var primary = ui.primary;
@@ -3276,11 +3605,24 @@ const SPECIES = [
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
     var focusNote = focus ? FOCUS_NOTE : '';
-    var note = stallNote || seatNote || focusNote || banner;
+    // A stop is the thing the player most needs to understand, and it used to be invisible: the
+    // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
+    var stopNote = '';
+    if (!stallNote && !seatNote && !focusNote && !banner && (phase === 'idle' || phase === 'cooldown') && state.stopReason) {
+      stopNote = 'last stop: ' + state.stopReason;
+      if (phase === 'cooldown' && state.cooldownUntil) {
+        stopNote += ' · start after ' + new Date(state.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else if (state.window.on) {
+        stopNote += ' · window ' + state.window.start + '–' + state.window.stop;
+      }
+      if (state.chain) stopNote += ' · chaining on';
+    }
+    var note = stallNote || seatNote || focusNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (focus && !banner) ui.banner.className = 'banner focus';
+    else if (stopNote && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
 
@@ -3387,6 +3729,14 @@ const SPECIES = [
   /* -------------------------------------------------------------- loop ---- */
 
   function tick() {
+    // A run that crosses midnight starts the new day at zero, the same way a reload does.
+    var dayNow = dayKey();
+    if (budgetDay && dayNow !== budgetDay) {
+      budgetDay = dayNow;
+      baseTodayMs = 0;
+      state.todayMs = 0;
+      syncBudget();
+    }
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
 
@@ -3422,6 +3772,7 @@ const SPECIES = [
     }
 
     if (Date.now() - heartbeatAt > 30000) { heartbeatAt = Date.now(); writeHeartbeat(); }
+    if (Date.now() - budgetAt > 10000) { budgetAt = Date.now(); syncBudget(); }
     if (banner && state.phase === 'running' && banner.indexOf('offline') === -1) { /* keep guard text visible */ }
 
     render();
@@ -3449,11 +3800,29 @@ const SPECIES = [
 
     var S = window.AutoFishSession;
     var prefs = loadPrefs();
-    state = S.createState(prefs.window ? { window: prefs.window, durationMs: prefs.durationMs, cooldownMs: prefs.cooldownMs, dailyCapMs: prefs.dailyCapMs } : prefs);
+    // The ledger key is per profile, and the choice has to survive a reload with the history it names.
+    if (prefs.profile && fish() && fish().logProfile) fish().logProfile(prefs.profile);
+    var budget = loadBudget();
+    var win = prefs.window || S.DEFAULTS.window;
+    state = S.createState({
+      window: { on: !!win.on, start: win.start, stop: win.stop },
+      durationMs: prefs.durationMs || S.DEFAULTS.durationMs,
+      cooldownMs: prefs.cooldownMs || S.DEFAULTS.cooldownMs,
+      dailyCapMs: prefs.dailyCapMs || S.DEFAULTS.dailyCapMs,
+      hiddenStopMs: prefs.hiddenStopMs || S.DEFAULTS.hiddenStopMs,
+      chain: !!prefs.chain,
+      todayMs: budget.ms,
+      cooldownUntil: budget.cooldownUntil,
+      phase: budget.cooldownUntil ? 'cooldown' : 'idle'
+    });
+    baseTodayMs = budget.ms;
+    budgetDay = budget.day;
     window.__panel = window.__panel || {};
     window.__panel.resumeAfterReload = !!prefs.resumeAfterReload;
 
     await loadToday();
+    state.todayMs = baseTodayMs;
+    syncBudget();
 
     // A core already running from a previous session is not ours to guess about.
     var before = null;

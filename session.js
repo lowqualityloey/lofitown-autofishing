@@ -13,6 +13,8 @@
     durationMs: 60 * 60 * 1000,
     cooldownMs: 30 * 60 * 1000,
     dailyCapMs: 4 * 60 * 60 * 1000,
+    hiddenStopMs: 2 * 60 * 1000,
+    chain: false,
     window: { on: false, start: '21:00', stop: '23:00' }
   };
 
@@ -22,6 +24,8 @@
       durationMs: DEFAULTS.durationMs,
       cooldownMs: DEFAULTS.cooldownMs,
       dailyCapMs: DEFAULTS.dailyCapMs,
+      hiddenStopMs: DEFAULTS.hiddenStopMs,
+      chain: DEFAULTS.chain,
       window: { on: DEFAULTS.window.on, start: DEFAULTS.window.start, stop: DEFAULTS.window.stop },
       fishingMs: 0,
       todayMs: 0,
@@ -89,6 +93,11 @@
 
   function stopSession(s, at, reason) {
     if (s.phase === 'running' && s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+    // The session's minutes become today's minutes. Keeping them in fishingMs meant a restart
+    // forgot them: the cap under-counted and the panel's "today" dropped back to the base.
+    var sessionMs = s.fishingMs;
+    s.todayMs = (s.todayMs || 0) + sessionMs;
+    s.fishingMs = 0;
     s.phase = 'cooldown';
     s.cooldownUntil = at + s.cooldownMs;
     s.stopReason = reason || 'user';
@@ -98,7 +107,7 @@
     return [
       { type: 'stopCore' },
       { type: 'releaseWakeLock' },
-      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(s.fishingMs / 60000), catches: s.catchCount },
+      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(sessionMs / 60000), catches: s.catchCount },
       { type: 'persist' }
     ];
   }
@@ -145,7 +154,7 @@
     if (s.pauseReason === 'hidden') {
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
-        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
         return { state: s, actions: [] };
       }
       if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
@@ -258,6 +267,30 @@
     if (fact.type === 'tick') {
       if (s.phase === 'cooldown') {
         if (s.cooldownUntil != null && at >= s.cooldownUntil) {
+          // Optional chaining: rest, then run again, for an unattended night. It is still bounded
+          // by the clock window and the daily cap, and a hidden tab never starts a run.
+          var canChain = s.chain && fact.visible !== false && withinWindow(s.window, at) && (s.todayMs || 0) < s.dailyCapMs;
+          if (canChain) {
+            s.phase = 'running';
+            s.cooldownUntil = null;
+            s.stopReason = null;
+            s.fishingMs = 0;
+            s.catchCount = 0;
+            s.retries = 0;
+            s.errCount = 0;
+            s.errTotal = 0;
+            s.startedAt = at;
+            s.lastTickAt = at;
+            s.lastCatchAt = at;
+            return {
+              state: s,
+              actions: [
+                { type: 'startCore', maxMinutes: Math.ceil(s.durationMs / 60000) + 2 },
+                { type: 'wakeLock' },
+                { type: 'persist' }
+              ]
+            };
+          }
           s.phase = 'idle';
           s.cooldownUntil = null;
           return { state: s, actions: [{ type: 'persist' }] };
@@ -290,7 +323,7 @@
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
         s.lastTickAt = at;
-        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
         if (at - s.hiddenSince > HIDDEN_PAUSE_MS) return paused(s, at, 'hidden');
         return { state: s, actions: [] };
       }

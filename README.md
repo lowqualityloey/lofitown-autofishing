@@ -54,8 +54,9 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 ## The panel
 
 - **Session / Cooldown / Daily cap / Clock window** - how long it fishes, how long it rests after, how much game time it may spend per day, and an optional time-of-day window.
+- **Hidden stop / Chain runs / Profile** - how long the page may stay hidden before the session ends, whether the next session starts itself after its rest, and which catch history this account uses.
 - **left / catches / presses / today** - session time remaining, catches this session, dial presses, game time spent today against the cap.
-- **Rarity strip** - catches per rarity from the local ledger (`COM UNC RAR EPI LEG SEC HAL CHR`).
+- **Rarity strip** - catches per rarity from the local ledger (`COM UNC RAR EPI LEG SEC HAL CHR`), plus `UNK` when the card printed no tier and the species is not in the built-in catalogue.
 - **Last catch** - species, weight, rarity (a leading `~` means the rarity came from the built-in catalogue because the card printed none), and the local time.
 - Drag by the header to move it; **-** collapses it to a 48 px pill, click the pill to restore it.
 
@@ -64,7 +65,7 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 - **Finds prompts in pixels.** The prompts and the reel dial are drawn on the game's UI canvas, so they are located by reading that layer inside `requestAnimationFrame` and matching shapes.
 - **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, so fast and slow spins both land inside the arc.
 - **Scores fish, not clicks.** One fish is many presses (the game shows a level bar), so the unit is the *fish attempt*: it opens at the first press and closes at a parsed catch or when the cast prompt returns. A win is only counted when the catch card's text parses to a species.
-- **Keeps a ledger.** `localStorage` key `autofish:log:v1`: per-species count and best weight, per rarity and per day totals, shiny/golden variants.
+- **Keeps a ledger.** `localStorage` key `autofish:log:v1:<profile>`: per-species count and best weight, per rarity and per day totals, shiny/golden variants, and the names of any species the catalogue did not recognise. One profile per account, so two accounts in one browser never share a history.
 - **Pauses honestly.** A hidden tab pauses the clock, and so does standing up; the session resumes when a prompt comes back and gives up after 30 minutes unseated.
 
 ## How well does it fish?
@@ -73,22 +74,56 @@ Measured on the current build: **28 caught / 30 fish attempts** (Wilson 95% CI 7
 
 ## Limits
 
-- **The tab must stay visible.** The game freezes its own timers when hidden, and the bot stops stepping. Keep it on screen; a real overnight run also needs the machine awake.
+- **The tab must stay visible.** The game freezes its own timers when hidden, and the bot stops stepping. A covered window counts as hidden in both Chrome and Firefox; see [Keeping it running](#keeping-it-running-background-tabs) for the one case that can be fixed. A real overnight run also needs the machine awake.
 - **You seat the character.** Nothing else can.
 - **The game can still win.** Legendary and secret fish need many presses inside a tight clock; a missed click costs the previous gain and the streak.
 - **One tab, one copy.** Loading the script twice mounts two panels.
 - It automates an online game, which can break that game's terms. Your call, your risk. Not affiliated with lofi.town.
+
+## Keeping it running (background tabs)
+
+The game draws on `requestAnimationFrame` and keeps its fishing clock in page time, so a page the
+browser treats as **hidden** stops fishing whatever the bot does. That is a browser rule, not a
+setting in AutoFish:
+
+| What you do | What the page sees | Can it be helped? |
+| :--- | :--- | :--- |
+| Switch to another tab | `hidden` | No. |
+| Minimise the window | `hidden` | No. |
+| Cover the window with another app | `hidden` | Yes: turn off window-occlusion tracking. |
+
+Turning occlusion tracking off keeps a **covered** window rendering:
+
+- **Zen / Firefox** - `about:config` -> `widget.windows.window_occlusion_tracking.enabled` -> `false`.
+- **Chrome / Edge** - launch with
+  `--disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows`, or set
+  the `WindowOcclusionEnabled` policy to `0` (Edge: `SOFTWARE\Policies\Microsoft\Edge`).
+
+The simplest reliable setup is a window that stays on screen: move the game tab into its own window
+and leave it uncovered. The panel pauses the clock when the page hides; **Hidden stop** sets how
+long it may stay hidden before the session ends (2-60 min, default 2). Switching tabs or minimising
+the window is not recoverable - no page gets frames while it is hidden.
 
 ## Nerd corner
 
 In the browser console on app.lofi.town:
 
 ```js
+__fish.version     // which build this tab is running (stamped from package.json)
 __fish.status()    // running, dials, presses, per-band and per-arm accuracy
 __fish.log()       // the catch ledger summary
 __fish.logCsv()    // the same ledger as CSV
+__fish.logProfile()        // the catch history in use
+__fish.logProfiles()       // every profile this browser has
+__fish.perf()      // fps, p50/p95 gap, and per-detector ms/call, ms/s and share
 __fish.opts        // press timing, windows, retry ladders (live-editable)
 ```
+
+`__fish.perf()` is the measurement any tuning has to come from: `rates.<detector>.share` is the
+fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`).
+It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.6.0`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
+
+On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
 
 ## Optional: the server path
 
@@ -103,7 +138,7 @@ Open the printed URL, then drag the bookmarklet to the bookmarks bar (or run it 
 ## Development
 
 ```bash
-node --test                # 110 tests; note: never "node --test tests/"
+node --test                # 137 tests; note: never "node --test tests/"
 node build-userscript.js   # rebuild dist/ after editing any browser file
 ```
 

@@ -10,6 +10,15 @@ const path = require('node:path');
 // the collapse button inside the head never fired.
 const src = fs.readFileSync(path.join(__dirname, '..', 'panel.js'), 'utf8');
 
+test('the panel head names the build, so a stale tab is visible at a glance', () => {
+  // The Neo tab ran a build from before perf() with no way to tell from the panel. The label is
+  // derived from __fish.version (stamped by build-userscript.js), never a hand-typed constant.
+  assert.ok(src.includes('function versionLabel()'), 'the label is derived, not hard-coded');
+  assert.match(src, /head\.append\(dot, title, ver, chip, min\)/, 'the label sits in the head');
+  assert.ok(src.includes("v === 'dev' ? 'dev' : 'v' + v"), 'an unbundled copy says dev, not vdev');
+  assert.ok(src.includes("ver.title = 'build '"), 'hovering explains what it is');
+});
+
 test('the collapse button is wired, and the pill brings the panel back', () => {
   assert.match(src, /min\.addEventListener\('click', function \(\) \{ setCollapsed\(true\); \}\)/);
   assert.match(src, /pill\.addEventListener\('click', function \(\) \{ setCollapsed\(false\); \}\)/);
@@ -127,4 +136,32 @@ test('the Cozier popup hider is opt-in, cosmetic, and tags only what it recognis
   assert.ok(src.includes("upsellToggle.textContent = upsellOn ? 'on' : 'off'"), 'the toggle shows state');
   // cosmetic means cosmetic: nothing here may touch the game or the account
   assert.ok(!/fetch\(|localStorage\.removeItem/.test(fn + sweep), 'the hider makes no network calls and deletes no state');
+});
+
+test('a catch outside the catalogue is visible: an UNK cell and an honest last line', () => {
+  // The Zen account showed "Tubenose Poacher · 0.49kg" with a strip of zeros. The catch was in the
+  // ledger, but Unknown had no cell, so the panel looked like it was recording nothing at all.
+  assert.ok(src.includes("tierCells.push({ name: 'Unknown'"), 'the strip has an Unknown cell');
+  assert.ok(src.includes("cell.cell.style.display = n ? '' : 'none'"), 'it only takes space when it has fish');
+  assert.ok(src.includes("bits.push('rarity unknown')"), 'the last-catch line says why there is no tier');
+  assert.ok(src.includes('not in the built-in catalogue'), 'the tooltip explains the catalogue miss');
+});
+
+test('the budget is local: today and the cooldown survive a reload', () => {
+  assert.ok(src.includes("var BUDGET_KEY = 'autofish:budget:v1'"), 'the budget key exists');
+  assert.ok(src.includes('function syncBudget()'), 'the budget is written');
+  assert.match(src, /budgetAt > 10000/, 'it is flushed every ten seconds, so a crash costs at most that');
+  assert.ok(src.includes('baseTodayMs = Math.max(local, server)'), 'the server is a mirror, not the authority');
+  assert.ok(src.includes('} catch (e) { baseTodayMs = local; }'), 'an offline fetch keeps the local budget');
+  assert.ok(src.includes('state.todayMs = baseTodayMs'), 'mount restores the day before the first tick');
+  assert.ok(src.includes("phase: budget.cooldownUntil ? 'cooldown' : 'idle'"), 'a live cooldown is restored, not bypassed');
+});
+
+test('a stop says what stopped it, and the hidden threshold is configurable', () => {
+  assert.ok(src.includes("stopNote = 'last stop: ' + state.stopReason"), 'the reason is shown');
+  assert.ok(src.includes("start after '"), 'and when the cooldown ends');
+  assert.ok(src.includes("stepperRow('Hidden stop', 'hidden', 2, 60)"), 'the hidden stop has a stepper');
+  assert.match(src, /field: 'hiddenStopMs'/, 'the stepper writes the reducer field');
+  assert.ok(src.includes('chainToggle: chainToggle'), 'the chain toggle is wired');
+  assert.ok(src.includes('Chain runs'), 'and labelled');
 });
