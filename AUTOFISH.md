@@ -1591,6 +1591,24 @@ context, and 0.95 ms is at the same 2.3 ms-or-better scale as the fresh eval, in
 frames per second. Fishing is unaffected - 1 caught, 8 presses, `pressAcceptRate` 1.0, 0 lost - and
 no detector threshold, gate or scan rate was touched to get there.
 
+**Long-run confirmation** (3.8.6, same window, one continuous session, bot running, sampled every
+60 s, `scanCompiled: true` throughout):
+
+| minute | caught / attempts | presses | acceptance | lost | fps | p95 | scan | `lockDial` |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 5 / 5 | 25 | 1.0 | 0 | 139.0 | 9.3 | 0.98 | 6.20 |
+| 2 | 7 / 7 | 36 | 1.0 | 0 | 133.0 | 11.3 | 0.99 | 6.25 |
+| 3 | 9 / 9 | 46 | 1.0 | 0 | 132.0 | 10.9 | 0.99 | 6.24 |
+| 4 | 9 / 10 | 52 | 1.0 | 1 | 135.5 | 10.1 | 0.99 | 6.21 |
+| 5 | 10 / 11 | 57 | 1.0 | 1 | 139.0 | 9.2 | 0.99 | 6.15 |
+| 6 | **12 / 13** | 67 | 1.0 | 1 | 132.8 | 11.0 | 1.00 | 6.21 |
+
+12 caught of 13 attempts (92%), 5.6 presses a catch, `pressAcceptRate` 1.0 the whole way, 1 lost.
+fps stayed 132-139 with p95 9-11 ms, and the scan never left 0.98-1.00 ms across 3,388 `lockDial`
+calls (`lockDial` 4.1% of wall clock). Dial detection is therefore not just still working but
+unchanged in rate - the memo hits 28 of 3,388 calls (0.8%), the same as the 0.6% measured before the
+change, so the scan is finding the same dials it did at 30 ms.
+
 Also note the memo: 8 hits in 1,242 calls (0.6%). The remembered circle almost never answers,
 because the dial only exists while reeling, so it costs a full `sample()` on 93% of calls for a 7%
 chance of skipping the scan. It is cheap enough to keep, but it is not the fast path it looks like.
