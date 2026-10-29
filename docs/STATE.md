@@ -24,7 +24,7 @@
 - [/] **Milestone 2** — trustworthy accuracy: the per-fish-attempt oracle replaced per-press scoring
   (28 caught / 30 attempts, Wilson 95% CI 78.7-98.2%); the dial search went from 83 ms to 4 ms a
   call; fishing was found to be seat-based, so a missing cast prompt is now named, the session clock
-  pauses while unseated, and the pause honours the clock window and the daily cap. 163 tests after the
+  pauses while unseated, and the pause honours the clock window and the daily cap. 177 tests after the
   2026-10-29 review round (dial memory + whole-surface recovery, card-text cursor, press acceptance,
   local day store, CSS coordinate conversion).
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
@@ -48,8 +48,8 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-10-27-in-game-panel-design.md` (approved)
-- **Active Task Spec**: `docs/superpowers/plans/2026-10-27-autofish-panel.md` (approved route)
+- **Active RFC / Spec**: `docs/specs/2026-10-28-catch-log.md` (the panel spec itself was never committed; its decisions are the ADR log in §6)
+- **Active Task Spec**: `docs/tasks/autofish-panel.md`
 - **Key Source Files in Flight**: `autofish.js`, `panel.js`, `session.js`, `layout.js`, `build-userscript.js`, `dist/autofish.user.js`, `tests/*.test.js`
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
@@ -186,7 +186,7 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ## 6. Recent Architectural Decisions (ADR Log)
 | Date | Title & Scope | Decision Summary | ADR File |
 | :--- | :--- | :--- | :--- |
-| 2026-10-27 | Control surface | In-game floating DOM panel (shadow root) instead of a local dashboard page, because a separate window would cover the game and a hidden/covered game freezes. | `docs/specs/2026-10-27-in-game-panel-design.md` |
+| 2026-10-27 | Control surface | In-game floating DOM panel (shadow root) instead of a local dashboard page, because a separate window would cover the game and a hidden/covered game freezes. | `docs/tasks/autofish-panel.md` |
 | 2026-10-27 | Session history | Records live in the server (`sessions.csv`, `GET /sessions?day=`), never in localStorage. | same spec |
 | 2026-10-27 | Pause semantics | Pause is not a stop: no cooldown, and paused/waiting time never counts toward session length or the daily cap. | same spec |
 | 2026-10-28 | Catch history | Per-catch ledger in `localStorage` (`autofish:log:v1`), written only from parsed catch text. Session records stay server-only; the ledger is history, never a scoreboard, and rarity may be filled from the embedded catalogue with `derived:true`. | `docs/specs/2026-10-28-catch-log.md` |
@@ -196,6 +196,8 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-10-28 | Seat-based fishing | `showCastButton` is emitted only from the character's sit path, so an unseated character can never be rescued by clicking. The bot never synthesises movement (an earlier walk rung unseated the character and lost the run) and names the condition as `needsSeat` after 45 s without a prompt. | `AUTOFISH.md` why the bot stops casting |
 | 2026-10-28 | Seat pause | `fact.seat` pauses the session before any fishing time is credited, without pausing the core (the core is what spots the returning prompt). The pause honours the clock window and an already-spent daily cap, and ends with `no-seat` after 30 minutes. | this file, section 7 |
 | 2026-10-28 | Frame budget (dial search) | The dominant cost was `lockDial` at 83.3 ms a call eight times a second (670 ms/s, 67% of the main thread) - 99,000 rim samples per call, each with its own trig call and a fresh 4-element array. Geometry unchanged: trig tables, a `Uint8Array` rim mask per read, index-only predicates, and `inkMix` without per-pixel arrays. `findCatch` throttled to 100 ms. Measured: 4.2-4.3 ms a call, idle frame rate 32.2 -> 140.6 fps. | `AUTOFISH.md` 2026-10-28 the dial search was the real lag |
+| 2026-10-29 | Session budget | `autofish:budget:v1` in localStorage is the authority for today's minutes and the cooldown; the server's `/sessions` is merged by `max()` and is no longer required. A stop folds the session into `todayMs`, so a restart counts it. | `AUTOFISH.md` 2026-10-29 |
+| 2026-10-29 | Catch history | The ledger key is per profile (`autofish:log:v1:<profile>`), migrating the pre-profile key to `default`. A species outside the catalogue is logged as `Unknown`, shown in a `UNK` cell and kept in an `unknown` worklist. | `AUTOFISH.md` 2026-10-29 |
 
 ---
 
@@ -234,7 +236,10 @@ Staging area for rules observed during sessions but not yet approved as invarian
    `autofish:dial:v1` was written as `{cx:557, cy:286, R:84, cw:1117, ch:785}`. Still open: wipe that
    key and confirm `dialAnywhere()` finds a real dial on a fresh run (verified only on a synthetic
    real-scale dial so far), and the fixed CAST box missed every prompt at this size (the whole-surface
-   fallback carried it) — see `AUTOFISH.md` 2026-10-29 live run.
+   fallback carried it) — see `AUTOFISH.md` 2026-10-29 live run. The box was fixed afterwards (live
+   surface) and the fresh-run recovery was verified; see the prompt-box section there.
+6. Measure the Zen frame budget with `__fish.perf()` (bot stopped, then running) before changing any
+   scan throttle; a Gecko readback is not a Chromium one.
 
 ---
 
@@ -253,7 +258,8 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-10-29 | lead (DSH session) | Cast ladder + dial hint | The live tab was still running a stale `3.6.1` build with perf wrappers whose `castRecovery(3)` returned `tap:false`, so earlier live readings described the old ladder. Fixed core injected and watched at 1117x785: 7 catches / 7 attempts, 0 lost, 16 dials / 16 hits / 35 presses (5.0 presses a catch), 14/14 bubble rows `tap:true`; `catches.csv` agrees (Epic Betta, Uncommon Tripod Fish). Session ended at `needs a seat`, not a dial defect. 127 tests. |
 | 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
 | 2026-10-29 | lead (DSH session) | Senior review round | Fixed the six review findings: persisted dial geometry + whole-surface recovery (no hardcoded seed), text cursor advance on an unparsed card, press acceptance by the new-triangle spawn (`sweepReport`/`accuracy` rewired), dead cast-retry ladder call removed, `floodComponents` de-allocation, local day store for the daily cap, CSS coordinate conversion at the tap/zones boundary. 156 tests; `dist/` rebuilt. |
-| 2026-10-29 | lead (DSH session) | Live-surface prompt box | The CAST/REEL box is derived from the live canvas (`promptBox`) instead of the 1620x1031 literal. Field run at 1117x785: 14/14 bubbles from the box, 0 from `bubble anywhere` (was 11/11 fallback), 8 caught / 8 attempts, 0 lost, 34/34 presses accepted. `build-userscript.js` now stamps `F.version` from `package.json`, so an updated install no longer reports `autofish 3.0`; Tampermonkey installed 3.7.1 and the page reports it. 163 tests. |
+| 2026-10-29 | lead (DSH session) | Live-surface prompt box | The CAST/REEL box is derived from the live canvas (`promptBox`) instead of the 1620x1031 literal. Field run at 1117x785: 14/14 bubbles from the box, 0 from `bubble anywhere` (was 11/11 fallback), 8 caught / 8 attempts, 0 lost, 34/34 presses accepted. `build-userscript.js` now stamps `F.version` from `package.json`, so an updated install no longer reports `autofish 3.0`. 163 tests. |
+| 2026-10-29 | lead (DSH session) | Merge of the parallel feature branch | Installing 3.7.1 replaced a 3.6.1 build from the `repo-ingest` branch and lost the budget store, per-profile ledger, 181-species catalogue, hidden-stop/chain controls and the perf probe the user noticed. Merged `d544589` into this branch, resolved the panel budget duplication in favour of the budget store (removing `autofish:today:v1`), and released 3.8.0. 177 tests. |
 
 ---
 

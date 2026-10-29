@@ -1269,6 +1269,14 @@ from `status()` and the panel. The build now stamps `F.version` from `package.js
 time of writing) and a test fails if the two drift. Tampermonkey's own dialog confirmed the update:
 `INSTALLED VERSION v3.7.0` → script `v3.7.1`, and the reloaded page reports `autofish 3.7.1`.
 
+**Installing that fix alone was a regression.** The build in the browser was 3.6.1 from the
+parallel `repo-ingest` branch, which carries work this branch never had: the local budget store, a
+per-profile catch ledger, the regenerated 181-species catalogue, the hidden-stop stepper and chain
+restarts, and the `__fish.perf()` probe. 3.7.1 replaced all of it, which is why the panel looked old
+and thin. `d544589` is merged into this line now; the duplicate day store added here was dropped in
+favour of the budget store (`autofish:today:v1` and its test are gone), and the merged build is
+3.8.0 with 177 tests.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.
@@ -1337,3 +1345,90 @@ Automation is almost certainly against lofi.town's rules and ban risk sits with 
 does client-side input only: no packet tampering, no memory editing, no fingerprint evasion, no
 hidden-tab operation. It refuses to run while the tab is not visible precisely because pressing
 into a frozen game is pure risk.
+## 2026-10-29 a logged fish that looked lost, and a budget that reset itself
+
+Four reports from a two-account, two-browser setup. Three were reproducible from the source alone.
+
+**The rarity strip read all zeros while catches were being logged.** The Zen account's last-catch
+line was `Tubenose Poacher · 0.49kg · 01:28 am` - no tier, which is exactly what `renderLog()`
+prints whenever the tier is `Unknown`. The card printed no rarity (common fish do not), and
+`Tubenose Poacher` was not in the 135-species catalogue, so `describeCatch()` returned `Unknown`.
+The bundle had moved its seasonal fish into a second table, built through a helper that the
+literal-object scan could not see. The ledger *was* writing the catch; the strip has eight cells and
+`Unknown` had none, so a working log looked like a broken one. The last-catch line updating while all eight cells sat at 0
+is the tell: both are written by the same `addToLog()` call.
+
+The fix is small on purpose: a ninth `UNK` cell that only takes space when it has fish, an honest
+`rarity unknown` in the last-catch line, and an `unknown` map in the ledger so the missing species
+become a worklist instead of a silent pile. The catalogue was regenerated from the live bundle in
+the same change: the seasonal fish are built through a helper (`n("Tubenose Poacher","Uncommon",.1,1)`)
+and their gold comes from the bundle's own per-tier map, so the generator now reads both shapes.
+181 species (135 base + 46 seasonal); Tubenose Poacher resolves to Uncommon (0.1-1 kg, 20 gold).
+
+**"Sometimes it stops" is the 120-second hidden threshold.** A hidden page pauses at 5 s and *stops*
+the session at 120 s (`HIDDEN_STOP_MS`), then cooldown, then idle. Sessions never chain, so a run
+survives being away for under two minutes and dies if you are away longer. `Hidden stop` is now a
+2-60 minute stepper, and `Chain runs` (off by default) restarts after the cooldown while the window
+is open, the cap is unspent and the page is visible.
+
+**The daily cap was server-only.** `loadToday()` set today's minutes to 0 on any fetch failure, and
+`savePrefs()` never stored `todayMs` or `cooldownUntil`, so without fishserve a reload zeroed the
+cap *and* bypassed the cooldown; with it, the two browsers each had their own view. The budget now
+lives in `autofish:budget:v1`, flushed every 10 s and on every stop, merged with the server by
+`max()` on mount, and rolled over at midnight. `stopSession()` folds the session into `todayMs`, so
+a second session counts against what the first one spent instead of forgetting it.
+
+**The ledger was keyed by origin, not account.** Two accounts in one browser shared one strip. The
+key is now `autofish:log:v1:<profile>`, the pre-profile key migrates to `default` on first load, and
+the panel has a profile picker plus `__fish.logProfile()`.
+
+Verification: `node --test` = 137 pass / 0 fail, including new guards for the fold, chaining, the
+hidden threshold, the unknown-species path, the seasonal catalogue rows and the budget merge.
+`dist/autofish.user.js` rebuilt (182,477 bytes).
+
+**Not fixed here: the Zen lag.** It needs a measurement from that machine, so the build ships
+`__fish.perf()` (frame p50/p95 plus per-detector ms/s and share of wall time) rather than a guessed
+throttle. A covered
+window is `hidden` on both Chromium and Gecko; the README records the one occlusion setting that
+helps and the cases that cannot be helped.
+
+## 2026-10-29 the same dial search in a second browser: 38.8 ms, still a third of the thread
+
+The Neo tab (Chromium, same Windows host) was running a build from before `perf()` existed - no
+`__fish.perf`, 156 catches on the clock - so it could not be reloaded for a measurement. Attribution
+came from wrapping the four detectors in place for 20 s and restoring them before the call returned;
+that wrapper is now [scripts/perf-window.js](scripts/perf-window.js), the console path for any build
+that predates the probe.
+
+| Detector | Calls/s | ms/call | ms/s | Share |
+|---|---|---|---|---|
+| `findBubble` | 93.1 | 0.18 | 17 | 0.02 |
+| `findCatch` | 93.1 | 0.26 | 24 | 0.02 |
+| `lockDial` | 8.0 | **38.8** | **310** | **0.31** |
+
+95.6 fps, p50 7.0 ms, p95 34.9 ms, worst 97.4 ms, `stats.errors` 0. `findBubble`'s 93 calls/s is the
+rAF rate, so this loop runs one pass per frame, not on a timer.
+
+The answer to "tune the scan throttles" is in the two cheap rows: 0.02 each, 41 ms a second between
+them. There is nothing there to tune, and throttling them would trade correctness for noise. The dial
+search is still 31% of the main thread on a machine that is twice as fast at it as the earlier tab
+(38.8 ms against 83.3 ms) - every one of those 8 calls a second lands as a 35-97 ms frame, which is
+what "feels laggy" looks like in a gap series. The fixed build's 4.2 ms is the only number that
+changes it.
+
+Not measured: the fixed build in Neo. Its dial path is the one already measured at 4.2 ms, and
+reloading away a live 156-catch session to prove it would cost the run. The after-number on the
+machine that reports the lag still needs one paste of the script above in that tab.
+
+## 2026-10-29 the build now says which build it is
+
+Two browsers, one userscript, and the same `@version 3.5.0` across a dozen landed changes: the Neo
+tab was running code from before `perf()` existed and there was no way to tell from the panel.
+`__fish.version` was a hand-typed `'autofish 3.0'` that had tracked nothing for several releases, so
+the one field that could have answered the question was actively misleading.
+
+The build now stamps `package.json`'s version into the core (`stamp()` asserts the placeholder
+occurs exactly once, so a rename cannot silently ship `dev`), the panel head prints `v3.6.0` next to
+the title, and `F.report()` carries the same string. `v3.6.0` is the first release number that covers
+the dial-search fix, the shared snapshot, the local budget and the profile-keyed ledger - so the
+number in a header now distinguishes a stale tab from a fixed one without a console inspection.

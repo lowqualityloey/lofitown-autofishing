@@ -19,7 +19,8 @@ const CODE = SRC.slice(a + OPEN.length, b);
 const EXPORTS = [
   'SPECIES', 'TIER_ORDER', 'LOG_KEY', 'TIER_BY_LOWER', 'SPECIES_BY_NAME', 'tidyName',
   'normTier', 'parseWeightKg', 'splitVariant', 'speciesInfo', 'describeCatch', 'logDay',
-  'emptyLog', 'addToLog', 'trimLog', 'logSummary', 'csvCell', 'logCsv', 'loadLedger', 'saveLedger'
+  'emptyLog', 'addToLog', 'trimLog', 'logSummary', 'csvCell', 'logCsv', 'loadLedger', 'saveLedger',
+  'logProfiles', 'logKey'
 ].join(', ');
 
 /** localStorage that can be pre-seeded, and can refuse reads or writes like a real blocked store. */
@@ -35,7 +36,10 @@ function store(opts) {
     setItem(k, v) {
       if (o.throwWrite) throw new Error('quota exceeded');
       data.set(k, String(v));
-    }
+    },
+    // the real Storage exposes these, and logProfiles() enumerates keys through them
+    get length() { return data.size; },
+    key(i) { return Array.from(data.keys())[i] == null ? null : Array.from(data.keys())[i]; }
   };
 }
 
@@ -57,8 +61,8 @@ test('the block exports the catalogue and the ledger helpers', () => {
   assert.equal(T.LOG_KEY, 'autofish:log:v1');
 });
 
-test('the catalogue is embedded once: 135 fish across the eight rarity tiers', () => {
-  assert.equal(T.SPECIES.length, 135);
+test('the catalogue is embedded once: 181 fish across the eight rarity tiers', () => {
+  assert.equal(T.SPECIES.length, 181);
   assert.deepEqual(T.TIER_ORDER, ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas']);
   const names = new Set();
   const perTier = {};
@@ -75,8 +79,21 @@ test('the catalogue is embedded once: 135 fish across the eight rarity tiers', (
     perTier[tier] = (perTier[tier] || 0) + 1;
   }
   assert.deepEqual(perTier, {
-    Common: 23, Uncommon: 22, Rare: 19, Epic: 25, Legendary: 26, Secret: 8, Halloween: 6, Christmas: 6
+    Common: 33, Uncommon: 31, Rare: 28, Epic: 35, Legendary: 33, Secret: 9, Halloween: 6, Christmas: 6
   });
+});
+
+test('the seasonal table is part of the catalogue, not an Unknown', () => {
+  // The live bundle builds the seasonal/region fish through a helper, so the old literal-object
+  // scan missed all 46 of them. Tubenose Poacher was caught live and logged as Unknown because of it.
+  const poacher = T.speciesInfo('Tubenose Poacher');
+  assert.equal(poacher.known, true, 'the seasonal table is in the catalogue');
+  assert.equal(poacher.rarity, 'Uncommon');
+  assert.equal(T.speciesInfo('Arctic Cod').rarity, 'Common');
+  const deep = T.speciesInfo('The Deepest Rock');
+  assert.equal(deep.known, true, 'a two-argument helper row is still a species');
+  assert.equal(deep.minWeight, 1, 'the helper default weight is 1');
+  assert.equal(deep.maxWeight, 10, 'the helper default maximum is 10');
 });
 
 test('speciesInfo is case-insensitive and reports whether the name is known', () => {
@@ -245,10 +262,13 @@ test('a saved ledger survives a JSON round trip and keeps accumulating', () => {
   const book = first.loadLedger();
   assert.equal(book.total, 0);
   first.saveLedger(first.addToLog(book, catchOf('Tuna', 'Common', '4 kg'), 2000));
-  assert.equal(first.store.data.has('autofish:log:v1'), true);
+  assert.equal(first.store.data.has('autofish:log:v1:default'), true, 'the default profile owns the ledger key');
 
-  const second = load({ seed: { 'autofish:log:v1': first.store.data.get('autofish:log:v1') } });
+  // An install from before profiles existed still holds autofish:log:v1; it must be migrated, not
+  // ignored, or the upgrade looks like every catch was lost.
+  const second = load({ seed: { 'autofish:log:v1': first.store.data.get('autofish:log:v1:default') } });
   const reread = second.loadLedger();
+  assert.equal(second.store.data.has('autofish:log:v1:default'), true, 'the legacy ledger was copied forward');
   assert.equal(reread.total, 1);
   assert.equal(reread.species.Tuna.n, 1);
   const grown = second.saveLedger(second.addToLog(reread, catchOf('Tuna', 'Common', '5 kg'), 3000));
@@ -272,4 +292,36 @@ test('saveLedger reports whether the write landed', () => {
   assert.equal(ok.saveLedger(ok.emptyLog(1)), true);
   const denied = load({ throwWrite: true });
   assert.equal(denied.saveLedger(denied.emptyLog(1)), false, 'quota or a blocked store must be reportable');
+});
+
+test('a species the catalogue does not know is caught, counted, and named', () => {
+  // Tubenose Poacher was the live case: caught, logged, and shown with no tier. It is in the
+  // catalogue now, so this test stands in a name no bundle will ever ship.
+  const info = catchOf('Uncatalogued Test Fish', '', '0.49kg');
+  assert.equal(info.rarity, 'Unknown');
+  assert.equal(info.derived, true);
+  assert.equal(info.known, false);
+  const book = T.emptyLog(1000);
+  T.addToLog(book, info, 2000);
+  const s = T.logSummary(book, 2000);
+  assert.equal(s.total, 1);
+  assert.equal(s.top[0].species, 'Uncatalogued Test Fish');
+  assert.equal(s.unknown['Uncatalogued Test Fish'], 1);
+  assert.deepEqual(s.unknownNames, ['Uncatalogued Test Fish']);
+  assert.equal(s.byRarity.find((r) => r.rarity === 'Unknown').n, 1, 'Unknown must be reported, not dropped');
+});
+
+test('a known fish never lands in the unknown worklist', () => {
+  const book = T.emptyLog(1000);
+  T.addToLog(book, catchOf('Tuna', 'Common', '4 kg'), 2000);
+  const s = T.logSummary(book, 2000);
+  assert.deepEqual(s.unknown, {});
+  assert.equal(s.byRarity.find((r) => r.rarity === 'Unknown'), undefined);
+});
+
+test('each profile has its own ledger key, and the profiles are discoverable', () => {
+  const book = JSON.stringify(T.addToLog(T.emptyLog(1), catchOf('Tuna', 'Common', '4 kg'), 2));
+  const multi = load({ seed: { 'autofish:log:v1:default': book, 'autofish:log:v1:alt': book } });
+  assert.deepEqual(multi.logProfiles(), ['alt', 'default']);
+  assert.equal(multi.logKey(), 'autofish:log:v1:default');
 });

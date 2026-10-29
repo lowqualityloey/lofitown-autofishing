@@ -255,3 +255,67 @@ test('a catch resets the no-catch clock', () => {
   const r = tick(state, T0 + 700_000);
   assert.equal(r.state.phase, 'running');
 });
+
+/* ------------------------------------------------------- budget persistence - */
+
+test('a stop folds the session into today, so a restart cannot forget it', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 10 * 60_000));
+  const r = reduce(state, { type: 'stop', at: T0 + 10 * 60_000, reason: 'user' });
+  assert.equal(r.state.fishingMs, 0, 'the session time moved into today');
+  assert.equal(r.state.todayMs, 10 * 60_000);
+  assert.equal(r.actions.find(a => a.type === 'sessionRow').minutes, 10, 'the row still reports the session');
+});
+
+test('a second session counts against the cap the first one spent', () => {
+  let { state } = reduce(createState({ dailyCapMs: 630_000 }), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 600_000, { todayMs: 0 }));
+  ({ state } = reduce(state, { type: 'stop', at: T0 + 600_000, reason: 'user' }));
+  assert.equal(state.todayMs, 600_000);
+  ({ state } = tick(state, T0 + 2_400_000, { todayMs: 600_000 }));   // 30 min cooldown, over
+  assert.equal(state.phase, 'idle');
+  const again = reduce(state, { type: 'start', at: T0 + 2_400_000 });
+  assert.equal(again.state.phase, 'running');
+  assert.equal(again.state.todayMs, 600_000, 'the start kept the day');
+  const over = tick(again.state, T0 + 2_460_000, { todayMs: 600_000 });
+  assert.equal(over.state.stopReason, 'daily-cap', 'ten minutes of the ten-and-a-half were already spent');
+});
+
+/* ---------------------------------------------------------------- chaining - */
+
+test('chain runs restarts after the cooldown, within the window and the cap', () => {
+  let { state } = reduce(createState({ chain: true, cooldownMs: 60_000 }), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'stop', at: T0 + 60_000, reason: 'user' }));
+  assert.equal(state.phase, 'cooldown');
+  const r = tick(state, T0 + 121_000, { visible: true });
+  assert.equal(r.state.phase, 'running');
+  assert.ok(r.actions.some(a => a.type === 'startCore'), 'the next session starts itself');
+  assert.equal(r.state.stopReason, null, 'the old stop reason is cleared');
+});
+
+test('chain runs never starts while the tab is hidden', () => {
+  let { state } = reduce(createState({ chain: true, cooldownMs: 60_000 }), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'stop', at: T0 + 60_000, reason: 'user' }));
+  const r = tick(state, T0 + 121_000, { visible: false });
+  assert.equal(r.state.phase, 'idle', 'a hidden tab must not start itself');
+});
+
+test('chain runs stops at a spent cap instead of restarting', () => {
+  let { state } = reduce(createState({ chain: true, cooldownMs: 60_000, dailyCapMs: 60_000 }), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'stop', at: T0 + 60_000, reason: 'user' }));
+  assert.equal(state.todayMs, 60_000);
+  const r = tick(state, T0 + 121_000, { visible: true, todayMs: 60_000 });
+  assert.equal(r.state.phase, 'idle');
+});
+
+test('a longer hidden stop keeps the run paused instead of ending it', () => {
+  let { state } = reduce(createState({ hiddenStopMs: 10 * 60_000 }), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 2000, { visible: false }));
+  ({ state } = tick(state, T0 + 8000, { visible: false }));
+  assert.equal(state.phase, 'paused');
+  ({ state } = tick(state, T0 + 125_000, { visible: false }));
+  assert.equal(state.phase, 'paused', 'a two-minute cover is not a stop when the threshold is ten');
+  const r = tick(state, T0 + 605_000, { visible: false });
+  assert.equal(r.state.phase, 'cooldown');
+  assert.equal(r.state.stopReason, 'hidden');
+});

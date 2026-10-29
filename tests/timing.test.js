@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, pressOutcome, castRecovery };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery']) {
+  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -252,6 +252,22 @@ test('castRecovery walks up a bounded ladder: tap, then the keybind as well', ()
   // while a REEL! prompt sat on screen for twenty minutes).
   assert.deepEqual(T.castRecovery(3), { tap: true, space: true, walk: false });
   assert.deepEqual(T.castRecovery(9), { tap: true, space: true, walk: false });
+});
+
+test('perfRates reports calls/second, ms/call, ms/s and share of wall time', () => {
+  const r = T.perfRates({ sample: 600, findCatch: 0 }, { sample: 1200, findCatch: 0 }, 10_000);
+  assert.equal(r.sample.callsPerSec, 60);
+  assert.equal(r.sample.msPerCall, 2);
+  assert.equal(r.sample.msPerSec, 120);
+  assert.equal(r.sample.share, 0.12);
+  assert.equal(r.findCatch.msPerCall, null);
+  assert.equal(r.findCatch.msPerSec, 0);
+  assert.deepEqual(T.perfRates({}, {}, 0), {}, 'nothing measured is an empty report, not NaN');
+  // no uptime yet: rates are unknown, but a per-call average is still knowable
+  const cold = T.perfRates({ sample: 10 }, { sample: 5 }, 0);
+  assert.equal(cold.sample.callsPerSec, null);
+  assert.equal(cold.sample.msPerSec, null);
+  assert.equal(cold.sample.msPerCall, 0.5);
 });
 
 test('castRecovery never walks - a walk would stand the character out of the fishing seat', () => {

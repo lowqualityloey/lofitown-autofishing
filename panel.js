@@ -24,10 +24,13 @@
   var PREF_KEY = 'autofish.prefs';
   var POS_KEY = 'autofish.panel';
   var LIVE_KEY = 'autofish.live';
+  var BUDGET_KEY = 'autofish:budget:v1';
   var TICK_MS = 1000;
 
   var state = null;
   var baseTodayMs = 0;        // fishing minutes already logged today before this session
+  var budgetAt = 0;           // last periodic write of BUDGET_KEY
+  var budgetDay = '';         // the local day BUDGET_KEY belongs to, for a rollover mid-run
   var banner = '';
   var tickTimer = null;
   var placeTimer = null;
@@ -82,6 +85,9 @@
     }
     prefs.resumeAfterReload = !!p.resumeAfterReload;
     prefs.hideUpsell = !!p.hideUpsell;
+    if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
+    prefs.chain = !!p.chain;
+    if (p.profile) prefs.profile = String(p.profile);
     return prefs;
   }
 
@@ -90,9 +96,38 @@
       durationMs: state.durationMs,
       cooldownMs: state.cooldownMs,
       dailyCapMs: state.dailyCapMs,
+      hiddenStopMs: state.hiddenStopMs,
+      chain: !!state.chain,
       window: state.window,
       resumeAfterReload: !!window.__panel.resumeAfterReload,
-      hideUpsell: !!window.__panel.hideUpsell
+      hideUpsell: !!window.__panel.hideUpsell,
+      profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
+    });
+  }
+
+  /* ------------------------------------------------------------ budget ---- */
+  /*
+   * Today's fishing time and the cooldown are local facts, not server facts. They used to live
+   * only in memory (cooldown) or only in fishserve's sessions.csv (today's minutes), so a reload
+   * reset the cap to zero and skipped the cooldown entirely. The server is still written to, but
+   * it is a mirror: the browser now knows the budget with or without it.
+   */
+  function loadBudget() {
+    var b = readJSON(BUDGET_KEY, null) || {};
+    var today = dayKey();
+    var ms = typeof b.ms === 'number' && isFinite(b.ms) ? b.ms : 0;
+    if (b.day && b.day !== today) ms = 0;              // a new day starts at zero
+    var cd = typeof b.cooldownUntil === 'number' && b.cooldownUntil > Date.now() ? b.cooldownUntil : null;
+    return { day: today, ms: ms, cooldownUntil: cd };
+  }
+
+  function syncBudget() {
+    if (!state) return;
+    baseTodayMs = state.todayMs || 0;
+    writeJSON(BUDGET_KEY, {
+      day: dayKey(),
+      ms: Math.round((state.todayMs || 0) + (state.fishingMs || 0)),
+      cooldownUntil: state.phase === 'cooldown' && state.cooldownUntil ? state.cooldownUntil : null
     });
   }
 
@@ -197,56 +232,22 @@
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
 
-  // <today-store>
-  var TODAY_KEY = 'autofish:today:v1';
-
-  /** Minutes already logged today by earlier page loads; a different day is zero. */
-  function todayFrom(raw, day) {
-    try {
-      var p = JSON.parse(raw);
-      if (!p || p.day !== day || typeof p.ms !== 'number' || !isFinite(p.ms) || p.ms < 0) return 0;
-      return Math.floor(p.ms);
-    } catch (e) { return 0; }
-  }
-
-  /** Add one finished session to the day's total, returning the new store record. */
-  function todayMerge(raw, day, addMs) {
-    var next = Math.max(0, todayFrom(raw, day) + (Number(addMs) || 0));
-    return { day: day, ms: Math.round(next) };
-  }
-  // </today-store>
-
-  function readTodayMs() {
-    try { return todayFrom(localStorage.getItem(TODAY_KEY), dayKey()); } catch (e) { return 0; }
-  }
-
-  function writeTodayMs(ms) {
-    try { localStorage.setItem(TODAY_KEY, JSON.stringify({ day: dayKey(), ms: Math.max(0, Math.round(ms)) })); } catch (e) {}
-  }
-
-  /** A finished session counts toward today even when there is no server to record it. */
-  function addTodayMs(ms) {
-    var raw = null;
-    try { raw = localStorage.getItem(TODAY_KEY); } catch (e) { raw = null; }
-    var rec = todayMerge(raw, dayKey(), ms);
-    try { localStorage.setItem(TODAY_KEY, JSON.stringify(rec)); } catch (e) {}
-    return rec.ms;
-  }
-
   async function loadToday() {
-    baseTodayMs = readTodayMs();
-    if (!BASE) return;                       // the local day store is the cap's source of truth
+    // The local budget already answered; the server is only a mirror and may not exist at all
+    // (the inlined userscript has BASE null by design).
+    var local = baseTodayMs || 0;
+    if (!BASE) return;
     try {
       var r = await fetch(BASE + '/sessions?day=' + dayKey(), { cache: 'no-store' });
       var j = await r.json();
-      var serverMs = (j.minutes || 0) * 60000;
-      if (serverMs > baseTodayMs) { baseTodayMs = serverMs; writeTodayMs(serverMs); }
-    } catch (e) { /* no server: the store already answered */ }
+      var server = (j.minutes || 0) * 60000;
+      // Whichever knows about more fishing today wins; a failed fetch keeps the local budget.
+      baseTodayMs = Math.max(local, server);
+    } catch (e) { baseTodayMs = local; }
   }
 
   function postSessionRow(reason, minutes, catches) {
-    addTodayMs(minutes * 60000);             // counts even when no server records the row
-    if (!BASE) return;
+    if (!BASE) return;                       // the budget is already local; nothing to mirror
     try {
       fetch(BASE + '/session', {
         method: 'POST',
@@ -284,11 +285,38 @@
 
   function fish() { return window.__fish; }
 
+  /** Which build this tab is running. The bundle stamps __fish.version from package.json. */
+  function versionLabel() {
+    var api = fish();
+    var v = api && api.version;
+    if (!v) return '';
+    return v === 'dev' ? 'dev' : 'v' + v;
+  }
+
+  /** The profile picker: every ledger key that exists, plus the one in use. */
+  function fillProfiles() {
+    if (!ui.profile) return;
+    var f = fish();
+    var current = (f && f.logProfile) ? f.logProfile() : 'default';
+    var names = [];
+    try { names = (f && f.logProfiles) ? f.logProfiles() : []; } catch (e) { names = []; }
+    if (names.indexOf('default') < 0) names.unshift('default');
+    if (names.indexOf(current) < 0) names.push(current);
+    ui.profile.textContent = '';
+    names.forEach(function (name) {
+      var opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      ui.profile.appendChild(opt);
+    });
+    ui.profile.value = current;
+  }
+
   var RUNNERS = {
     startCore: function (a) {
       // A second Start in the same page must see the minutes the first session just logged; the
       // reducer has already reset fishingMs, so the day's total has to come from the store.
-      baseTodayMs = readTodayMs();
+      baseTodayMs = loadBudget().ms;
       fish().start({ maxMinutes: a.maxMinutes });
     },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
@@ -296,7 +324,7 @@
     resumeCore: function () { try { fish().resume(); } catch (e) {} },
     wakeLock: function () { acquireWakeLock(); },
     releaseWakeLock: function () { releaseWakeLock(); },
-    persist: function () { savePrefs(); writeHeartbeat(); },
+    persist: function () { savePrefs(); writeHeartbeat(); syncBudget(); },
     sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches); },
     refuse: function (a) {
       banner = a.reason === 'cooldown' ? 'cooling down — wait for the timer' : 'daily cap reached — no more fishing today';
@@ -378,6 +406,8 @@
     '.dot.running{background:#5ad18b;box-shadow:0 0 0 3px rgba(90,209,139,.18)}',
     '.dot.waiting{background:#f2c14e}.dot.paused{background:#f08a4b}.dot.cooldown{background:#7aa2f7}',
     '.title{font-weight:600;letter-spacing:.2px;flex:1}',
+    '.ver{flex:none;font-size:9px;color:#6d7883;letter-spacing:.3px;font-variant-numeric:tabular-nums}',
+    '.ver:empty{display:none}',
     '.chip{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:#aab4bf;border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:1px 7px}',
     '.icon{border:0;background:transparent;color:#9aa4ae;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:6px}',
     '.icon:hover{background:rgba(255,255,255,.08);color:#e8ecef}',
@@ -399,6 +429,7 @@
     '.banner:empty{display:none}',
     '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
     '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-top-color:rgba(122,162,247,.30)}',
+    '.banner.info{color:#cfd6dd;background:rgba(255,255,255,.05);border-top-color:rgba(255,255,255,.12)}',
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
@@ -407,6 +438,8 @@
     '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
     '.tier span{font-size:8px;letter-spacing:.4px;text-transform:uppercase;color:#8b95a0}',
     '.last{font-size:10.5px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.sel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#e8ecef;font:inherit;font-size:11px;padding:2px 4px;max-width:104px}',
+    '.sel option{background:#12161c;color:#e8ecef}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.hide{display:none}'
   ].join('\n');
@@ -436,17 +469,20 @@
     var head = el('div', 'head');
     var dot = el('div', 'dot');
     var title = el('div', 'title', 'AutoFish');
+    var ver = el('div', 'ver', versionLabel());
+    ver.title = 'build ' + ((fish() && fish().version) || 'unknown');
     var chip = el('div', 'chip', 'idle');
     var min = el('button', 'icon', '–');
     min.title = 'collapse';
-    head.append(dot, title, chip, min);
+    head.append(dot, title, ver, chip, min);
 
     var body = el('div', 'body');
 
     body.append(
       stepperRow('Session', 'dur', 5, 240),
       stepperRow('Cooldown', 'cool', 5, 120),
-      stepperRow('Daily cap', 'cap', 30, 480)
+      stepperRow('Daily cap', 'cap', 30, 480),
+      stepperRow('Hidden stop', 'hidden', 2, 60)
     );
 
     // clock window
@@ -470,6 +506,26 @@
     upsellRow.append(upsellLabel, upsellToggle);
     body.appendChild(upsellRow);
 
+    // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
+    // window and the cap still bound it.
+    var chainRow = el('div', 'row');
+    var chainLabel = el('div', 'label', 'Chain runs');
+    var chainToggle = el('button', 'icon', 'off');
+    chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
+    chainRow.append(chainLabel, chainToggle);
+    body.appendChild(chainRow);
+
+    // One ledger per profile, because two accounts in one browser used to share one history.
+    var profRow = el('div', 'row');
+    var profLabel = el('div', 'label', 'Profile');
+    var profSel = document.createElement('select');
+    profSel.className = 'sel';
+    profSel.title = 'which catch history this panel reads and writes';
+    var profAdd = el('button', 'icon', '+');
+    profAdd.title = 'new profile with its own catch history';
+    profRow.append(profLabel, profSel, profAdd);
+    body.appendChild(profRow);
+
     var meters = el('div', 'meters');
     meters.append(
       meter('left'), meter('catches'), meter('presses'), meter('today')
@@ -490,6 +546,17 @@
       strip.appendChild(cell);
       return { name: name, num: num };
     });
+    // A catch the catalogue does not know is logged as Unknown. It used to have no cell at all, so
+    // the strip read all zeros while the ledger filled - which looks exactly like "not recording".
+    var unknownCell = el('div', 'tier');
+    var unknownNum = el('b', null, '0');
+    var unknownTag = el('span', null, 'UNK');
+    unknownCell.title = 'caught and logged, but the card printed no rarity and the species is not in the built-in catalogue';
+    unknownCell.style.color = TIER_COLORS.Common;
+    unknownCell.style.display = 'none';
+    unknownCell.append(unknownNum, unknownTag);
+    strip.appendChild(unknownCell);
+    tierCells.push({ name: 'Unknown', num: unknownNum, cell: unknownCell });
     var lastCatch = el('div', 'last', 'no catches yet');
     logBox.append(strip, lastCatch);
     body.appendChild(logBox);
@@ -511,6 +578,7 @@
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
+      chainToggle: chainToggle, profile: profSel, profileAdd: profAdd,
       primary: primary, banner: bannerEl, pill: pill,
       tierCells: tierCells, lastCatch: lastCatch
     });
@@ -535,7 +603,28 @@
       setUpsellHidden(!upsellOn);
       savePrefs();
     });
+    chainToggle.addEventListener('click', function () {
+      dispatch({ type: 'config', at: Date.now(), patch: { chain: !state.chain } });
+      savePrefs();
+    });
+    profSel.addEventListener('change', function () {
+      var f = fish();
+      if (f && f.logProfile) f.logProfile(profSel.value);
+      savePrefs();
+      renderLog();
+    });
+    profAdd.addEventListener('click', function () {
+      var f = fish();
+      if (!f || !f.logProfile) return;
+      var name = prompt('New profile name (its own catch history)', 'alt');
+      if (!name) return;
+      f.logProfile(name);
+      savePrefs();
+      fillProfiles();
+      renderLog();
+    });
     head.addEventListener('pointerdown', startDrag);
+    fillProfiles();
 
     restorePosition();
     render();
@@ -614,6 +703,7 @@
   function keyConf(key) {
     if (key === 'dur') return { field: 'durationMs', min: 5 * 60000, max: 720 * 60000, unit: 5 * 60000 };
     if (key === 'cool') return { field: 'cooldownMs', min: 1 * 60000, max: 120 * 60000, unit: 1 * 60000 };
+    if (key === 'hidden') return { field: 'hiddenStopMs', min: 2 * 60000, max: 60 * 60000, unit: 1 * 60000 };
     return { field: 'dailyCapMs', min: 30 * 60000, max: 1440 * 60000, unit: 60 * 60000 };
   }
 
@@ -663,6 +753,8 @@
       var n = byTier[cell.name] || 0;
       cell.num.textContent = String(n);
       cell.num.style.opacity = n ? '1' : '.35';
+      // UNK only takes space when it has something to say
+      if (cell.cell) cell.cell.style.display = n ? '' : 'none';
     });
     var last = book && book.last;
     if (!last) {
@@ -673,9 +765,12 @@
     var bits = [last.species];
     if (last.weight) bits.push(last.weight);
     if (last.rarity && last.rarity !== 'Unknown') bits.push((last.derived ? '~' : '') + last.rarity);
+    else if (last.rarity === 'Unknown') bits.push('rarity unknown');
     if (last.at) bits.push(new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     ui.lastCatch.textContent = bits.join(' · ');
-    ui.lastCatch.title = 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
+    ui.lastCatch.title = last.rarity === 'Unknown'
+      ? 'caught and logged, but the card printed no rarity and the species is not in the built-in catalogue'
+      : 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
   }
 
   function render() {
@@ -696,6 +791,8 @@
     ui.dur.val.textContent = minutesText(state.durationMs);
     ui.cool.val.textContent = minutesText(state.cooldownMs);
     ui.cap.val.textContent = minutesText(state.dailyCapMs);
+    ui.hidden.val.textContent = minutesText(state.hiddenStopMs);
+    ui.chainToggle.textContent = state.chain ? 'on' : 'off';
     ui.time_from.val.textContent = state.window.start;
     ui.time_to.val.textContent = state.window.stop;
 
@@ -707,7 +804,7 @@
     else ui.mLeft.textContent = minutesText(state.durationMs);
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));
     ui.mPresses.textContent = String(stats.presses || 0);
-    ui.mToday.textContent = minutesText(baseTodayMs + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
+    ui.mToday.textContent = minutesText((state.todayMs || 0) + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
     renderLog();
 
     var primary = ui.primary;
@@ -741,11 +838,24 @@
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
     var focusNote = focus ? FOCUS_NOTE : '';
-    var note = stallNote || seatNote || focusNote || banner;
+    // A stop is the thing the player most needs to understand, and it used to be invisible: the
+    // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
+    var stopNote = '';
+    if (!stallNote && !seatNote && !focusNote && !banner && (phase === 'idle' || phase === 'cooldown') && state.stopReason) {
+      stopNote = 'last stop: ' + state.stopReason;
+      if (phase === 'cooldown' && state.cooldownUntil) {
+        stopNote += ' · start after ' + new Date(state.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else if (state.window.on) {
+        stopNote += ' · window ' + state.window.start + '–' + state.window.stop;
+      }
+      if (state.chain) stopNote += ' · chaining on';
+    }
+    var note = stallNote || seatNote || focusNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (focus && !banner) ui.banner.className = 'banner focus';
+    else if (stopNote && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
 
@@ -852,6 +962,14 @@
   /* -------------------------------------------------------------- loop ---- */
 
   function tick() {
+    // A run that crosses midnight starts the new day at zero, the same way a reload does.
+    var dayNow = dayKey();
+    if (budgetDay && dayNow !== budgetDay) {
+      budgetDay = dayNow;
+      baseTodayMs = 0;
+      state.todayMs = 0;
+      syncBudget();
+    }
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
 
@@ -887,6 +1005,7 @@
     }
 
     if (Date.now() - heartbeatAt > 30000) { heartbeatAt = Date.now(); writeHeartbeat(); }
+    if (Date.now() - budgetAt > 10000) { budgetAt = Date.now(); syncBudget(); }
     if (banner && state.phase === 'running' && banner.indexOf('offline') === -1) { /* keep guard text visible */ }
 
     render();
@@ -914,11 +1033,29 @@
 
     var S = window.AutoFishSession;
     var prefs = loadPrefs();
-    state = S.createState(prefs.window ? { window: prefs.window, durationMs: prefs.durationMs, cooldownMs: prefs.cooldownMs, dailyCapMs: prefs.dailyCapMs } : prefs);
+    // The ledger key is per profile, and the choice has to survive a reload with the history it names.
+    if (prefs.profile && fish() && fish().logProfile) fish().logProfile(prefs.profile);
+    var budget = loadBudget();
+    var win = prefs.window || S.DEFAULTS.window;
+    state = S.createState({
+      window: { on: !!win.on, start: win.start, stop: win.stop },
+      durationMs: prefs.durationMs || S.DEFAULTS.durationMs,
+      cooldownMs: prefs.cooldownMs || S.DEFAULTS.cooldownMs,
+      dailyCapMs: prefs.dailyCapMs || S.DEFAULTS.dailyCapMs,
+      hiddenStopMs: prefs.hiddenStopMs || S.DEFAULTS.hiddenStopMs,
+      chain: !!prefs.chain,
+      todayMs: budget.ms,
+      cooldownUntil: budget.cooldownUntil,
+      phase: budget.cooldownUntil ? 'cooldown' : 'idle'
+    });
+    baseTodayMs = budget.ms;
+    budgetDay = budget.day;
     window.__panel = window.__panel || {};
     window.__panel.resumeAfterReload = !!prefs.resumeAfterReload;
 
     await loadToday();
+    state.todayMs = baseTodayMs;
+    syncBudget();
 
     // A core already running from a previous session is not ours to guess about.
     var before = null;

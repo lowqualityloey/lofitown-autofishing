@@ -37,8 +37,26 @@
 (() => {
   if (window.__fish) { try { window.__fish.stop(); } catch (e) {} }
 
-  const F = { version: 'autofish 3.0' };
+  /**
+   * build-userscript.js replaces 'dev' with package.json's version, so the header, __fish.version
+   * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
+   * the honest answer: that copy has no build step to stamp it.
+   */
+  const F = { version: 'dev' };
   const now = () => performance.now();
+
+  /* ---- performance probe -------------------------------------------------
+   * Zen/Gecko pays far more for a canvas readback than Chromium does, and the only honest way to
+   * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
+   * average cost of each detector, so a change can be justified by numbers rather than a guess.
+   */
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0 };
+  function resetPerf() {
+    perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
+    perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
+    perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
+    perf.card = 0; perf.cardN = 0;
+  }
 
   /* ---- timing core -----------------------------------------------------
    * Pure functions, no DOM and no state. tests/timing.test.js extracts this block by its
@@ -320,6 +338,29 @@
     if (i <= 1) return { tap: true, space: false, walk: false };   // the normal path: click the bubble
     return { tap: true, space: true, walk: false };                // click and the keybind together
   }
+
+  /**
+   * Cumulative counters -> rates, so the perf probe says WHERE the frame time goes (ms/s and share
+   * of wall clock), not just how long one call took. Pure, so the arithmetic is tested.
+   * `share` is the fraction of wall time spent on the main thread; nested calls overlap
+   * (findBubble includes its snapshot), so read it as attribution, not a partition.
+   */
+  function perfRates(calls, totals, uptimeMs) {
+    const secs = uptimeMs > 0 ? uptimeMs / 1000 : 0;
+    const out = {};
+    for (const key of Object.keys(totals)) {
+      const ms = totals[key] || 0;
+      const n = calls[key] || 0;
+      const msPerSec = secs ? ms / secs : null;
+      out[key] = {
+        callsPerSec: secs ? n / secs : null,
+        msPerCall: n ? ms / n : null,
+        msPerSec,
+        share: msPerSec == null ? null : msPerSec / 1000,
+      };
+    }
+    return out;
+  }
   // </timing-core>
 
   /* ---- coordinate frame ------------------------------------------------
@@ -410,45 +451,62 @@
   // <catch-log>
   // <species-catalogue>
 const SPECIES = [
-  ["Anchovy","Common",0.1,0.3,5], ["Bass","Common",1,8,8], ["Bluegills","Common",0.1,2,6], ["Catfish","Common",2,20,12],
-  ["Cod","Common",2,15,10], ["Flounder","Common",1,5,7], ["Golden Shiner","Common",0.05,0.5,5], ["Herring","Common",0.5,2,7],
-  ["Largemouth Bass","Common",1,10,10], ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9],
-  ["Minnow","Common",0.01,0.1,5], ["Mud Crab","Common",0.1,1,7], ["Sardine","Common",0.2,1,6], ["Sea Urchin","Common",0.5,3,8],
-  ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6], ["Swamp Barb","Common",0.05,0.3,6],
-  ["Tadpole","Common",0.01,0.05,5], ["White Sucker","Common",0.5,3,8], ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30],
+  ["Anchovy","Common",0.1,0.3,5], ["Arctic Cod","Common",0.1,1,7], ["Bass","Common",1,8,8], ["Black Sea Bass","Common",1,10,7],
+  ["Bluegills","Common",0.1,2,6], ["Capelin","Common",0.1,1,7], ["Catfish","Common",2,20,12], ["Cod","Common",2,15,10],
+  ["Firefly Squid","Common",0.01,0.1,7], ["Flounder","Common",1,5,7], ["Frozen Fish","Common",1,10,7], ["Golden Shiner","Common",0.05,0.5,5],
+  ["Hatched Fish","Common",0.01,0.1,7], ["Herring","Common",0.5,2,7], ["Lantern Fish","Common",0.1,1,7], ["Largemouth Bass","Common",1,10,10],
+  ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9], ["Minnow","Common",0.01,0.1,5],
+  ["Mud Crab","Common",0.1,1,7], ["Northern Shrimp","Common",0.01,0.1,7], ["Sand Lance","Common",0.01,0.1,7], ["Sardine","Common",0.2,1,6],
+  ["Sea Urchin","Common",0.5,3,8], ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6],
+  ["Swamp Barb","Common",0.05,0.3,6], ["Tadpole","Common",0.01,0.05,5], ["The Deepest Rock","Common",1,10,7], ["White Sucker","Common",0.5,3,8],
+  ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30], ["Arctic Char","Uncommon",1,10,20], ["Arctic Skate","Uncommon",1,10,20],
   ["Asian Swamp Eel","Uncommon",0.5,5,18], ["Clown Fish","Uncommon",0.2,1,19], ["Crawfish","Uncommon",0.02,0.2,15], ["Eel","Uncommon",2,25,25],
-  ["European Toad","Uncommon",0.02,0.15,16], ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20],
-  ["Mudskipper","Uncommon",0.05,0.3,17], ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19],
-  ["Salmon","Uncommon",5,30,28], ["Seahorse","Uncommon",0.1,1,17], ["Squid","Uncommon",1,15,24], ["Sturgeon","Uncommon",20,350,35],
-  ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22], ["Tuna","Uncommon",20,400,35],
-  ["Walleye","Uncommon",1,10,24], ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50],
-  ["Bull Frog","Rare",0.2,0.8,48], ["Coelacanth","Rare",15,180,75], ["Flying Fish","Rare",1,5,42], ["Frog Fish","Rare",0.1,1,50],
-  ["Goldfish","Rare",0.5,2,45], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Mekong Catfish","Rare",50,300,75],
-  ["Nurse Shark","Rare",50,150,70], ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60],
-  ["Snapping Turtle","Rare",5,35,58], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
-  ["American Alligator","Epic",200,1000,200], ["Arowana","Epic",3,20,110], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120],
-  ["Fried Egg Jellyfish","Epic",5,35,95], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
+  ["European Toad","Uncommon",0.02,0.15,16], ["Greenland Halibut","Uncommon",1,10,20], ["Hagfish","Uncommon",0.1,1,20], ["Kelp Snailfish","Uncommon",0.1,1,20],
+  ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20], ["Mudskipper","Uncommon",0.05,0.3,17],
+  ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19], ["Salmon","Uncommon",5,30,28],
+  ["Seahorse","Uncommon",0.1,1,17], ["Snow Crab","Uncommon",1,10,20], ["Spiny Dogfish","Uncommon",1,10,20], ["Squid","Uncommon",1,15,24],
+  ["Sturgeon","Uncommon",20,350,35], ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22],
+  ["Tripod Fish","Uncommon",0.1,1,20], ["Tubenose Poacher","Uncommon",0.1,1,20], ["Tuna","Uncommon",20,400,35], ["Walleye","Uncommon",1,10,24],
+  ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50], ["Bull Frog","Rare",0.2,0.8,48],
+  ["Coelacanth","Rare",15,180,75], ["Dragon Fish","Rare",1,10,55], ["Dumbo Octopus","Rare",0.1,1,55], ["Flying Fish","Rare",1,5,42],
+  ["Frog Fish","Rare",0.1,1,50], ["Giant Isopod","Rare",1,10,55], ["Goldfish","Rare",0.5,2,45], ["Greenland Shark","Rare",100,1000,55],
+  ["Harp Seal","Rare",100,1000,55], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Lumpsucker","Rare",0.1,1,55],
+  ["Mekong Catfish","Rare",50,300,75], ["Nautilus","Rare",0.1,1,55], ["Nurse Shark","Rare",50,150,70], ["Pancake Batfish","Rare",0.1,1,55],
+  ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60], ["Snapping Turtle","Rare",5,35,58],
+  ["Snipe Eel","Rare",0.1,1,55], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
+  ["American Alligator","Epic",200,1000,200], ["Anomalocaris","Epic",1,10,140], ["Arowana","Epic",3,20,110], ["Basking Shark","Epic",1000,10000,140],
+  ["Beluga Whale","Epic",1000,10000,140], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120], ["Fried Egg Jellyfish","Epic",5,35,95],
+  ["Frilled Shark","Epic",100,1000,140], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
   ["Lais Tembiring","Epic",5,50,120], ["Lion Fish","Epic",1,5,85], ["Manta Ray","Epic",600,5000,200], ["Marlin","Epic",100,1800,175],
-  ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Paddle Fish","Epic",25,200,165],
-  ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
-  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Wels Catfish","Epic",50,300,190],
-  ["Whale Shark","Epic",15000,40000,220], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600], ["Cthulhu","Legendary",50000,200000,1000],
-  ["Definitely not Catfish","Legendary",50,300,750], ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500],
-  ["Kappa","Legendary",50,200,900], ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950],
-  ["Marlin's Boot","Legendary",50,300,20], ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800],
-  ["Nyarlathotep","Legendary",1000,50000,1000], ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750],
-  ["Phantom Jellyfish","Legendary",10,100,500], ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800],
-  ["Swamp Monster","Legendary",5000,50000,950], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700], ["Barreleye Fish","Secret",1,5,1500],
-  ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000], ["Ghost Shark","Secret",1,16,1750],
-  ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100],
-  ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150], ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200],
-  ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180], ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250],
-  ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75], ["Walrus","Christmas",500,1500,200]
+  ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Orca","Epic",1000,10000,140],
+  ["Paddle Fish","Epic",25,200,165], ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Polar Bear","Epic",100,1000,140],
+  ["Spider Crab","Epic",1,10,140], ["Stargazer Fish","Epic",1,10,140], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
+  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Viperfish","Epic",1,10,140],
+  ["Wels Catfish","Epic",50,300,190], ["Whale Shark","Epic",15000,40000,220], ["Wolffish","Epic",1,10,140], ["A Penguin?","Legendary",1,10,800],
+  ["Akhlut","Legendary",100,1000,800], ["Amarok","Legendary",100,1000,800], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600],
+  ["Berg","Legendary",1000,10000,800], ["Bowhead Whale","Legendary",1000,10000,800], ["Cthulhu","Legendary",50000,200000,1000], ["Definitely not Catfish","Legendary",50,300,750],
+  ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500], ["Kappa","Legendary",50,200,900],
+  ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950], ["Marlin's Boot","Legendary",50,300,20],
+  ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800], ["Nyarlathotep","Legendary",1000,50000,1000],
+  ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750], ["Phantom Jellyfish","Legendary",10,100,500],
+  ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800], ["Swamp Monster","Legendary",5000,50000,950],
+  ["The Bloop","Legendary",1000,10000,800], ["True Blobfish","Legendary",1,10,800], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700],
+  ["Barreleye Fish","Secret",1,5,1500], ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000],
+  ["Ghost Shark","Secret",1,16,1750], ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Plankton","Secret",0.01,0.1,1500],
+  ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100], ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150],
+  ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200], ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180],
+  ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250], ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75],
+  ["Walrus","Christmas",500,1500,200]
 ];
   // </species-catalogue>
 
   const TIER_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas'];
   const LOG_KEY = 'autofish:log:v1';
+  const LOG_PREFIX = LOG_KEY + ':';
+  // One catch history per profile. The ledger used to be keyed by origin alone, so two accounts in
+  // the same browser silently shared a strip. 'default' keeps the pre-profile key working.
+  let logProfile = 'default';
+  function logKey() { return LOG_PREFIX + logProfile; }
   const TIER_BY_LOWER = {};
   for (const tier of TIER_ORDER) TIER_BY_LOWER[tier.toLowerCase()] = tier;
   const SPECIES_BY_NAME = {};
@@ -543,7 +601,7 @@ const SPECIES = [
     const at = t == null ? Date.now() : t;
     const rarity = {};
     for (const tier of TIER_ORDER) rarity[tier] = 0;
-    return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, days: {}, last: null };
+    return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, unknown: {}, days: {}, last: null };
   }
 
   /** Append one described catch in place and return the same ledger. */
@@ -564,6 +622,12 @@ const SPECIES = [
       s.bestAt = at;
     }
     book.rarity[e.rarity] = (book.rarity[e.rarity] || 0) + 1;
+    // Unknown means the card printed no tier and the catalogue does not know the species. Keep the
+    // names so the gap is a worklist instead of an invisible pile of catches.
+    if (e.rarity === 'Unknown') {
+      if (!book.unknown) book.unknown = {};
+      book.unknown[name] = (book.unknown[name] || 0) + 1;
+    }
     if (e.shiny) book.shiny = (book.shiny || 0) + 1;
     if (e.golden) book.golden = (book.golden || 0) + 1;
     const key = logDay(at);
@@ -609,8 +673,10 @@ const SPECIES = [
       shiny: book.shiny || 0,
       golden: book.golden || 0,
       byRarity, top, best,
+      unknown: book.unknown || {},
+      unknownNames: Object.keys(book.unknown || {}).sort(),
       last: book.last || null,
-      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })) },
+      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })).concat(Object.keys(today.rarity || {}).filter((k) => TIER_ORDER.indexOf(k) < 0).map((k) => ({ rarity: k, n: today.rarity[k] }))) },
       updatedAt: book.updatedAt || null,
       days: Object.keys(book.days || {}).length,
     };
@@ -641,7 +707,13 @@ const SPECIES = [
   function loadLedger() {
     if (ledger) return ledger;
     let raw = null;
-    try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+    try { raw = window.localStorage.getItem(logKey()); } catch (e) { raw = null; }
+    if (!raw && logProfile === 'default') {
+      // The pre-profile ledger (autofish:log:v1) belongs to whoever used this browser first.
+      // Move it to the default profile once, so an upgrade never looks like lost history.
+      try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+      if (raw) { try { window.localStorage.setItem(logKey(), raw); } catch (e) {} }
+    }
     if (!raw) return (ledger = emptyLog());
     try {
       const parsed = JSON.parse(raw);
@@ -651,7 +723,20 @@ const SPECIES = [
   }
   function saveLedger(book) {
     ledger = book;
-    try { window.localStorage.setItem(LOG_KEY, JSON.stringify(book)); return true; } catch (e) { return false; }
+    try { window.localStorage.setItem(logKey(), JSON.stringify(book)); return true; } catch (e) { return false; }
+  }
+  /** Every profile that has a ledger in this browser, newest naming first. */
+  function logProfiles() {
+    const out = [];
+    try {
+      const st = window.localStorage;
+      for (let i = 0; i < (st.length || 0); i++) {
+        const k = st.key(i);
+        if (k && k.indexOf(LOG_PREFIX) === 0) out.push(k.slice(LOG_PREFIX.length));
+      }
+    } catch (e) { /* a blocked store simply has no discoverable profiles */ }
+    if (out.indexOf('default') < 0) out.unshift('default');
+    return out.sort();
   }
 
   // </catch-log>
@@ -857,6 +942,11 @@ const SPECIES = [
    */
   let snapAt = 0;
   function snapshot() {
+    const t0 = now();
+    try { return snapshotInner(); }
+    finally { perf.snap += now() - t0; perf.snapN++; }
+  }
+  function snapshotInner() {
     const t = now();
     if (sdata && t - snapAt < ((F.opts && F.opts.scanTickMs) || 66)) return true;
     if (!downscale()) return false;
@@ -1853,6 +1943,7 @@ const SPECIES = [
       maxMinutes: 240,
     }, opts || {});
     surfaces();
+    resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
@@ -1893,6 +1984,7 @@ const SPECIES = [
 
   F.stop = function () {
     F.running = false;
+    perf.stoppedAt = now();   // freeze the measurement window; a later perf() must not be diluted
     cancelPend();
 
     clearPendingWin();
@@ -1926,6 +2018,7 @@ const SPECIES = [
 
   /** Fresh counters without restarting: used when a panel session begins on a live loop. */
   F.resetStats = function () {
+    resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
@@ -1971,6 +2064,12 @@ const SPECIES = [
   function loop() {
     if (!F.running) { F._raf = null; return; }
     F._raf = requestAnimationFrame(loop);
+    const frameAt = now();
+    if (perf.last) {
+      perf.gaps.push(frameAt - perf.last);
+      if (perf.gaps.length > 600) perf.gaps.shift();   // ~10 s at 60 fps
+    }
+    perf.last = frameAt; perf.n++;
     // Inside rAF, before compositing, is the only moment the UI layer's buffer is still readable.
     if (F._shotWanted && uiCanvas) {
       F._shotWanted = false;
@@ -2399,6 +2498,19 @@ const SPECIES = [
   F.log = function () {
     return logSummary(loadLedger(), Date.now());
   };
+  /** Which catch history the panel reads and writes. No argument reads it. */
+  F.logProfile = function (name) {
+    if (name === undefined) return logProfile;
+    const next = String(name || '').trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 24) || 'default';
+    if (next !== logProfile) {
+      logProfile = next;
+      ledger = null;              // the cache belongs to the old profile
+      F.txtAt = now();            // text drawn before the switch is another card
+    }
+    return logProfile;
+  };
+  /** Every profile this browser has a ledger for. */
+  F.logProfiles = function () { return logProfiles(); };
   /** The same ledger as one CSV row per species (paste it anywhere). */
   F.logCsv = function () {
     return logCsv(loadLedger());
@@ -2464,6 +2576,55 @@ const SPECIES = [
       }
       res(out);
     }));
+  };
+
+  /* Wrap the finished detectors last, so their numbers include everything they do. Two
+   * performance.now() calls per call is noise against a readback measured at ~2.1 ms. */
+  const PERF_KEYS = { findBubble: 'bubble', findCatch: 'card', lockDial: 'lock', sample: 'sample' };
+  Object.keys(PERF_KEYS).forEach((name) => {
+    const orig = F[name];
+    if (typeof orig !== 'function') return;
+    const key = PERF_KEYS[name];
+    F[name] = function () {
+      const t0 = now();
+      try { return orig.apply(this, arguments); }
+      finally { perf[key] += now() - t0; perf[key + 'N']++; }
+    };
+  });
+
+  /**
+   * Frame budget and per-detector cost, from the last ~10 s of frames.
+   *
+   * Measure with the bot stopped, then running, and compare: the difference is what the bot costs.
+   * On Chromium the readback is cheap; on Gecko (Zen) the same numbers are often several times
+   * larger, which is a browser fact, not a bug in the detector.
+   */
+  F.perf = function () {
+    const gaps = perf.gaps.slice().sort((a, b) => a - b);
+    const q = (p) => gaps.length ? +gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))].toFixed(1) : null;
+    const sum = gaps.reduce((s, v) => s + v, 0);
+    // Measuring after a stop is normal (stop, then read the report): freeze at the stop.
+    const end = (F.running || !perf.stoppedAt) ? now() : perf.stoppedAt;
+    const uptime = perf.startedAt ? end - perf.startedAt : 0;
+    const calls = { snapshot: perf.snapN, findBubble: perf.bubbleN, lockDial: perf.lockN, sample: perf.sampleN, findCatch: perf.cardN };
+    const totals = { snapshot: perf.snap, findBubble: perf.bubble, lockDial: perf.lock, sample: perf.sample, findCatch: perf.card };
+    const rates = perfRates(calls, totals, uptime);
+    for (const key of Object.keys(rates)) {
+      const r = rates[key];
+      r.callsPerSec = r.callsPerSec == null ? null : +r.callsPerSec.toFixed(1);
+      r.msPerCall = r.msPerCall == null ? null : +r.msPerCall.toFixed(2);
+      r.msPerSec = r.msPerSec == null ? null : +r.msPerSec.toFixed(1);
+      r.share = r.share == null ? null : +r.share.toFixed(3);
+    }
+    return {
+      frames: perf.n,
+      uptimeMs: Math.round(uptime),
+      fps: gaps.length ? +(1000 / (sum / gaps.length)).toFixed(1) : null,
+      p50: q(0.5), p95: q(0.95),
+      worst: gaps.length ? +gaps[gaps.length - 1].toFixed(1) : null,
+      // share is the fraction of wall time; findBubble includes its snapshot, so they overlap.
+      rates,
+    };
   };
 
   surfaces();

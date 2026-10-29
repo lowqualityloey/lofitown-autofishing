@@ -325,3 +325,20 @@ test('both prompt scans size their box from the live canvas, not a literal', () 
     assert.match(fn, /readUI\(box\.x|box\.x \/ SDOWN/, start + ' must use the computed box');
   }
 });
+
+// Zen/Gecko pays much more for a canvas readback than Chromium does. The tuning has to follow a
+// measurement from the machine that hurts, so the probe reports frame gaps and per-detector cost
+// instead of us guessing at throttles.
+
+test('the perf probe reports frame gaps and per-detector cost', () => {
+  assert.match(CORE, /F\.perf = function \(\)/);
+  assert.match(CORE, /perf\.gaps\.push\(frameAt - perf\.last\)/);
+  assert.match(CORE, /Object\.keys\(PERF_KEYS\)/);
+  for (const name of ['findBubble', 'findCatch', 'lockDial', 'sample']) {
+    assert.ok(CORE.includes(name + ':'), name + ' is instrumented');
+  }
+  assert.match(CORE, /perf\.gaps\.length > 600/, 'the gap buffer is bounded');
+  assert.match(CORE, /perfRates\(calls, totals, uptime\)/, 'the probe reports rates, not just totals');
+  assert.match(CORE, /uptimeMs: Math\.round\(uptime\)/, 'the report is normalised by how long it ran');
+  assert.match(CORE, /perf\.stoppedAt = now\(\)/, 'the window freezes at stop, so a report read afterwards is not diluted');
+});
