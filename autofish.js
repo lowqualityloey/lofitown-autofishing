@@ -1466,17 +1466,27 @@ const SPECIES = [
     // Mark the rim pixels once, then count them per candidate circle instead of re-testing the
     // same ~4,950 circles pixel by pixel (that was 83 ms a call; this is ~10 ms).
     const mask = rimMask(r);
+    // The candidate scan is inlined rather than calling rimHits once per circle. Geometry is
+    // unchanged - same centres, same radii, same 20-sample rim count - but on Gecko those helper
+    // calls cost more than the whole search: 31-33 ms a call through rimHits against 8-11 ms
+    // inlined, with the same answer on every frame (measured 2026-10-29 in Zen). The 17-call
+    // refinement in finishLock still uses the helper; at that count it is noise.
+    const rw = r.w, rh = r.h, ox = r.x, oy = r.y;
     let best = null;
     for (let dy = -half; dy <= half; dy += step) {
       for (let dx = -half; dx <= half; dx += step) {
         const cx = Math.round(hintX + dx), cy = Math.round(hintY + dy);
         for (let R = 78; R <= 120; R += 2) {
-          const hit = rimHits(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20);
+          let hit = 0;
+          for (let k = 0; k < 20; k++) {
+            const x = Math.round(cx + R * RIM_C20[k]) - ox, y = Math.round(cy + R * RIM_S20[k]) - oy;
+            if (x >= 0 && y >= 0 && x < rw && y < rh && mask[y * rw + x]) hit++;
+          }
           // 15, not 17. The gate used to accept only 17 of 20 rim samples, and the live dial at a
           // 1680x1031 viewport measures EXACTLY 17 (R=96): one anti-aliased sample and the search
           // finds nothing while the dial is plainly on screen. Measured 2026-10-29: 1 lock in 20
           // minutes with the threshold at 17. The pin gate and the wedge requirement in sample()
-          // are what reject non-dials, not this count.
+          // are what reject non-dials, not this count. The inline scan above does not change that.
           if (hit >= 15 && (!best || hit > best.score)) best = { cx, cy, R, score: hit };
         }
       }

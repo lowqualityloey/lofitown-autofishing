@@ -1277,6 +1277,12 @@ and thin. `d544589` is merged into this line now; the duplicate day store added 
 favour of the budget store (`autofish:today:v1` and its test are gone), and the merged build is
 3.8.0 with 177 tests.
 
+**3.8.1 brings the last branch's uncommitted work in.** `repo-ingest` still had 3.6.1 changes that had
+never been committed: an inlined rim count for the coarse dial scan (31-33 ms → 8-11 ms on Gecko,
+same answer) and an on-screen perf box in the panel. Both are merged. The incoming patch used
+`hit >= 17`, which is the gate measured to miss a real dial; the merged scan keeps **15/20**. Both
+branches now point at the same commit, 178 tests.
+
 **Re-measured on 3.8.0 after the merge** (installed userscript, 1117×785, 140 s, ~94 fps):
 **10 bubble detections, 10 from the boxed scan, 0 from `bubble anywhere`**, prompt at (558,232);
 7 dials all locked at (557,287) R=83 with the first 7.6 s after Start; **21 presses, 21 accepted,
@@ -1439,3 +1445,89 @@ occurs exactly once, so a rename cannot silently ship `dev`), the panel head pri
 the title, and `F.report()` carries the same string. `v3.6.0` is the first release number that covers
 the dial-search fix, the shared snapshot, the local budget and the profile-keyed ledger - so the
 number in a header now distinguishes a stale tab from a fixed one without a console inspection.
+
+## 2026-10-29 the rest of `lockDial` on Zen: 33 ms -> 9 ms by removing the helper call
+
+The Zen tab (Gecko) was on 3.6.0 and `__fish.perf()` put `lockDial` at **37.58 ms a call, 6.5 times
+a second, 24.6% of the main thread** - the biggest line in the report, ahead of `sample` (11.2%),
+`snapshot` (9.3%), `findCatch` (5.8%) and `findBubble` (4.9%). fps was 64.9, p50 12, p95 52, worst 70.
+
+What the split actually was, measured in that page:
+
+| Probe | Result |
+|---|---|
+| 240x240 readback alone, inside rAF, canvas animating | **8 ms** |
+| the same read from an idle tick, canvas paused | 8.6 ms |
+| read at 240, 120, 64 and 32 px | 8.6 / 7.4 / 7.6 / 7.1 ms - **flat, not area** |
+| `rimMask` over the 240x240 buffer | 0.38 ms |
+| the 99,000-sample search, inlined | 0.75 ms |
+| the 99,000-sample search, through `rimHits` | ~22 ms of a 33 ms call |
+| `lockDial` whole, inside rAF | 31-33 ms |
+
+So the search arithmetic was never the cost on Gecko: 4,950 calls to `rimHits`, each counting 20
+samples, cost more than the samples themselves. Deferring the read past the frame changed nothing
+(30-33 ms either way), and shrinking the read changed nothing (flat cost), which ruled out both the
+obvious ideas before any code was written.
+
+**What changed.** The coarse scan in `F.lockDial` is inlined over the mask - same centres (15x15,
+step 3), same radii (78..120, step 2), same 20 rim directions, same `hit >= 17` and same first-max
+tie-break - so the geometry and the answer are unchanged. The 17-call refinement still uses
+`rimHits`. `tests/perf.test.js` now pins the inline count and the 40-sample refinement instead of the
+old per-circle helper call.
+
+**Measured, same frame, same hint, both returning null:**
+
+| | Calls | `lockDial` |
+|---|---|---|
+| 3.6.0, helper per circle | 4 | 31-33 ms |
+| 3.6.1, inlined | 4 | **8-11 ms** |
+
+That is the micro-benchmark on the live tab, not a reading of the loop. `node --test` is 140 pass.
+
+### The end-to-end reading, and why the panel now carries it
+
+A reading needs a console, and the Zen tab takes no synthetic keystrokes, so 3.6.1 also puts the
+report on the panel: `fps / p50 / p95 / worst` above each detector's share of wall time in ms per
+second, refreshed on the panel tick, with the full `__fish.perf()` JSON one click away. Both browsers
+were then reinstalled from the build and reloaded (`__fish.version` and the panel head both read
+`3.6.1`).
+
+Zen (Gecko), 3.6.1, running and in front, ~20 s window:
+
+| | 3.6.0, before the inline | 3.6.1, after |
+|---|---|---|
+| fps | 64.9 | 55.6 (66.9-72.7 in a second window) |
+| p50 / p95 / worst | 12 / 52 / 70 ms | 15 / 46 / 78 ms |
+| `lockDial` | 37.58 ms/call x 6.5/s = **24.6%** | **259.9 ms/s = 26.0%** |
+| `snapshot` | 9.3% | 105.4 ms/s = 10.5% |
+| `findBubble` | 4.9% | 54.5 ms/s = 5.5% (contains its snapshot) |
+| `findCatch` | 5.8% | 76.4 ms/s = 7.6% |
+
+The share did **not** fall. The expanded report, same session (`frames` 6864, `uptimeMs` 115141):
+
+```
+"lockDial": { "callsPerSec": 6.3, "msPerCall": 43.74, "msPerSec": 274.7, "share": 0.275 }
+"snapshot": { "callsPerSec": 25.1, "msPerCall": 4.21, "msPerSec": 105.8, "share": 0.106 }
+"findBubble": { "callsPerSec": 59.5, "msPerCall": 0.77, "msPerSec": 46, "share": 0.046 }
+```
+
+So the call rate did not rise (6.3/s against 6.5/s) and the per-call cost did not fall: **43.74 ms
+against 37.58 ms on 3.6.0**. The 24.6% -> 7% projection is withdrawn; the end-to-end number after
+the fix is 27.5%, i.e. slightly worse than the thing it was meant to fix.
+
+That is the useful part of this reading: **the cost is not in the search.** By the in-page probe the
+whole scan is `rimMask` 0.38 ms + inlined search 0.75 ms, about 1.1 ms of a 43.74 ms call, and the
+240x240 readback was measured flat at 7-9 ms. Roughly 34 ms a call is therefore unaccounted for by
+the parts that were measured, which is why the probe and the live loop disagree. The next step is to
+split `lockDial`'s own timer inside the live loop - grab / `rimMask` / coarse scan / refine / `sample`
+- rather than in a probe, because every obvious lever depends on knowing which of those five owns
+the 34 ms.
+
+Neo (Chromium) could not be read: its tab sat behind a full-screen video, and a covered tab is
+throttled to about 1 fps by the compositor, so its `perf()` only describes the occlusion (14.8 fps,
+p95 1002 ms, every detector near 0.0 ms/s). A covered tab is not a valid frame budget.
+
+**Not the fix, checked and rejected.** Gating the scan on time since the last press looked like the
+cheaper answer (a dial follows a press). A 120 s shadow count of the real calls: 791 scans, 4 dials
+found, and one of those found **more than 20 s after the last press** - so the premise is false in
+live play and the gate would have missed a dial. Left the check rate at `dialCheckMs` 150.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.8.0
+// @version      3.8.1
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -58,7 +58,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.8.0" };
+  const F = { version: "3.8.1" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -1482,17 +1482,27 @@ const SPECIES = [
     // Mark the rim pixels once, then count them per candidate circle instead of re-testing the
     // same ~4,950 circles pixel by pixel (that was 83 ms a call; this is ~10 ms).
     const mask = rimMask(r);
+    // The candidate scan is inlined rather than calling rimHits once per circle. Geometry is
+    // unchanged - same centres, same radii, same 20-sample rim count - but on Gecko those helper
+    // calls cost more than the whole search: 31-33 ms a call through rimHits against 8-11 ms
+    // inlined, with the same answer on every frame (measured 2026-10-29 in Zen). The 17-call
+    // refinement in finishLock still uses the helper; at that count it is noise.
+    const rw = r.w, rh = r.h, ox = r.x, oy = r.y;
     let best = null;
     for (let dy = -half; dy <= half; dy += step) {
       for (let dx = -half; dx <= half; dx += step) {
         const cx = Math.round(hintX + dx), cy = Math.round(hintY + dy);
         for (let R = 78; R <= 120; R += 2) {
-          const hit = rimHits(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20);
+          let hit = 0;
+          for (let k = 0; k < 20; k++) {
+            const x = Math.round(cx + R * RIM_C20[k]) - ox, y = Math.round(cy + R * RIM_S20[k]) - oy;
+            if (x >= 0 && y >= 0 && x < rw && y < rh && mask[y * rw + x]) hit++;
+          }
           // 15, not 17. The gate used to accept only 17 of 20 rim samples, and the live dial at a
           // 1680x1031 viewport measures EXACTLY 17 (R=96): one anti-aliased sample and the search
           // finds nothing while the dial is plainly on screen. Measured 2026-10-29: 1 lock in 20
           // minutes with the threshold at 17. The pin gate and the wedge requirement in sample()
-          // are what reject non-dials, not this count.
+          // are what reject non-dials, not this count. The inline scan above does not change that.
           if (hit >= 15 && (!best || hit > best.score)) best = { cx, cy, R, score: hit };
         }
       }
@@ -3585,6 +3595,9 @@ const SPECIES = [
     '.last{font-size:10.5px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.sel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#e8ecef;font:inherit;font-size:11px;padding:2px 4px;max-width:104px}',
     '.sel option{background:#12161c;color:#e8ecef}',
+    '.perfbox{display:flex;flex-direction:column;gap:1px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer}',
+    '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.hide{display:none}'
   ].join('\n');
@@ -3709,6 +3722,17 @@ const SPECIES = [
     var primary = el('button', 'primary', 'Start');
     body.appendChild(primary);
 
+    // The frame report, on screen. DevTools is not always within reach - Zen takes no synthetic
+    // keystrokes, so __fish.perf() cannot be read there - and these are the numbers that decide
+    // whether a build needs another detour. Same source; a click expands the whole report.
+    var perfBox = el('div', 'perfbox');
+    var perfLine = el('div', 'perf', 'perf: no frames yet');
+    var perfMore = el('div', 'perf', '');
+    var perfJson = el('pre', 'perfjson hide', '');
+    perfBox.title = 'frame budget, same numbers as __fish.perf(); click for the full report';
+    perfBox.append(perfLine, perfMore, perfJson);
+    body.appendChild(perfBox);
+
     var bannerEl = el('div', 'banner');
 
     card.append(head, body, bannerEl);
@@ -3725,7 +3749,8 @@ const SPECIES = [
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
       chainToggle: chainToggle, profile: profSel, profileAdd: profAdd,
       primary: primary, banner: bannerEl, pill: pill,
-      tierCells: tierCells, lastCatch: lastCatch
+      tierCells: tierCells, lastCatch: lastCatch,
+      perfLine: perfLine, perfMore: perfMore, perfJson: perfJson
     });
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
@@ -3736,6 +3761,15 @@ const SPECIES = [
 
     min.addEventListener('click', function () { setCollapsed(true); });
     pill.addEventListener('click', function () { setCollapsed(false); });
+    perfBox.addEventListener('click', function () {
+      // Expand, then read: the report is a snapshot of the last ~10 s, not a live feed.
+      var hidden = perfJson.classList.toggle('hide');
+      if (!hidden) {
+        try { perfJson.textContent = JSON.stringify(fish().perf(), null, 1); }
+        catch (e) { perfJson.textContent = String((e && e.message) || e); }
+      }
+      place();
+    });
     primary.addEventListener('click', function () {
       if (state.phase === 'idle' || state.phase === 'cooldown') dispatch({ type: 'start', at: Date.now() });
       else dispatch({ type: 'stop', at: Date.now(), reason: 'user' });
@@ -3918,6 +3952,23 @@ const SPECIES = [
       : 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
   }
 
+  /**
+   * The same numbers as __fish.perf(), where a screenshot can read them: fps and the frame
+   * percentiles, then each detector's share of wall time in ms per second. The share is the
+   * currency that decides a fix - 8 ms/s is noise, 800 ms/s is the frame.
+   */
+  function renderPerf() {
+    if (!ui.perfLine) return;
+    var p = null;
+    try { p = (fish() && fish().perf) ? fish().perf() : null; } catch (e) { p = null; }
+    if (!p || !p.frames) { ui.perfLine.textContent = 'perf: no frames yet'; ui.perfMore.textContent = ''; return; }
+    ui.perfLine.textContent = p.fps + ' fps · p50 ' + p.p50 + ' · p95 ' + p.p95 + ' · worst ' + p.worst + ' ms';
+    var r = p.rates || {};
+    function share(key) { return (r[key] && r[key].msPerSec != null) ? r[key].msPerSec : '–'; }
+    ui.perfMore.textContent = 'ms/s: snap ' + share('snapshot') + ' · bub ' + share('findBubble') +
+      ' · dial ' + share('lockDial') + ' · card ' + share('findCatch');
+  }
+
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
@@ -3951,6 +4002,7 @@ const SPECIES = [
     ui.mPresses.textContent = String(stats.presses || 0);
     ui.mToday.textContent = minutesText((state.todayMs || 0) + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
     renderLog();
+    renderPerf();
 
     var primary = ui.primary;
     if (phase === 'running' || phase === 'paused' || phase === 'waiting') {
