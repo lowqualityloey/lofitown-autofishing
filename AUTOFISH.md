@@ -1550,9 +1550,32 @@ loop, same 4,950 circles and 99,000 samples, over a 240x240 mask:
   8.9% (about 13 ms a call) against the 35 ms the wall clock reports - the loop is running far below
   its optimised cost and the profiler does not put the difference in JavaScript.
 
-The next step is therefore **structural, not a rate cap**: lift the scan out of `lockDial` into its
+The next step was therefore **structural, not a rate cap**: lift the scan out of `lockDial` into its
 own small function (the way `finishLock` already is) and re-measure the same phases. Capping the call
 rate stays rejected - the 120 s shadow count above found dials the gate would have missed.
+
+#### 3.8.3-3.8.5: the scan extracted, and still 30 ms (negative result)
+
+`coarseScan` is its own function now; `lockDial` only grabs, masks, calls it and refines. Behaviour
+and the 15/20 gate are unchanged, 179 tests. Live 3.8.3, same window, 180 s: scan **30.26 ms** a
+call, `lockDial` 35.09 at 6.6/s = 23.1% - identical to 3.8.2's 30.28. **The extraction did not fix
+anything.** What it did do is rule the loop out as the problem, one experiment at a time:
+
+- the loop's own cost: the *same source*, eval'd fresh in the same page, is **2.26 ms**;
+- the shipped instance with a *synthetic* 240x240 mask (3.8.4 exposed it for one build): **29 ms**,
+  so the input is not the difference either - and 120 back-to-back calls never warm it up
+  (30.3, 31.7, 32.3, 28.0 ms across four chunks of 20/20/40/40);
+- function size: a bench function padded to 1,200 statements stays at 2.2-4.0 ms;
+- closure-scope size: a function closing over 10 / 200 / 600 / 1,200 / 2,000 locals: 1.7-2.3 ms;
+- a large injected `<script>`: 60 helpers plus tens of KB of padding in one IIFE, 1.7 ms at every size.
+
+So the same code, page and buffer size differ by 13-20x, and the difference travels with the
+*instance* that lives in the installed userscript rather than with its inputs. The remaining
+hypothesis is that the injected script's compilation context keeps this one function out of
+optimised code; that is not proven, and the next experiment is the one the extraction makes cheap -
+compile the scan with `new Function` at startup, outside the giant IIFE, and re-read the phases.
+Until then the honest statement is: the coarse scan is the cost, it is 13-20x slower than the same
+code elsewhere, and no threshold or rate change was made on a guess.
 
 Also note the memo: 8 hits in 1,242 calls (0.6%). The remembered circle almost never answers,
 because the dial only exists while reeling, so it costs a full `sample()` on 93% of calls for a 7%
