@@ -98,10 +98,6 @@ test('lockDial times every phase of its own call', () => {
     assert.match(fn, new RegExp('perf\\.' + phase + ' \\+='), phase + ' is not timed');
   }
   assert.match(fn, /perf\.lockMemoN\+\+/, 'the remembered-circle fast path must be counted');
-  // 3.8.7: the memo answered 0.8% of calls but paid a readback on every one, so it is gated.
-  assert.match(fn, /tNow - \(F\.memoAt \|\| 0\) >= MEMO_EVERY_MS/, 'the remembered circle must be rate-limited');
-  assert.match(fn, /perf\.lockMemoSkipped\+\+/, 'a skipped memo attempt must be visible in the report');
-  assert.match(CORE, /const MEMO_EVERY_MS = 500;/, 'the gate interval is missing');
   // The remembered circle is tried before the readback, and the refinement after the scan.
   assert.ok(fn.indexOf('perf.lockMemo +=') < fn.indexOf('perf.lockGrab +='), 'memo must come before the grab');
   assert.ok(fn.indexOf('perf.lockScan +=') < fn.indexOf('perf.lockRefine +='), 'the scan must come before the refinement');

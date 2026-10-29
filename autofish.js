@@ -56,16 +56,13 @@
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
    * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
    * time names itself instead of being inferred. */
-  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
-  /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
-   *  inside a reel (the dial persists across presses) at a third of the old read count. */
-  const MEMO_EVERY_MS = 500;
+  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   function resetPerf() {
     perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
     perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
     perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
     perf.card = 0; perf.cardN = 0;
-    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
+    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   }
 
   /* ---- timing core -----------------------------------------------------
@@ -1514,21 +1511,12 @@ const SPECIES = [
     // whole-surface recovery hands over a blob centre, and 2 px steps when the target is close.
     const half = span == null ? 22 : Math.max(0, Math.round(span));
     const step = half <= 12 ? 2 : 3;
-    // The remembered circle is tried at most every memoEveryMs, not on every call. Tried every time
-    // (3.8.6) it answered 38 of 4,611 calls - 0.8% - and cost 2.84 ms of a 6.48 ms call, because
-    // step() asks for a dial ~4-6 times a second when there is nothing on screen. A miss is a full
-    // sample() readback that the search below then repeats. Gating it keeps the recovery (a wrong
-    // hint still finds the remembered widget, one gate-interval later) and drops the readback.
-    const tNow = now();
-    if (F.lastGeo && tNow - (F.memoAt || 0) >= MEMO_EVERY_MS) {
-      F.memoAt = tNow;
+    if (F.lastGeo) {
       const tMemo = now();
       const g = { cx: F.lastGeo.cx, cy: F.lastGeo.cy, R: F.lastGeo.R };
       const s = F.sample(g);
       perf.lockMemo += now() - tMemo;                 // the hit AND the miss: a miss still paid a read
       if (s && s.valid && s.ring >= 0.8) { perf.lockMemoN++; g.width = s.width; return g; }
-    } else if (F.lastGeo) {
-      perf.lockMemoSkipped++;
     }
     const tGrab = now();
     const r = readUI(hintX - hw, hintY - hw, S, S);
@@ -2667,7 +2655,7 @@ const SPECIES = [
     }, extra || {});
     return {
       memoTries: n,
-      memo: one(perf.lockMemo, { hits: perf.lockMemoN, skipped: perf.lockMemoSkipped }),
+      memo: one(perf.lockMemo, { hits: perf.lockMemoN }),
       grab: one(perf.lockGrab),
       mask: one(perf.lockMask),
       scan: one(perf.lockScan),

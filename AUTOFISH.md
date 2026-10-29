@@ -1609,33 +1609,6 @@ calls (`lockDial` 4.1% of wall clock). Dial detection is therefore not just stil
 unchanged in rate - the memo hits 28 of 3,388 calls (0.8%), the same as the 0.6% measured before the
 change, so the scan is finding the same dials it did at 30 ms.
 
-#### 3.8.7: the remembered circle stops paying a readback it almost never uses
-
-With the scan fixed the phase split inverted: memo 2.84 ms (43.8%), grab 2.21 ms (34.1%), scan
-1.04 ms (16.0%). The memo is the `sample()` readback of the last locked circle, and `step()` asks
-for a dial 4-6 times a second when there is nothing on screen - so it paid a full readback on 99.2%
-of calls to answer 38 times in 4,611. A miss is also wasted work, because the search below repeats
-the same read.
-
-It is now tried at most once per `MEMO_EVERY_MS` (500 ms), and the report counts the skips
-(`lockPhases.memo.skipped`). Controlled A/B in one page state, same synthetic remembered circle,
-40 calls each:
-
-| | `lockDial` | memo | scan |
-|---|---|---|---|
-| every call tries the memo (3.8.6) | 5.94 ms | 2.64 | 0.93 |
-| gated at 500 ms (3.8.7) | **3.71 ms** | 0.00 | 1.02 |
-| gated again | 3.82 ms | 0.06 | 1.04 |
-
-About 2.2 ms off every dial check, and the phase split now reads grab-first as it should.
-
-**Not yet validated in a live fishing session.** After the install reload the character came back
-standing (`needsSeat: true`, 45 cast retries, none consumed), so no dial appeared and no reel was
-run - the only numbers above are the controlled A/B. The risk is bounded by construction: a memo hit
-returns the circle the search would have found anyway, and the case the memo actually protects - a
-wrong hint - is still recovered within one gate interval. It still needs one seated session to say
-so with a measurement rather than an argument.
-
 Also note the memo: 8 hits in 1,242 calls (0.6%). The remembered circle almost never answers,
 because the dial only exists while reeling, so it costs a full `sample()` on 93% of calls for a 7%
 chance of skipping the scan. It is cheap enough to keep, but it is not the fast path it looks like.
