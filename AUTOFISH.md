@@ -1621,3 +1621,43 @@ p95 1002 ms, every detector near 0.0 ms/s). A covered tab is not a valid frame b
 cheaper answer (a dial follows a press). A 120 s shadow count of the real calls: 791 scans, 4 dials
 found, and one of those found **more than 20 s after the last press** - so the premise is false in
 live play and the gate would have missed a dial. Left the check rate at `dialCheckMs` 150.
+
+#### Re-confirmed after the 3.8.7 rollback (2026-10-30)
+
+3.8.7 rate-limited the remembered-circle readback and was reverted the same day: it had only ever been
+measured in a controlled A/B on one page state, and after its install reload the character was standing,
+so no dial appeared and the release shipped unproven. The repo and the browser are back on 3.8.6. This
+run answers the question that revert left open - does the released 3.8.6 still fish, and does it still
+hit - in a real seated session rather than a synthetic one.
+
+Chromium, 1117x785, 3.8.6 (`scanCompiled: true`), sampler inside the page every 60 s, 7 minutes:
+
+| minute | caught / attempts | presses | acceptance | lost | fps | p95 | scan | `lockDial` |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 2 / 2 | 11 | 1.0 | 0 | 137.2 | 9.3 | 0.89 | 5.84 |
+| 2 | 1 / 1 | 5 | 1.0 | 0 | 136.1 | 9.9 | 0.89 | 5.82 |
+| 3 | 1 / 1 | 12 | 1.0 | 0 | 123.1 | 9.6 | 0.89 | 5.73 |
+| 4 | 1 / 2 | 5 | 1.0 | 1 | 138.9 | 8.6 | 0.88 | 5.68 |
+| 5 | 0 / 0 | 0 | 1.0 | 0 | 135.4 | 10.6 | 0.89 | 5.66 |
+| 6 | 3 / 3 | 16 | 1.0 | 0 | 136.9 | 9.7 | 0.89 | 5.68 |
+| 7 | 0 / 0 | 0 | 1.0 | 0 | 139.2 | 9.2 | 0.89 | 5.69 |
+
+8 caught of 9 attempts (89%), 49 presses (6.1 a catch), `pressAcceptRate` 1.0 with 89 accepted and 0
+rejected presses, 1 lost. fps 123-139 with p95 8.6-10.6 ms, one 279 ms worst frame in the third minute.
+`lockDial` 5.66-5.85 ms and the scan 0.88-0.90 ms across the run, memo hits 33 of 4,899 calls (0.7%).
+
+Against the 3.8.6 signature run in the section above (12/13 = 92%, 67 presses, 5.6 a catch, acceptance
+1.0, scan 0.99-1.00, `lockDial` 6.15-6.25) this is the same version behaving the same way: one fewer
+catch in one fewer attempt, four more presses, and the scan marginally cheaper. Nothing regressed by
+going back, so 3.8.6 stays the shipped release.
+
+Two details worth keeping:
+
+- **The seat flag can trip mid-run without ending it.** Minutes 5 and 7 sampled `needsSeat: true` while
+  `running` stayed true - a 45 s gap with no prompt, dial or press tripped the watchdog, and the next
+  cast cleared it (cast retries rose from 42 to 104 over the run, so the retry ladder was working the
+  whole time rather than the game having gone quiet). The panel pauses the clock for those gaps; the
+  fishing itself resumed.
+- **The memo is the least useful readback in the call.** 33 hits in 4,899 calls (0.7%) for 2.66-2.77 ms
+  of a 5.68 ms `lockDial`, i.e. the search is the cheap part and the remembered circle is what is left.
+  That is the case 3.8.7 tried to make with a gate; it stays unlanded until a gate is measured seated.
