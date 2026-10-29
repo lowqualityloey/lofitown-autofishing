@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.5.0
+// @version      3.7.1
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -53,7 +53,7 @@ window.__autofishInstalled = true;
 (() => {
   if (window.__fish) { try { window.__fish.stop(); } catch (e) {} }
 
-  const F = { version: 'autofish 3.0' };
+  const F = { version: 'autofish 3.7.1' };
   const now = () => performance.now();
 
   /* ---- timing core -----------------------------------------------------

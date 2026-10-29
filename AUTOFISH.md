@@ -1255,6 +1255,20 @@ the prompt was found at (558, 234) — horizontal exactly right, 39 px high but 
 box is (476,164,260×160), about 6% of the surface. `bubbleAnywhere()` remains the fallback for a
 camera that has moved away from the box.
 
+**Field verification, installed userscript, 1117×785, visible window.** The same window that had
+produced 11/11 `bubble anywhere` detections now produced **14 bubbles, 14 from the boxed scan and 0
+from the fallback**, at (558, 232-248). Over 182 s: 8 attempts, 8 caught, **0 lost, 0 misses**, 15
+dial locks all at (557,287) R=83, 34 presses with **34 accepted / 0 rejected** (acceptance 1.0),
+4.9 presses per catch, ~104 fps. The eight rows in `catches.csv` carry the right species and rarity,
+so the card-text fix held too. The derived prompt y (273) is 25-41 px below where the prompt actually
+painted at this size, which is why the 150 px floor and the whole-surface fallback stay.
+
+**The version label was lying.** The engine hardcoded `F.version = 'autofish 3.0'` while the
+userscript header climbed to 3.6.1, so a correctly updated install still reported an old version
+from `status()` and the panel. The build now stamps `F.version` from `package.json` (3.7.1 at the
+time of writing) and a test fails if the two drift. Tampermonkey's own dialog confirmed the update:
+`INSTALLED VERSION v3.7.0` → script `v3.7.1`, and the reloaded page reports `autofish 3.7.1`.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

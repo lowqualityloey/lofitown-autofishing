@@ -128,13 +128,17 @@ function read(name) {
 function build() {
   const src = read('autofish.js');
   if (src.indexOf('window.__fish = F') < 0) throw new Error('autofish.js no longer installs window.__fish');
+  // The engine's own label has to match the wrapper. It sat at "autofish 3.0" while the header
+  // climbed to 3.6.1, so a freshly updated install still looked stale in status() and the panel.
+  const stamped = src.replace(/version: 'autofish [0-9.]+'/, "version: 'autofish " + VERSION + "'");
+  if (stamped === src) throw new Error('autofish.js no longer declares F.version');
   const session = read('session.js');
   if (session.indexOf('AutoFishSession') < 0) throw new Error('session.js no longer exports AutoFishSession');
   const layout = read('layout.js');
   if (layout.indexOf('AutoFishLayout') < 0) throw new Error('layout.js no longer exports AutoFishLayout');
   const panel = read('panel.js');
   if (panel.indexOf('AutoFishSession') < 0) throw new Error('panel.js no longer consumes AutoFishSession');
-  return [HEADER, '', '(function () {', "'use strict';", 'if (window.__autofishInstalled) return;', 'window.__autofishInstalled = true;', '', src, session, layout, panel, BOOTSTRAP, '})();', ''].join('\n');
+  return [HEADER, '', '(function () {', "'use strict';", 'if (window.__autofishInstalled) return;', 'window.__autofishInstalled = true;', '', stamped, session, layout, panel, BOOTSTRAP, '})();', ''].join('\n');
 }
 
 function main() {

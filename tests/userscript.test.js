@@ -21,6 +21,12 @@ test('the userscript version matches package.json, so a bump cannot half-happen'
   assert.match(src, new RegExp('^// @version\\s+' + pkg.version.replace(/\./g, '\\.') + '$', 'm'));
 });
 
+test('the engine reports the same version as the wrapper', () => {
+  // A stale engine label made a freshly reinstalled script look old in status() and the panel.
+  const pkg = require('../package.json');
+  assert.match(src, new RegExp("const F = \\{ version: 'autofish " + pkg.version.replace(/\./g, '\\.') + "' \\}"));
+});
+
 test('the bot core is inlined exactly once', () => {
   const n = src.split('window.__fish = F').length - 1;
   assert.strictEqual(n, 1);

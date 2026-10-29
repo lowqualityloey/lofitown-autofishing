@@ -24,7 +24,7 @@
 - [/] **Milestone 2** — trustworthy accuracy: the per-fish-attempt oracle replaced per-press scoring
   (28 caught / 30 attempts, Wilson 95% CI 78.7-98.2%); the dial search went from 83 ms to 4 ms a
   call; fishing was found to be seat-based, so a missing cast prompt is now named, the session clock
-  pauses while unseated, and the pause honours the clock window and the daily cap. 156 tests after the
+  pauses while unseated, and the pause honours the clock window and the daily cap. 163 tests after the
   2026-10-29 review round (dial memory + whole-surface recovery, card-text cursor, press acceptance,
   local day store, CSS coordinate conversion).
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
@@ -253,6 +253,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-10-29 | lead (DSH session) | Cast ladder + dial hint | The live tab was still running a stale `3.6.1` build with perf wrappers whose `castRecovery(3)` returned `tap:false`, so earlier live readings described the old ladder. Fixed core injected and watched at 1117x785: 7 catches / 7 attempts, 0 lost, 16 dials / 16 hits / 35 presses (5.0 presses a catch), 14/14 bubble rows `tap:true`; `catches.csv` agrees (Epic Betta, Uncommon Tripod Fish). Session ended at `needs a seat`, not a dial defect. 127 tests. |
 | 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
 | 2026-10-29 | lead (DSH session) | Senior review round | Fixed the six review findings: persisted dial geometry + whole-surface recovery (no hardcoded seed), text cursor advance on an unparsed card, press acceptance by the new-triangle spawn (`sweepReport`/`accuracy` rewired), dead cast-retry ladder call removed, `floodComponents` de-allocation, local day store for the daily cap, CSS coordinate conversion at the tap/zones boundary. 156 tests; `dist/` rebuilt. |
+| 2026-10-29 | lead (DSH session) | Live-surface prompt box | The CAST/REEL box is derived from the live canvas (`promptBox`) instead of the 1620x1031 literal. Field run at 1117x785: 14/14 bubbles from the box, 0 from `bubble anywhere` (was 11/11 fallback), 8 caught / 8 attempts, 0 lost, 34/34 presses accepted. `build-userscript.js` now stamps `F.version` from `package.json`, so an updated install no longer reports `autofish 3.0`; Tampermonkey installed 3.7.1 and the page reports it. 163 tests. |
 
 ---
 
