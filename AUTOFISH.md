@@ -1569,13 +1569,27 @@ anything.** What it did do is rule the loop out as the problem, one experiment a
 - closure-scope size: a function closing over 10 / 200 / 600 / 1,200 / 2,000 locals: 1.7-2.3 ms;
 - a large injected `<script>`: 60 helpers plus tens of KB of padding in one IIFE, 1.7 ms at every size.
 
-So the same code, page and buffer size differ by 13-20x, and the difference travels with the
-*instance* that lives in the installed userscript rather than with its inputs. The remaining
-hypothesis is that the injected script's compilation context keeps this one function out of
-optimised code; that is not proven, and the next experiment is the one the extraction makes cheap -
-compile the scan with `new Function` at startup, outside the giant IIFE, and re-read the phases.
-Until then the honest statement is: the coarse scan is the cost, it is 13-20x slower than the same
-code elsewhere, and no threshold or rate change was made on a guess.
+So the same code, page and buffer size differed by 13-20x, and the difference travelled with the
+*instance* that lives in the installed userscript rather than with its inputs.
+
+#### 3.8.6: compiled standalone, and it is fixed
+
+The scan is now compiled at startup with `new Function("return (" + coarseScan.toString() + ")")()` -
+same source, fresh small scope, no closure at all (the direction tables became parameters for this
+reason). If a CSP refuses eval the call throws, the literal function is used and `perf().scanCompiled`
+reports `false`. Same window, same 180 s protocol, 3.8.6 live with `scanCompiled: true`:
+
+| | 3.8.5 | 3.8.6 |
+|---|---|---|
+| coarse scan | 30.26 ms/call | **0.95 ms/call** |
+| `lockDial` | 35.09 ms/call = 23.1% | **5.91 ms/call = 4.2%** |
+| fps | 104.5 | **134.9** |
+| frame p95 | 35.5 ms | **9.6-10.8 ms** |
+
+So the hypothesis held: the function was being kept out of optimised code by its compilation
+context, and 0.95 ms is at the same 2.3 ms-or-better scale as the fresh eval, in a page doing more
+frames per second. Fishing is unaffected - 1 caught, 8 presses, `pressAcceptRate` 1.0, 0 lost - and
+no detector threshold, gate or scan rate was touched to get there.
 
 Also note the memo: 8 hits in 1,242 calls (0.6%). The remembered circle almost never answers,
 because the dial only exists while reeling, so it costs a full `sample()` on 93% of calls for a 7%

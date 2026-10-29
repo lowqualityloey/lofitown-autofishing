@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.8.5
+// @version      3.8.6
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -58,7 +58,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.8.5" };
+  const F = { version: "3.8.6" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -1483,7 +1483,7 @@ const SPECIES = [
    * helper calls cost more than the whole search (31-33 ms against 8-11 ms, same answer, measured
    * 2026-10-29). 15/20, not 17 - see the note on the gate below.
    */
-  function coarseScan(mask, rw, rh, ox, oy, hintX, hintY, half, step) {
+  function coarseScan(mask, rw, rh, ox, oy, hintX, hintY, half, step, C, S) {
     let best = null;
     for (let dy = -half; dy <= half; dy += step) {
       for (let dx = -half; dx <= half; dx += step) {
@@ -1491,7 +1491,7 @@ const SPECIES = [
         for (let R = 78; R <= 120; R += 2) {
           let hit = 0;
           for (let k = 0; k < 20; k++) {
-            const x = Math.round(cx + R * RIM_C20[k]) - ox, y = Math.round(cy + R * RIM_S20[k]) - oy;
+            const x = Math.round(cx + R * C[k]) - ox, y = Math.round(cy + R * S[k]) - oy;
             if (x >= 0 && y >= 0 && x < rw && y < rh && mask[y * rw + x]) hit++;
           }
           // 15, not 17. The gate used to accept only 17 of 20 rim samples, and the live dial at a
@@ -1504,6 +1504,21 @@ const SPECIES = [
       }
     }
     return best;
+  }
+
+  /* The scan is also compiled as a standalone function at startup. In 3.8.2-3.8.5 the same loop took
+   * 30 ms a call inside the userscript while the identical source eval'd in the page took 2.3 ms, and
+   * 3.8.3's extraction into its own function changed nothing - so the difference is the instance's
+   * compilation context, not the code. `new Function` gives the same source a fresh, small scope with
+   * no closure at all (the direction tables are passed in for exactly that reason). If the page's CSP
+   * forbids eval, the call throws and the literal function is used instead: same answer, old cost.
+   */
+  let scanDial = coarseScan, scanCompiled = null, scanCompileError = null;
+  try {
+    scanCompiled = new Function('"use strict"; return (' + coarseScan.toString() + ');')();
+    scanDial = scanCompiled;
+  } catch (e) {
+    scanCompileError = String((e && e.message) || e);
   }
 
   F.lockDial = function (hintX, hintY, span) {
@@ -1530,7 +1545,7 @@ const SPECIES = [
     perf.lockMask += now() - tMask;
     const rw = r.w, rh = r.h, ox = r.x, oy = r.y;
     const tScan = now();
-    const best = coarseScan(mask, rw, rh, ox, oy, hintX, hintY, half, step);
+    const best = scanDial(mask, rw, rh, ox, oy, hintX, hintY, half, step, RIM_C20, RIM_S20);
     perf.lockScan += now() - tScan;
     if (!best) return null;
     const tRefine = now();
@@ -2700,6 +2715,9 @@ const SPECIES = [
       // account for the call instead of being compared against guesses. `memo.hits` counts the
       // calls the remembered circle answered - a high hit rate is the fast path working.
       lockPhases: lockPhases(),
+      // false means the page's CSP refused `new Function` and the in-script scan is in use.
+      scanCompiled: !!scanCompiled,
+      scanCompileError,
     };
   };
 

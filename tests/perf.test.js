@@ -67,12 +67,18 @@ test('the dial search counts a rim mask instead of test-allocating per sample', 
   assert.match(fn, /rimMask\(r\)/, 'lockDial must mark the rim once');
   // The scan is its own function since 3.8.3: inside lockDial it cost 30.28 ms a call while the same
   // loop standalone cost 1.4 ms, so the split is the point and must not be quietly inlined again.
-  assert.match(fn, /const best = coarseScan\(mask, rw, rh, ox, oy, hintX, hintY, half, step\)/, 'lockDial must hand the scan to coarseScan');
+  assert.match(fn, /const best = scanDial\(mask, rw, rh, ox, oy, hintX, hintY, half, step, RIM_C20, RIM_S20\)/, 'lockDial must hand the scan to the compiled scan');
   const coarse = slice('function coarseScan(', 'F.lockDial = function');
   assert.match(coarse, /for \(let k = 0; k < 20; k\+\+\)/, 'the coarse scan counts mask hits inline');
   assert.match(coarse, /mask\[y \* rw \+ x\]/, 'and reads the mask by index, not through a helper');
   assert.ok(!/rimHits\(/.test(coarse), 'a helper call per candidate circle came back');
   assert.match(coarse, /hit >= 15/, '15/20 is the measured gate; 17 misses a real dial');
+  // Compiled with new Function, so its source must stand alone: no RIM_ table or PX() from the closure.
+  assert.match(coarse, /function coarseScan\(mask, rw, rh, ox, oy, hintX, hintY, half, step, C, S\)/, 'the tables must be parameters, or the compiled copy would see undefined');
+  assert.ok(!/RIM_C20\[|RIM_S20\[/.test(coarse), 'the scan must not reach for the closure tables');
+  assert.match(CORE, /scanCompiled = new Function\('"use strict"; return \(' \+ coarseScan\.toString\(\) \+ '\);'\)\(\)/, 'the standalone compile is missing');
+  assert.match(CORE, /catch \(e\) \{\r?\n\s+scanCompileError = String/, 'a CSP that refuses eval must fall back to the literal scan, not throw');
+  assert.match(slice('F.perf = function ()', '\n  };'), /scanCompiled: !!scanCompiled/, 'perf() must say which scan is running');
   const refine = slice('function finishLock(r, mask, best)', 'function coarseScan(');
   assert.match(refine, /rimHits\(mask, r, best\.cx, best\.cy, R, RIM_C40, RIM_S40, 40\)/, 'the refinement must still check 40 samples');
   for (const [name, body] of [['lockDial', fn], ['coarseScan', coarse]]) {
