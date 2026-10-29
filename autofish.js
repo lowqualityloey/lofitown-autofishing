@@ -1253,23 +1253,33 @@ const SPECIES = [
     // Mark the rim pixels once, then count them per candidate circle instead of re-testing the
     // same ~4,950 circles pixel by pixel (that was 83 ms a call; this is ~10 ms).
     const mask = rimMask(r);
-    let best = null;
+    // The candidate scan is inlined rather than calling rimHits once per circle. Geometry is
+    // unchanged - same centres, same radii, same 20-sample rim count - but on Gecko those 4,950
+    // helper calls cost more than the whole search: measured live 2026-10-29 in Zen, 31-33 ms a
+    // call through rimHits against 8-11 ms inlined, with the same answer on every frame. The
+    // 17-call refinement below still uses the helper; at that count it is noise.
+    const w = r.w, h = r.h, ox = r.x, oy = r.y;
+    let bestCx = 0, bestCy = 0, bestR = 0, bestScore = 0;
     for (let dy = -22; dy <= 22; dy += 3) {
       for (let dx = -22; dx <= 22; dx += 3) {
         const cx = Math.round(hintX + dx), cy = Math.round(hintY + dy);
         for (let R = 78; R <= 120; R += 2) {
-          const hit = rimHits(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20);
-          if (hit >= 17 && (!best || hit > best.score)) best = { cx, cy, R, score: hit };
+          let hit = 0;
+          for (let k = 0; k < 20; k++) {
+            const x = Math.round(cx + R * RIM_C20[k]) - ox, y = Math.round(cy + R * RIM_S20[k]) - oy;
+            if (x >= 0 && y >= 0 && x < w && y < h && mask[y * w + x]) hit++;
+          }
+          if (hit >= 17 && hit > bestScore) { bestScore = hit; bestCx = cx; bestCy = cy; bestR = R; }
         }
       }
     }
-    if (!best) return null;
-    let bestR = best.R, bestN = -1;
-    for (let R = Math.max(74, best.R - 8); R <= best.R + 8; R++) {
-      const n = rimHits(mask, r, best.cx, best.cy, R, RIM_C40, RIM_S40, 40);
-      if (n > bestN) { bestN = n; bestR = R; }
+    if (!bestScore) return null;
+    let bestRf = bestR, bestN = -1;
+    for (let R = Math.max(74, bestR - 8); R <= bestR + 8; R++) {
+      const n = rimHits(mask, r, bestCx, bestCy, R, RIM_C40, RIM_S40, 40);
+      if (n > bestN) { bestN = n; bestRf = R; }
     }
-    const geo = { cx: best.cx, cy: best.cy, R: bestR };
+    const geo = { cx: bestCx, cy: bestCy, R: bestRf };
     const s = F.sample(geo);
     if (!s || !s.valid || s.ring < 0.8) return null;
     geo.width = s.width;

@@ -65,7 +65,9 @@ function slice(from, to) {
 test('the dial search counts a rim mask instead of test-allocating per sample', () => {
   const fn = slice('F.lockDial = function (hintX, hintY)', 'F.sample = function');
   assert.match(fn, /rimMask\(r\)/, 'lockDial must mark the rim once');
-  assert.match(fn, /rimHits\(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20\)/);
+  assert.match(fn, /mask\[y \* w \+ x\]/, 'the coarse scan must count mask hits inline, by index');
+  assert.ok(!/rimHits\(mask, r, cx, cy, R, RIM_C20/.test(fn), 'a helper call per candidate circle came back');
+  assert.match(fn, /rimHits\(mask, r, bestCx, bestCy, R, RIM_C40, RIM_S40, 40\)/, 'the refinement must still check 40 samples');
   assert.ok(!/Math\.cos|Math\.sin/.test(fn), 'the direction tables must replace per-sample trig');
   assert.ok(!/PX\(/.test(fn), 'lockDial must not allocate a pixel array per sample');
   assert.ok(!/RIM\(/.test(fn), 'lockDial must read the mask, not the raw predicate');

@@ -147,6 +147,25 @@ test('a catch outside the catalogue is visible: an UNK cell and an honest last l
   assert.ok(src.includes('not in the built-in catalogue'), 'the tooltip explains the catalogue miss');
 });
 
+test('the frame report is on the panel, because a browser may take no console at all', () => {
+  // The Zen tab takes no synthetic keystrokes, so __fish.perf() cannot be read there. The numbers
+  // still have to be reachable: on the panel, and from a screenshot.
+  assert.ok(src.includes('perfLine: perfLine'), 'the line is registered for render');
+  assert.ok(src.includes('perfBox.append(perfLine, perfMore, perfJson)'), 'the block is built in the card');
+  const fn = src.slice(src.indexOf('function renderPerf('), src.indexOf('function render()'));
+  assert.ok(fn.length > 0, 'renderPerf exists');
+  assert.ok(fn.includes('fish().perf()'), 'the numbers are perf()\'s, not re-derived counters');
+  assert.ok(fn.includes('p.p50') && fn.includes('p.p95') && fn.includes('p.worst'), 'the frame percentiles are shown');
+  assert.ok(fn.includes("'ms/s: snap '"), 'each detector prints its share of wall time');
+  assert.ok(fn.includes("share('lockDial')"), 'the dial search is one of them');
+  assert.ok(fn.includes('catch (e) { p = null; }'), 'a missing perf() must not take the panel down');
+  assert.ok(src.includes('renderPerf();'), 'render() refreshes it on the tick');
+  const toggle = src.slice(src.indexOf("perfBox.addEventListener('click'"), src.indexOf('function zoneRect('));
+  assert.ok(toggle.length > 0, 'the block is clickable');
+  assert.ok(toggle.includes('JSON.stringify(fish().perf()'), 'the click prints the whole report');
+  assert.ok(toggle.indexOf('place()') > 0, 'the card is re-measured after it grows');
+});
+
 test('the budget is local: today and the cooldown survive a reload', () => {
   assert.ok(src.includes("var BUDGET_KEY = 'autofish:budget:v1'"), 'the budget key exists');
   assert.ok(src.includes('function syncBudget()'), 'the budget is written');
