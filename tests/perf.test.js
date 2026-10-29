@@ -77,6 +77,26 @@ test('the dial search counts a rim mask instead of test-allocating per sample', 
   assert.ok(!/RIM\(/.test(fn), 'lockDial must read the mask, not the raw predicate');
 });
 
+// The per-call total and the parts that were measured separately never added up: the live probe
+// read 35-44 ms a call while the readback (7-9 ms), the mask (0.38 ms) and the coarse scan (0.75 ms)
+// explained under a third of it. These guards keep lockDial timing its own phases, so the missing
+// time has to show up somewhere instead of being inferred from unrelated numbers.
+test('lockDial times every phase of its own call', () => {
+  const fn = slice('F.lockDial = function (hintX, hintY, span)', 'F.sample = function');
+  for (const phase of ['lockMemo', 'lockGrab', 'lockMask', 'lockScan', 'lockRefine']) {
+    assert.match(fn, new RegExp('perf\\.' + phase + ' \\+='), phase + ' is not timed');
+  }
+  assert.match(fn, /perf\.lockMemoN\+\+/, 'the remembered-circle fast path must be counted');
+  // The remembered circle is tried before the readback, and the refinement after the scan.
+  assert.ok(fn.indexOf('perf.lockMemo +=') < fn.indexOf('perf.lockGrab +='), 'memo must come before the grab');
+  assert.ok(fn.indexOf('perf.lockScan +=') < fn.indexOf('perf.lockRefine +='), 'the scan must come before the refinement');
+  const phases = slice('function lockPhases()', '\n  }');
+  for (const phase of ['memo', 'grab', 'mask', 'scan', 'refine']) {
+    assert.match(phases, new RegExp('\\b' + phase + ': one\\('), phase + ' is missing from the report');
+  }
+  assert.match(slice('F.perf = function ()', '\n  };'), /lockPhases: lockPhases\(\)/, 'perf() must report the phases');
+});
+
 test('the dial sample reads its three rings by index, without per-sample arrays', () => {
   const fn = slice('F.sample = function (geo)', 'function cancelPend');
   assert.ok(!/PX\(/.test(fn), 'F.sample must not allocate a pixel array per sample');

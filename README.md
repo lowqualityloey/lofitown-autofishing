@@ -141,7 +141,7 @@ Open the printed URL, then drag the bookmarklet to the bookmarks bar (or run it 
 ## Development
 
 ```bash
-node --test                # 178 tests; note: never "node --test tests/"
+node --test                # 179 tests; note: never "node --test tests/"
 node build-userscript.js   # rebuild dist/ after editing any browser file
 ```
 

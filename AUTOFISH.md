@@ -1518,10 +1518,45 @@ the fix is 27.5%, i.e. slightly worse than the thing it was meant to fix.
 That is the useful part of this reading: **the cost is not in the search.** By the in-page probe the
 whole scan is `rimMask` 0.38 ms + inlined search 0.75 ms, about 1.1 ms of a 43.74 ms call, and the
 240x240 readback was measured flat at 7-9 ms. Roughly 34 ms a call is therefore unaccounted for by
-the parts that were measured, which is why the probe and the live loop disagree. The next step is to
-split `lockDial`'s own timer inside the live loop - grab / `rimMask` / coarse scan / refine / `sample`
-- rather than in a probe, because every obvious lever depends on knowing which of those five owns
-the 34 ms.
+the parts that were measured, which is why the probe and the live loop disagree.
+
+### Answered: the coarse scan owns the call, and it runs 20x slower in place
+
+3.8.2 times the five phases inside `lockDial` itself (`perf().lockPhases`: memo / grab / mask /
+scan / refine), so the parts are measured by the same clock that reports the total. Live Chromium,
+3.8.2, 1117x785, 180 s, 8 catches attempted and 4 caught (`pressAcceptRate` 1.0, 0 lost), 104.5 fps,
+frame p50 7 ms:
+
+| phase | ms/call | share of `lockDial` |
+|---|---|---|
+| memo (remembered circle) | 2.49 | 7.1% (8 hits in 1,242 tries) |
+| grab (240x240 readback) | 1.97 | 5.6% |
+| mask (`rimMask`) | 0.17 | 0.5% |
+| **coarse scan** | **30.28** | **86.5%** |
+| refine (`finishLock`) | 0.10 | 0.3% (only runs when a dial is found) |
+
+Total `lockDial` 35.02 ms a call at 6.9 calls/s, i.e. 241 ms/s = 24.1% of wall clock. So the missing
+34 ms was the scan all along, and the earlier "0.75 ms" figure described the loop running somewhere
+else, not the live call.
+
+**The scan is slow because it is unoptimised in place, not because it does more work.** The same
+loop, same 4,950 circles and 99,000 samples, over a 240x240 mask:
+
+- as its own small function: **1.4 ms**; padded with 100 / 400 / 1,200 extra statements to rule out
+  function size: 2.2-4.0 ms, so size is not the cause;
+- as `F.lockDial` in the live tab: **32-36 ms**, single calls and in a burst of ten alike, and 100 ms
+  at `span` 40 (about 4x the circles), so it scales with the work but at ~20x the cost per sample.
+- a 20 s CPU profile agrees it is not attributable time: `getImageData` 27.1%, `lockDial` self-time
+  8.9% (about 13 ms a call) against the 35 ms the wall clock reports - the loop is running far below
+  its optimised cost and the profiler does not put the difference in JavaScript.
+
+The next step is therefore **structural, not a rate cap**: lift the scan out of `lockDial` into its
+own small function (the way `finishLock` already is) and re-measure the same phases. Capping the call
+rate stays rejected - the 120 s shadow count above found dials the gate would have missed.
+
+Also note the memo: 8 hits in 1,242 calls (0.6%). The remembered circle almost never answers,
+because the dial only exists while reeling, so it costs a full `sample()` on 93% of calls for a 7%
+chance of skipping the scan. It is cheap enough to keep, but it is not the fast path it looks like.
 
 Neo (Chromium) could not be read: its tab sat behind a full-screen video, and a covered tab is
 throttled to about 1 fps by the compositor, so its `perf()` only describes the occlusion (14.8 fps,

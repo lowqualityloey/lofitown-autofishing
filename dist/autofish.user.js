@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.8.1
+// @version      3.8.2
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -58,7 +58,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.8.1" };
+  const F = { version: "3.8.2" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -67,11 +67,18 @@ window.__autofishInstalled = true;
    * average cost of each detector, so a change can be justified by numbers rather than a guess.
    */
   const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0 };
+  /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
+   * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
+   * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
+   * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
+   * time names itself instead of being inferred. */
+  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   function resetPerf() {
     perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
     perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
     perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
     perf.card = 0; perf.cardN = 0;
+    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   }
 
   /* ---- timing core -----------------------------------------------------
@@ -1473,15 +1480,21 @@ const SPECIES = [
     const half = span == null ? 22 : Math.max(0, Math.round(span));
     const step = half <= 12 ? 2 : 3;
     if (F.lastGeo) {
+      const tMemo = now();
       const g = { cx: F.lastGeo.cx, cy: F.lastGeo.cy, R: F.lastGeo.R };
       const s = F.sample(g);
-      if (s && s.valid && s.ring >= 0.8) { g.width = s.width; return g; }
+      perf.lockMemo += now() - tMemo;                 // the hit AND the miss: a miss still paid a read
+      if (s && s.valid && s.ring >= 0.8) { perf.lockMemoN++; g.width = s.width; return g; }
     }
+    const tGrab = now();
     const r = readUI(hintX - hw, hintY - hw, S, S);
+    perf.lockGrab += now() - tGrab;
     if (!r) return null;
     // Mark the rim pixels once, then count them per candidate circle instead of re-testing the
     // same ~4,950 circles pixel by pixel (that was 83 ms a call; this is ~10 ms).
+    const tMask = now();
     const mask = rimMask(r);
+    perf.lockMask += now() - tMask;
     // The candidate scan is inlined rather than calling rimHits once per circle. Geometry is
     // unchanged - same centres, same radii, same 20-sample rim count - but on Gecko those helper
     // calls cost more than the whole search: 31-33 ms a call through rimHits against 8-11 ms
@@ -1489,6 +1502,7 @@ const SPECIES = [
     // refinement in finishLock still uses the helper; at that count it is noise.
     const rw = r.w, rh = r.h, ox = r.x, oy = r.y;
     let best = null;
+    const tScan = now();
     for (let dy = -half; dy <= half; dy += step) {
       for (let dx = -half; dx <= half; dx += step) {
         const cx = Math.round(hintX + dx), cy = Math.round(hintY + dy);
@@ -1507,8 +1521,12 @@ const SPECIES = [
         }
       }
     }
+    perf.lockScan += now() - tScan;
     if (!best) return null;
-    return finishLock(r, mask, best);
+    const tRefine = now();
+    const locked = finishLock(r, mask, best);
+    perf.lockRefine += now() - tRefine;
+    return locked;
   };
 
   /** The wedge is the one green thing on the UI layer, and it has to survive a 4x downscale. */
@@ -2618,6 +2636,24 @@ const SPECIES = [
     };
   });
 
+  /** lockDial's five phases as ms, ms per call and share of the call. */
+  function lockPhases() {
+    const total = perf.lock || 0, n = perf.lockN || 0;
+    const one = (ms, extra) => Object.assign({
+      ms: +ms.toFixed(1),
+      msPerCall: n ? +(ms / n).toFixed(2) : null,
+      pct: total ? +(100 * ms / total).toFixed(1) : null,
+    }, extra || {});
+    return {
+      memoTries: n,
+      memo: one(perf.lockMemo, { hits: perf.lockMemoN }),
+      grab: one(perf.lockGrab),
+      mask: one(perf.lockMask),
+      scan: one(perf.lockScan),
+      refine: one(perf.lockRefine),
+    };
+  }
+
   /**
    * Frame budget and per-detector cost, from the last ~10 s of frames.
    *
@@ -2650,6 +2686,10 @@ const SPECIES = [
       worst: gaps.length ? +gaps[gaps.length - 1].toFixed(1) : null,
       // share is the fraction of wall time; findBubble includes its snapshot, so they overlap.
       rates,
+      // Where lockDial's ms go. `pct` is that phase's share of lockDial's own total, so the parts
+      // account for the call instead of being compared against guesses. `memo.hits` counts the
+      // calls the remembered circle answered - a high hit rate is the fast path working.
+      lockPhases: lockPhases(),
     };
   };
 
