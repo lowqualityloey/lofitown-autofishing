@@ -1775,3 +1775,58 @@ One caveat for whoever reads this next: with a 2 s window the memo is effectivel
 normal fishing, so it now only helps immediately after a dial is found. That is where it was ever
 useful - but if a future game update makes the dial jump between presses, this is the first thing to
 loosen, and `memo.cold` will show it.
+
+#### 3.8.8 over a long session: 103 catches, and the retired memo still costs nothing (2026-10-30)
+
+The 399.6 s window proved the gate cheap. It did not prove it *safe*: a memo that answers with a stale
+circle would show up not as milliseconds but as mis-pressed dials and lost fish, and 11 attempts cannot
+separate that from ordinary luck. This run is the safety half - one continuous seated session with the
+attempt recorder installed at the start, so every verdict, band and loss reason is logged as it closes.
+
+75.2 minutes of active fishing, 76 one-minute samples, 139.8 fps median (10th percentile 134), p95
+8.05 ms median, no hidden or stalled sample, `scanCompiled: true`, version 3.8.8:
+
+| | 3.8.6 | 3.8.7 | 3.8.8 (short) | **3.8.8 (this run)** |
+|---|---|---|---|---|
+| caught / attempts | 8 / 9 | 14 / 15 | 11 / 11 | **103 / 112 (92.0%)** |
+| presses a catch | 6.1 | 5.6 | 5.1 | **5.84** |
+| acceptance | 1.0 | 1.0 | 1.0 | **1.0, minimum sample 1.0** |
+| rejected presses | 0 | 0 | 0 | **0 of 602** |
+| lost | 1 | 1 | 0 | **9** |
+| dials closed / hit | - | - | - | **218 / 217 (99.54%)** |
+
+Every one of the nine losses closed as `cast prompt` - the fish left before the cast landed - and none
+as a dial verdict: 7 in the fast band (99 attempts), 1 in blur (12), and the single slow-band attempt.
+The catch rate lands between 3.8.6's 89% and 3.8.7's 93%, and presses a catch is inside the 5.1-6.1
+spread those three sessions showed, so nothing about the gate moved the fishing.
+
+This is the test that matters for a stale memo: 602 presses over 218 dials produced **zero rejected
+presses** and **one missed dial**. A remembered circle older than the dial on screen would send a press
+to the old ring, which the game answers by ignoring the press - `pressRejected` - and the bot would have
+to relock at a new spot. Neither happened, and the one miss never reached a press.
+
+The memo's own numbers, differenced over the window (30,190 `lockDial` calls, 6.8 a second):
+
+| | value |
+|---|---|
+| attempts | 30,190 |
+| hits | 33 (0.11%) |
+| skipped | 30,065 (99.6%), of which 29,834 cold |
+| total time | 252.1 ms |
+| **per call** | **0.008 ms** |
+| hits inside an attempt | 25 of 33 |
+
+So the gate fired 33 times in 75 minutes of real fishing, and 99.6% of calls never touched it. Per-call
+medians for the rest of the call, same window: `grab` 2.42, `scan` 0.86, `mask` 0.18, `refine` 0.11,
+`lockDial` 3.59. For scale, at 3.8.6's 2.7 ms a call the memo alone would have cost about 81 seconds of
+main thread in this window; it cost a quarter of one second.
+
+**Truncation, stated plainly.** The run was written to stop at 200 catches or 2.5 hours. It stopped at
+103 catches after 75 minutes because the character lost the seat mid-run - the event log ends in ~845
+`cast retry ... consumed: false`, which is the unseated ladder retrying a cast prompt that the game only
+emits from the sit path - and the session's own `maxMinutes` cap then closed it out. A second stretch was
+started and immediately reported `needsSeat` again, so it could not continue without the character being
+sat, and the bot was left paused. 112 attempts is a real sample and answers the safety question; 200
+would have been better and is still open if a longer seated session is wanted.
+
+**Decision:** keep 3.8.8 unchanged. No code moved for this run.
