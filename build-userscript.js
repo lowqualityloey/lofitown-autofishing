@@ -146,7 +146,10 @@ function build() {
   if (layout.indexOf('AutoFishLayout') < 0) throw new Error('layout.js no longer exports AutoFishLayout');
   const panel = read('panel.js');
   if (panel.indexOf('AutoFishSession') < 0) throw new Error('panel.js no longer consumes AutoFishSession');
-  return [HEADER, '', '(function () {', "'use strict';", 'if (window.__autofishInstalled) return;', 'window.__autofishInstalled = true;', '', src, session, layout, panel, BOOTSTRAP, '})();', ''].join('\n');
+  // Normalise to LF: git stores these sources with LF and a Windows checkout hands them back
+  // with CRLF, so without this the output - and the "dist is current" byte comparison in
+  // tests/fishserve.test.js - would depend on how the tree was checked out.
+  return [HEADER, '', '(function () {', "'use strict';", 'if (window.__autofishInstalled) return;', 'window.__autofishInstalled = true;', '', src, session, layout, panel, BOOTSTRAP, '})();', ''].join('\n').replace(/\r\n/g, '\n');
 }
 
 function main() {
