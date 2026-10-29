@@ -112,6 +112,20 @@ test('lockDial times every phase of its own call', () => {
   assert.match(slice('F.perf = function ()', '\n  };'), /lockPhases: lockPhases\(\)/, 'perf() must report the phases');
 });
 
+// 3.8.8: the interval still paid one readback every 500 ms between catches, to learn that the
+// remembered circle is not a dial any more. A memo attempt now also needs a dial locked recently.
+test('the remembered circle is only tried while a dial was just locked', () => {
+  const fn = slice('F.lockDial = function (hintX, hintY, span)', 'F.sample = function');
+  assert.match(fn, /const recent = tNow - \(F\.lastLockAt \|\| 0\) <= MEMO_RECENT_MS/, 'the recent-lock condition is missing');
+  assert.match(fn, /if \(F\.lastGeo && recent && tNow - \(F\.memoAt \|\| 0\) >= MEMO_EVERY_MS\)/, 'both conditions must gate the memo');
+  assert.match(CORE, /const MEMO_RECENT_MS = 2000;/, 'the recent-lock window is missing');
+  // Both ways a dial is found have to refresh the stamp, or the memo would go cold mid-reel.
+  assert.match(fn, /perf\.lockMemoN\+\+; F\.lastLockAt = tNow;/, 'a memo hit must count as a lock');
+  assert.match(fn, /if \(locked\) F\.lastLockAt = tNow;/, 'a searched lock must stamp the time');
+  assert.match(fn, /if \(!recent\) perf\.lockMemoCold\+\+/, 'the cold skip must be counted separately');
+  assert.match(slice('function lockPhases()', '\n  }'), /cold: perf\.lockMemoCold/, 'the report must expose the cold skips');
+});
+
 test('the dial sample reads its three rings by index, without per-sample arrays', () => {
   const fn = slice('F.sample = function (geo)', 'function cancelPend');
   assert.ok(!/PX\(/.test(fn), 'F.sample must not allocate a pixel array per sample');

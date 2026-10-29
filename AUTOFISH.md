@@ -1735,3 +1735,43 @@ is the within-session one above: the gate's 3.5 ms a call, measured directly, no
 
 **Decision:** keep. Catches, presses a catch and acceptance all match the validated 3.8.6 build while
 the readback the gate targets fell by 73%, so 3.8.7 stays the shipped release.
+
+#### 3.8.8: the memo now needs a dial on screen, and it earns nothing (2026-10-30)
+
+3.8.7 stopped the memo from reading on every call, but it still spent one readback every 500 ms
+between catches - to prove that a remembered circle is not a dial any more. 3.8.8 adds the other half
+of the condition: an attempt also needs a dial to have been locked inside `MEMO_RECENT_MS` (2000 ms).
+The skip reason is counted separately as `lockPhases.memo.cold`, so the two gates are visible apart.
+
+Measured as one 399.6 s delta window (cumulative counters differenced, the method that survived the
+unfocused-window episode last round), 136.8 fps, p95 9.5 ms, 6.68 `lockDial` calls a second:
+
+| | 3.8.6 | 3.8.7 | **3.8.8** |
+|---|---|---|---|
+| memo attempts | every call | every 500 ms | **8 of 2,668 calls** |
+| memo, ms a call | 2.66-2.77 | 1.06 | **0.008** |
+| grab | 1.83 | 4.13 | 3.15 |
+| scan | 0.89 | 1.54 | 1.21 |
+| mask | 0.44 | 0.46 | 0.31 |
+| refine | 0.28 | 0.32 | 0.16 |
+| `lockDial` | 5.66-5.85 | 7.51 | 4.84 |
+| caught / attempts | 8 / 9 | 14 / 15 | **11 / 11** |
+| presses a catch | 6.1 | 5.6 | **5.1** |
+| acceptance | 1.0 | 1.0 | **1.0, 78 accepted / 0 rejected** |
+| lost | 1 | 1 | **0** |
+
+The memo answered 3 of its 8 attempts. Across 2,668 calls it cost 22.2 ms in total: it is now a
+rounding error rather than a phase. Everything else in the call fell with it, so this is not the
+"faster but fewer fish" case the keep rule was written to catch - 11 attempts, 11 catches, no losses,
+no rejected presses.
+
+`grab` still differs between sessions (1.83 / 4.13 / 3.15 ms), which is why the absolute `lockDial`
+column is read within a session rather than across them; the number that is directly comparable is
+the memo's own, and it went from 2.7 ms to 0.008 ms a call over three releases.
+
+**Decision:** keep. 3.8.8 is the shipped release.
+
+One caveat for whoever reads this next: with a 2 s window the memo is effectively retired during
+normal fishing, so it now only helps immediately after a dial is found. That is where it was ever
+useful - but if a future game update makes the dial jump between presses, this is the first thing to
+loosen, and `memo.cold` will show it.

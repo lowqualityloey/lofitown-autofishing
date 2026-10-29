@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.8.7
+// @version      3.8.8
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -58,7 +58,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.8.7" };
+  const F = { version: "3.8.8" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -72,16 +72,20 @@ window.__autofishInstalled = true;
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
    * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
    * time names itself instead of being inferred. */
-  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
+  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
    *  inside a reel (the dial persists across presses) at a third of the old read count. */
   const MEMO_EVERY_MS = 500;
+  /** The remembered circle can only help while a dial is actually on screen: it caches the last
+   *  circle, and between dials there is nothing at that spot to verify. So an attempt also needs a
+   *  dial to have been locked inside this window - a readback that can only fail is pure cost. */
+  const MEMO_RECENT_MS = 2000;
   function resetPerf() {
     perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
     perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
     perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
     perf.card = 0; perf.cardN = 0;
-    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
+    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   }
 
   /* ---- timing core -----------------------------------------------------
@@ -1536,15 +1540,19 @@ const SPECIES = [
     // sample() readback that the search below then repeats. Gating it keeps the recovery (a wrong
     // hint still finds the remembered widget, one gate-interval later) and drops the readback.
     const tNow = now();
-    if (F.lastGeo && tNow - (F.memoAt || 0) >= MEMO_EVERY_MS) {
+    // Two conditions, counted separately: a dial must have been locked recently enough for the
+    // remembered circle to still be a dial, and the readback itself is rate-limited.
+    const recent = tNow - (F.lastLockAt || 0) <= MEMO_RECENT_MS;
+    if (F.lastGeo && recent && tNow - (F.memoAt || 0) >= MEMO_EVERY_MS) {
       F.memoAt = tNow;
       const tMemo = now();
       const g = { cx: F.lastGeo.cx, cy: F.lastGeo.cy, R: F.lastGeo.R };
       const s = F.sample(g);
       perf.lockMemo += now() - tMemo;                 // the hit AND the miss: a miss still paid a read
-      if (s && s.valid && s.ring >= 0.8) { perf.lockMemoN++; g.width = s.width; return g; }
+      if (s && s.valid && s.ring >= 0.8) { perf.lockMemoN++; F.lastLockAt = tNow; g.width = s.width; return g; }
     } else if (F.lastGeo) {
       perf.lockMemoSkipped++;
+      if (!recent) perf.lockMemoCold++;
     }
     const tGrab = now();
     const r = readUI(hintX - hw, hintY - hw, S, S);
@@ -1563,6 +1571,7 @@ const SPECIES = [
     const tRefine = now();
     const locked = finishLock(r, mask, best);
     perf.lockRefine += now() - tRefine;
+    if (locked) F.lastLockAt = tNow;                // a dial is up: the memo is worth a read again
     return locked;
   };
 
@@ -2683,7 +2692,7 @@ const SPECIES = [
     }, extra || {});
     return {
       memoTries: n,
-      memo: one(perf.lockMemo, { hits: perf.lockMemoN, skipped: perf.lockMemoSkipped }),
+      memo: one(perf.lockMemo, { hits: perf.lockMemoN, skipped: perf.lockMemoSkipped, cold: perf.lockMemoCold }),
       grab: one(perf.lockGrab),
       mask: one(perf.lockMask),
       scan: one(perf.lockScan),
