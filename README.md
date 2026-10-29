@@ -63,13 +63,16 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 
 - **Finds prompts in pixels.** The prompts and the reel dial are drawn on the game's UI canvas, so they are located by reading that layer inside `requestAnimationFrame` and matching shapes.
 - **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, so fast and slow spins both land inside the arc.
-- **Scores fish, not clicks.** One fish is many presses (the game shows a level bar), so the unit is the *fish attempt*: it opens at the first press and closes at a parsed catch or when the cast prompt returns. A win is only counted when the catch card's text parses to a species.
+- **Remembers the dial.** The reel widget's circle is saved per canvas size and tried before any search. If the hint is wrong, one whole-surface pass finds the green wedge and recovers the lock - a fresh run no longer needs a prompt to find its first dial.
+- **Scores fish, not clicks.** One fish is many presses (the game shows a level bar), so the unit is the *fish attempt*: it opens at the first dial lock and closes at a parsed catch or when the cast prompt returns. A win is only counted when the catch card's text parses to a species.
 - **Keeps a ledger.** `localStorage` key `autofish:log:v1`: per-species count and best weight, per rarity and per day totals, shiny/golden variants.
 - **Pauses honestly.** A hidden tab pauses the clock, and so does standing up; the session resumes when a prompt comes back and gives up after 30 minutes unseated.
 
 ## How well does it fish?
 
-Measured on the current build: **28 caught / 30 fish attempts** (Wilson 95% CI 78.7-98.2%), 159 presses, 5.68 presses per catch, 0 ghosts, 0 missed presses, 84 fps. Both losses were scored "cast prompt", and at least one showed a shape-accepted card that never produced parsed text - so read 93.3% as a floor, not a promise.
+Measured on the current build: **28 caught / 30 fish attempts** (Wilson 95% CI 78.7-98.2%), 159 presses, 5.68 presses per catch, 0 ghosts, 84 fps. Both losses were scored "cast prompt", and at least one showed a shape-accepted card that never produced parsed text - so read 93.3% as a floor, not a promise.
+
+Per-press timing is scored by whether the game spawned a new triangle (a press it acted on), not by whether the dial closed - only the finishing press can do that. Read `__fish.status().accuracy.pressAcceptRate`; it is newer than the sample above.
 
 ## Limits
 
@@ -103,7 +106,7 @@ Open the printed URL, then drag the bookmarklet to the bookmarks bar (or run it 
 ## Development
 
 ```bash
-node --test                # 110 tests; note: never "node --test tests/"
+node --test                # 156 tests; note: never "node --test tests/"
 node build-userscript.js   # rebuild dist/ after editing any browser file
 ```
 

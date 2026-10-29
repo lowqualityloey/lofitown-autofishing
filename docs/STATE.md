@@ -7,7 +7,7 @@
 - **Overall Status**: ACTIVE — private repo published at github.com/lowqualityloey/lofitown-autofishing
 - **Target Release / Deadline**: v1.0.0 usable panel / not tracked
 - **Current Working Branch**: main
-- **Last Updated**: 2026-10-28
+- **Last Updated**: 2026-10-29
 - **Engine Version**: v2.0.1 @ unknown
 
 ---
@@ -24,7 +24,9 @@
 - [/] **Milestone 2** — trustworthy accuracy: the per-fish-attempt oracle replaced per-press scoring
   (28 caught / 30 attempts, Wilson 95% CI 78.7-98.2%); the dial search went from 83 ms to 4 ms a
   call; fishing was found to be seat-based, so a missing cast prompt is now named, the session clock
-  pauses while unseated, and the pause honours the clock window and the daily cap. 110 tests.
+  pauses while unseated, and the pause honours the clock window and the daily cap. 156 tests after the
+  2026-10-29 review round (dial memory + whole-surface recovery, card-text cursor, press acceptance,
+  local day store, CSS coordinate conversion).
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
   (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
 
@@ -198,6 +200,21 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ---
 
 ## 7. Next Immediate Actions (Queued)
+0. ~~**2026-10-29 — watch it fish**~~ (done): the fixed core was injected into the live tab at
+   1117x785 and fished **9/9 attempts, 0 lost**, 19 dial locks / 19 landed hits / 46 presses =
+   **5.1 presses per catch**, and **18/18 `bubble` rows logged `tap:true`** (rungs 1-2, the exact
+   range where the old ladder dropped the click), with 10 catches in `catches.csv`. The two fishing
+   windows ended only because the game stopped emitting cast prompts (`needs a seat`). One caveat worth knowing: a fresh `start()` seeds
+   `F.hint` from a hardcoded 1620x1031 point, so a window of a different size has no lockable dial
+   until the first prompt corrects the hint — here that took one prompt, 28 s after start. A run
+   with a prompt scan that misses at an unusual size would sit blind. **Fixed 2026-10-29**: the
+   circle is persisted per canvas size (`autofish:dial:v1`) and tried first, and `dialAnywhere()`
+   recovers a lock from the wedge after 2.5 s with no dial - the hardcoded seed is gone. Both paths
+   were then verified on a real canvas at real scale (the game tab's frames were suspended): no hint
+   at all locked a painted (840,411) R=96 dial at (839,412) R=96, and a remembered circle locked in
+   2 ms from a hint 740 px wrong. The recovery's first size filter rejected that dial; 157 tests now
+   guard the window. Re-import `dist/autofish.user.js` for persistence — an injected core is lost on
+   reload.
 1. ~~Re-import and reload~~ (done 2026-10-28): the page now runs the shipped userscript with one
    panel, and the seat pause was measured live - `paused`/`seat` with `fishingMs` frozen at 898 993
    across 2.6 s, then `running` again on the same clock. The window/cap branches are still reducer
@@ -210,6 +227,14 @@ Staging area for rules observed during sessions but not yet approved as invarian
    loss genuine.
 4. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
    bubbles) at window sizes nobody has tested yet.
+5. ~~Measure the new press-acceptance rate live~~ (done 2026-10-29): rebuilt core injected into the
+   real game at 1117×785, one 4.6-minute session — **6 caught, 0 lost, 32/32 scored presses accepted,
+   0 rejected, 5.2 presses per catch**, 16 dial locks, 0 errors. The first dial locked 18.2 s after
+   Start, **0.53 s after the REEL tap**, using the play-area seed (within 2 px here); the memory key
+   `autofish:dial:v1` was written as `{cx:557, cy:286, R:84, cw:1117, ch:785}`. Still open: wipe that
+   key and confirm `dialAnywhere()` finds a real dial on a fresh run (verified only on a synthetic
+   real-scale dial so far), and the fixed CAST box missed every prompt at this size (the whole-surface
+   fallback carried it) — see `AUTOFISH.md` 2026-10-29 live run.
 
 ---
 
@@ -225,7 +250,9 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-10-28 | lead (DSH session) | Fishing is seat-based | The long "bot stops casting" stall was finally explained from the game bundle: the cast prompt is only emitted from the sit path, so standing up (a stray tap, a walk) kills fishing until the player sits again. Commit 58abc48 replaced the walk rung of the cast-recovery ladder with a `needsSeat` watchdog; 6d91243 put the same fact in the panel footer. 103 tests. |
 | 2026-10-28 | lead (DSH session) | Seat pause + repo published | da2d328 pauses the session clock while unseated (core untouched, 30 min cap, `no-seat`), f13967f makes that pause honour the clock window and a spent daily cap. Added README, MIT licence, docs index and the docs/STATE refresh; repo pushed private to github.com/lowqualityloey/lofitown-autofishing (28 files, `shots/` excluded). 110 tests. |
 | 2026-10-28 | lead (DSH session) | Frame rate | The user reported lag; measured 27.6 fps with the bot running vs 141.3 with it stopped. Cause: a 360x210 readback plus 75,600 per-pixel array allocations every frame, a whole-surface read at 5 Hz, and reads while a dial was locked. Fix: index-only loops, bubble scan 25 Hz / 11 Hz locked, prompt scan 3 Hz. After: 111-138 fps, 3/3 fish caught, 0 misses. `tests/perf.test.js` (4 guards); 90 tests pass. |
+| 2026-10-29 | lead (DSH session) | Cast ladder + dial hint | The live tab was still running a stale `3.6.1` build with perf wrappers whose `castRecovery(3)` returned `tap:false`, so earlier live readings described the old ladder. Fixed core injected and watched at 1117x785: 7 catches / 7 attempts, 0 lost, 16 dials / 16 hits / 35 presses (5.0 presses a catch), 14/14 bubble rows `tap:true`; `catches.csv` agrees (Epic Betta, Uncommon Tripod Fish). Session ended at `needs a seat`, not a dial defect. 127 tests. |
 | 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
+| 2026-10-29 | lead (DSH session) | Senior review round | Fixed the six review findings: persisted dial geometry + whole-surface recovery (no hardcoded seed), text cursor advance on an unparsed card, press acceptance by the new-triangle spawn (`sweepReport`/`accuracy` rewired), dead cast-retry ladder call removed, `floodComponents` de-allocation, local day store for the daily cap, CSS coordinate conversion at the tap/zones boundary. 156 tests; `dist/` rebuilt. |
 
 ---
 

@@ -36,6 +36,22 @@ test('collapsing actually hides the card and shows the 48px pill', () => {
   // the choice has to survive a reload
   assert.match(setCollapsed, /pos\.collapsed = collapsed/);
 });
+test('the panel never assumes a local server it was not served from', () => {
+  assert.ok(src.indexOf("'http://127.0.0.1:8731'") < 0, 'the server-free build must not guess a port');
+  const post = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
+  assert.match(post, /addTodayMs\(minutes \* 60000\)/, 'a finished session counts even with no server');
+  assert.match(post, /if \(!BASE\) return;/, 'no fetch without a server');
+  assert.match(src, /if \(!BASE\) return;/, 'diagnosis uploads must not run without a server');
+});
+
+test('the daily cap survives a reload and a second session in the same page', () => {
+  const load = src.slice(src.indexOf('async function loadToday()'), src.indexOf('function postSessionRow'));
+  assert.match(load, /baseTodayMs = readTodayMs\(\)/, 'the cap starts from the local day store');
+  const start = src.slice(src.indexOf('startCore: function'), src.indexOf('stopCore:'));
+  assert.match(start, /baseTodayMs = readTodayMs\(\)/, 'a new session must re-read the day');
+  assert.match(src, /TODAY_KEY = 'autofish:today:v1'/);
+});
+
 test('the session, cooldown and cap steppers reach overnight ranges', () => {
   // the point of the ranges is "leave it fishing while I sleep", so assert the numbers a
   // sleeper needs are actually reachable through the steppers, not just parseable.

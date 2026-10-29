@@ -1065,6 +1065,196 @@ tick -> cooldown), and a pause that runs into an already-spent daily budget ends
 budget: 19 unseated minutes with a 10-minute cap left `fishingMs` at 300 000 and the session paused,
 then sitting down resumed at 300 000 with the last five minutes still available.
 
+## 2026-10-29 the prompt that was never clicked, and a dial search that could not reach the dial
+
+Reported: the wedge passes the pin, the bot presses, nothing lands — "failing the fishing game mode".
+Investigated on the live tab (build injected into app.lofi.town, 1680x1031, dpr 1).
+
+**What the tab actually showed.** One dial locked and one fish caught in ~20 minutes, 5 presses, and
+**140 `cast retry` rows**. A REEL! prompt sat on screen for minutes at a stretch while every `bubble`
+row from rung 14 on logged `tap:false, space:true`. The panel then paused with `no-catch`, and its
+footer read *"clock paused — nothing to bite: sit on a chair by the water"* at a character that was
+sitting on a chair with its rod out.
+
+Two measurements made the cause concrete:
+
+- `F.hint` was **(739, 369)** while the dial's real centre was **(840, 411)**. `lockDial` searches
+  ±22 px around the hint, so it could not reach a dial 101 px away. The hint had been written by
+  false bubble detections at (735,260)/(735,262) — name tags, not prompts.
+- `F.sample({cx:840, cy:411, R:96})` on a live dial returned **valid, width 85, mid 33, ring 0.85** —
+  i.e. **exactly 17 of 20 rim samples**, which was `lockDial`'s coarse acceptance threshold.
+
+The dial itself is unchanged: base (142,138,111), wedge (182,188,132), pin (229,118,83) at 12
+o'clock, centre (840,411), R 96. A trusted click on the prompt started the minigame, and so did the
+bot's own synthetic tap — the game has **not** started rejecting synthetic input, so nothing here is
+a pixel or input regression.
+
+**Three defects, all in the core.**
+
+1. **`castRecovery` was a one-way door.** From rung 3 it returned `{tap:false, space:true}`, and the
+   rung was only reset by a successful dial lock — which needs the minigame that the tap would have
+   started. Two failed taps therefore locked the bot into keybind-only for the rest of the run, and
+   the game ignored the keybind (`consumed:false` on every retry). It now always taps; the keybind is
+   added from rung 2 onward. A prompt is a button.
+2. **`F.hint` was written only inside `if (rec.tap)`.** On any rung that no longer tapped it froze at
+   whatever blob was last clicked. It is now set from the prompt on every detection — which is where
+   the dial actually appears.
+3. **`lockDial` accepted 17/20 rim samples and the live dial measures exactly 17/20.** Lowered to
+   15/20, and `sample`'s ring gate from 0.8 to 0.75; the pin gate and the wedge requirement are what
+   reject non-dials, not this count.
+
+Two supporting changes: `lockDial` tries the **last locked circle first** (`F.lastGeo`), so a drifted
+hint cannot hide a widget that has not moved, and the recovery ladder restarts after the prompt has
+been gone for `castRungResetMs` (10 s) instead of counting attempts across the whole run.
+
+**Verified:** 127 tests pass, including four new guards (the ladder never drops the click, the hint
+is set before the tap gate, the remembered circle is tried first, the rim gate is 15).
+
+**First attempt was blocked:** the verification window went occluded — `document.visibilityState ===
+'hidden'` with `stats.frames === 0` — and a hidden page gets no `requestAnimationFrame`, so nothing
+could be measured. A run that cannot get frames is the same trap the 2026-10-28 stall watchdog was
+added for; bring the window forward before judging any build.
+
+**Verified live afterwards** (2026-10-29, neo tab brought visible, fixed core injected into
+app.lofi.town at **1117x785**, dpr 1 — note: not the 1680x1031 the boxes were measured at):
+
+| Measure | Fixed core | Previous build (same tab, earlier) |
+|---|---|---|
+| Catches / attempts | **9 / 9** | 22 / 23 |
+| Lost fish | **0** | 1 |
+| Dial locks | 19 | 44 |
+| Presses that landed (`hits`) | 19 | 42 |
+| Total presses | 46 | 115 |
+| **Presses per catch** | **5.1** | 5.2 |
+| Presses per landed hit | 2.4 | 2.7 |
+| `bubble` rows logging `tap:true` | **18 / 18** | rung >= 3 logged `tap:false` |
+| Misses / skipped dials / errors / stalls | 0 / 0 / 0 / 0 | 0 / 1 / 0 / 0 |
+
+- Every dial locked at the same circle, **(557, 288) R 84**, and `width` (wedge arc) swung 80-140°
+  between triangles: the widget is live and the classifier follows it. R is 84 here versus 96 at
+  1680x1031, so the lathe does scale a little with the viewport; `lockDial`'s 78-120 range covers both.
+- Rungs seen were **1 and 2 only**, and both rows carry `tap:true, space:true`. The old one-way door
+  showed up from rung 3 onward, which is exactly where the fix changes behaviour.
+- The ledger agrees with the counters: 10 rows in `catches.csv`, 02:36:23 -> 02:39:50 (one catch per
+  15-30 s while the fish were biting), including an Epic Betta ($36), an Uncommon Tripod Fish ($19)
+  and a Tetra ($21). The core counter read 9 attempts won against those 10 rows - one fish landed
+  while no attempt was open, so it was logged without being scored.
+- The first ~28 s after `start()` showed **no prompt at all** (the character was mid-cast) and 5 cast
+  retries. The first real prompt corrected `F.hint` from the hardcoded default (861, 372) to
+  (558, 287), and every dial was lockable from then on — the hint-on-detection change doing its job.
+  A fresh start at a new window size still depends on that one prompt to teach the hint.
+- The fishing came in two windows (7 catches to 02:38:57, then 3 more after a gap) and ended each
+  time with **no dial defect**: the game stopped emitting cast prompts and the core's own watchdog
+  named it (`needs a seat: no cast prompt: sit on a waterside chair`). No fish was lost in either
+  window, and the core is still armed for the next prompt.
+
+**The tab had been running a stale build.** Before the injection, `window.__fish` reported version
+`3.6.1`, carried perf wrappers on `sample`/`findBubble`/`lockDial`, and `timing.castRecovery(3)`
+returned `{tap:false}` — i.e. the pre-fix ladder. Any live diagnosis against that tab was measuring
+the old code, not the fix; the numbers above are from a core that answers `castRecovery(3).tap === true`.
+
+## 2026-10-29 review round: the dial no longer needs a prompt to be found
+
+A full read of the source turned up one reliability gap and four silent-data bugs. All are fixed;
+157 tests pass and `dist/` is rebuilt.
+
+**The dial search had no fallback.** `F.start` seeded `F.hint` at a literal (861,372) measured at one
+viewport, and `lockDial` searched ±22 px around it. Measured live: at 1117×785 the first prompt
+corrected the hint 28 s after start, and in another session the hint sat at (739,369) while the dial
+was at (840,411) — unreachable. The circle is now persisted (`autofish:dial:v1`, with the canvas size
+it was measured at and scaled on a proportional resize), tried first on the next run, and there is a
+whole-surface recovery: one quarter-scale pass finds the green wedge, its bbox centre puts the dial
+centre somewhere on a 0-100 px annulus around it, and one boxed full-resolution read tests that
+annulus with the same rim mask and the same `finishLock` validation. It runs only after 2.5 s with
+no dial and is throttled to one pass a second; `opts.dialFallbackMs = 0` disables it.
+
+The first version of that recovery could not have found a real dial, and the live probe caught it.
+The wedge is a **sector**, not a thin arc: its bbox reaches ~1.8R per side (~215 px at R=120), while
+the guessed filter capped a blob at 90 px tall — and the quarter-scale flood needed 18 px, more
+than a small dial's arc survives. The window is now `wedgeBoxOk(W, H)` (24-340 px per side, 6 px at
+quarter scale) with the dimensions from the probe, and the rim/pin proof in `finishLock` is what
+rejects non-dials. Verified on a real canvas at real scale, with the game tab's frames still
+suspended: a dial painted at (840,411) R=96 with the measured tones was found by `dialAnywhere()`
+with **no hint** at (839,412) R=96, width 165°, and a remembered circle locked in 2 ms from a hint
+740 px wrong. That is the failure mode from the review, removed by measurement rather than by hope.
+
+**One unparsed card corrupted the next catch.** `parseCatch` read everything since `F.txtAt`, and the
+cursor only moved on a successful parse, so a card that failed (`noprice`, `nowords`) left its text in
+the buffer: the next card's species, weight and value could all come from the old one. The cursor now
+advances when a card is dismissed unparsed. The reader was also extracted (`textSince`, `parseCard`)
+and now decides a pre-weight word by whether it is a tier: `Whale Shark | Epic | …` keeps Epic as the
+rarity, `Lobster | Impressive | 3.36kg` keeps Impressive as the quality. `MONEY` accepts decimals.
+
+**The per-press metric was one this file already withdrew.** `closeDial` scored `hit` when the dial
+ended within 1.5 s of the last press, which only the finishing press can do. Presses are now scored
+by the observable the re-arm gate already used: `pressOutcome` returns accepted when the game spawns
+a new triangle (thickness jump, delta jump beyond the rotation, or two blink frames), rejected when
+the same triangle survives 250 ms. `sweepReport` reports accepted/rejected/acceptRate per bias, and
+`accuracy.pressAcceptRate` is the number to read. The dial verdict stays in `outcomes` for diagnosis.
+
+**`blobs()` had reintroduced the allocation the perf pass removed.** `spx()` built a 4-element array
+per pixel and the flood fill built another per visited pixel — ~108k arrays per whole-surface scan at
+1680×1031. The pass is now `floodComponents(w, h, d, match, minPx, seen)`, pure and tested on a
+hand-built image, with index reads and one shared scratch neighbour array.
+
+**The cast-retry ladder was called for effect and ignored.** The stall path has no bubble
+coordinates, so it now sends only the keybind and says so; the ladder lives in the bubble branch,
+where a prompt exists. The test that "covered" the old call certified a no-op and now guards the
+honest behaviour.
+
+**The server-free install lost its daily cap on every reload.** The panel guessed
+`http://127.0.0.1:8731` when inlined, fetched `/sessions`, and started today at 0 when that failed;
+it also bannered "session log offline" on every stop. `BASE` is now null unless the panel was served
+over http, the day's minutes live in `autofish:today:v1` (same local day only), a finished session
+adds to it whether or not a server exists, and a second Start in the same page re-reads it.
+
+**Canvas pixels are now converted at the DOM boundary.** `tap()` and `zones()` mapped backing-store
+coordinates straight into `elementFromPoint`/PointerEvent and the panel's exclusion rect, which is
+only right at dpr 1. `cssPoint()` converts through the canvas's CSS box; at the measured dpr it is
+the identity, so it cannot move a press that already worked.
+
+The review's P3 items are untouched: the dead predicates, the `geoReasons` off-by-one frame, version
+and doc drift beyond the lines above, the legacy root loader and `run.sh`'s lost executable bit.
+
+## 2026-10-29 live run: first lock and press acceptance measured
+
+The rebuilt core was injected into the real game tab (1117×785, two canvases, ~135 fps) for one
+4.6-minute session: **6 caught, 0 lost, 33 presses (32 scored), 0 rejected**, 16 dial locks, 0
+errors, 0 stalls.
+
+- **First dial lock: 18.2 s after Start**, at (557,286) R=84, width 125°. That number is the game's
+  cast→bite sequence, not the search: Start, CAST! found only by the whole-surface fallback at
+  +0.03 s and tapped, three cast retries, REEL tapped at +17.7 s, dial locked at +18.0 s — **0.53 s
+  after the reel tap**. The seed hint (play-area centre) happened to be within 2 px of the real dial
+  at this window, so neither dial memory nor the recovery pass was needed.
+- **Dial memory written:** `autofish:dial:v1` = `{cx:557, cy:286, R:84, cw:1117, ch:785}`.
+- **Press acceptance 32/32 scored = 1.0**, 0 rejected, 5.2 presses per catch. Every scored press was
+  actioned by the game (a new triangle spawned), matching the 5.1 presses/catch of the earlier field
+  run. The one unscored press was in its 250 ms window when the session was stopped.
+- The fixed CAST box (690,215,360×210) **does not contain this window's prompt** (measured at
+  558,234): every one of the 11 bubble detections came from `bubble anywhere`, and every one tapped
+  at rung 1. The fallback is carrying the prompt path at this size; the box is still a 1620×1031
+  measurement. **Fixed**: see "The prompt box follows the live surface" below.
+- 33 `cast retry` rows in 4.6 min (one per 5 s while idle, all `consumed:false` until the prompt
+  returned). By design (`castRetryMs: 5000`), but it is the noisiest part of a live log.
+- The tab had been running a core that reported `3.6.1` from outside this checkout; this repo's
+  build reports `autofish 3.0`. The installed userscript and this source are not the same build, and
+  the version strings cannot be compared — worth reconciling before the next field run.
+
+## 2026-10-29: the prompt box follows the live surface
+
+The CAST!/REEL! box was measured at 1620×1031 and then read as a literal rectangle, so at the
+1117×785 field window the prompt at (558,234) sat 132 px left of it and every prompt was found by
+the whole-surface pass instead. The box is now `promptBox(cw, ch)`, derived from the live canvas:
+the measured x/y/w/h scale with the surface, with a 260×150 floor because the bubble itself does
+not shrink with the window, and every result is clamped inside the canvas. Both the free gate on
+the shared snapshot and the full-resolution box read take their rectangle from it.
+
+Checked against the one measured prompt: at 1117×785 the reference point maps to (558, 273) and
+the prompt was found at (558, 234) — horizontal exactly right, 39 px high but inside — while the
+box is (476,164,260×160), about 6% of the surface. `bubbleAnywhere()` remains the fallback for a
+camera that has moved away from the box.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.

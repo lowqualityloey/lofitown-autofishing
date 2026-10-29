@@ -14,10 +14,12 @@
   // The server that served this file is the server we talk to. Deriving it from our own
   // <script src> means the bookmarklet can point at any port (WSL forwards Windows localhost
   // into the distro, and 8731 may already be taken on the Windows side).
+  // null when the panel was inlined in the userscript: there is no server to talk to, and the
+  // session clock must not depend on one. Only the bookmarklet path (a real <script src>) has one.
   var BASE = (function () {
     var s = document.currentScript;
     if (s && s.src) { try { return new URL(s.src).origin; } catch (e) { /* fall through */ } }
-    return 'http://127.0.0.1:8731';
+    return null;
   })();
   var PREF_KEY = 'autofish.prefs';
   var POS_KEY = 'autofish.panel';
@@ -53,6 +55,8 @@
   }
 
   async function deps() {
+    if (window.__fish && window.AutoFishSession && window.AutoFishLayout) return;
+    if (!BASE) throw new Error('this panel has no server to load its dependencies from');
     if (!window.__fish) await loadScript('autofish', '/autofish.js');
     if (!window.AutoFishSession) await loadScript('session', '/session.js');
     if (!window.AutoFishLayout) await loadScript('layout', '/layout.js');
@@ -193,15 +197,56 @@
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
   }
 
+  // <today-store>
+  var TODAY_KEY = 'autofish:today:v1';
+
+  /** Minutes already logged today by earlier page loads; a different day is zero. */
+  function todayFrom(raw, day) {
+    try {
+      var p = JSON.parse(raw);
+      if (!p || p.day !== day || typeof p.ms !== 'number' || !isFinite(p.ms) || p.ms < 0) return 0;
+      return Math.floor(p.ms);
+    } catch (e) { return 0; }
+  }
+
+  /** Add one finished session to the day's total, returning the new store record. */
+  function todayMerge(raw, day, addMs) {
+    var next = Math.max(0, todayFrom(raw, day) + (Number(addMs) || 0));
+    return { day: day, ms: Math.round(next) };
+  }
+  // </today-store>
+
+  function readTodayMs() {
+    try { return todayFrom(localStorage.getItem(TODAY_KEY), dayKey()); } catch (e) { return 0; }
+  }
+
+  function writeTodayMs(ms) {
+    try { localStorage.setItem(TODAY_KEY, JSON.stringify({ day: dayKey(), ms: Math.max(0, Math.round(ms)) })); } catch (e) {}
+  }
+
+  /** A finished session counts toward today even when there is no server to record it. */
+  function addTodayMs(ms) {
+    var raw = null;
+    try { raw = localStorage.getItem(TODAY_KEY); } catch (e) { raw = null; }
+    var rec = todayMerge(raw, dayKey(), ms);
+    try { localStorage.setItem(TODAY_KEY, JSON.stringify(rec)); } catch (e) {}
+    return rec.ms;
+  }
+
   async function loadToday() {
+    baseTodayMs = readTodayMs();
+    if (!BASE) return;                       // the local day store is the cap's source of truth
     try {
       var r = await fetch(BASE + '/sessions?day=' + dayKey(), { cache: 'no-store' });
       var j = await r.json();
-      baseTodayMs = (j.minutes || 0) * 60000;
-    } catch (e) { baseTodayMs = 0; }
+      var serverMs = (j.minutes || 0) * 60000;
+      if (serverMs > baseTodayMs) { baseTodayMs = serverMs; writeTodayMs(serverMs); }
+    } catch (e) { /* no server: the store already answered */ }
   }
 
   function postSessionRow(reason, minutes, catches) {
+    addTodayMs(minutes * 60000);             // counts even when no server records the row
+    if (!BASE) return;
     try {
       fetch(BASE + '/session', {
         method: 'POST',
@@ -217,6 +262,7 @@
    * corrected from what the game actually drew instead of from guesses.
    */
   function captureDiag(note) {
+    if (!BASE) return;                       // no server: nothing to upload to, and no alarm to raise
     try {
       var f = fish();
       if (!f || !f.captureUI) { banner = 'this core cannot grab a frame'; return; }
@@ -239,7 +285,12 @@
   function fish() { return window.__fish; }
 
   var RUNNERS = {
-    startCore: function (a) { fish().start({ maxMinutes: a.maxMinutes }); },
+    startCore: function (a) {
+      // A second Start in the same page must see the minutes the first session just logged; the
+      // reducer has already reset fishingMs, so the day's total has to come from the store.
+      baseTodayMs = readTodayMs();
+      fish().start({ maxMinutes: a.maxMinutes });
+    },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
     pauseCore: function () { try { fish().pause(); } catch (e) {} },
     resumeCore: function () { try { fish().resume(); } catch (e) {} },

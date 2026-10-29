@@ -63,7 +63,7 @@ function slice(from, to) {
 }
 
 test('the dial search counts a rim mask instead of test-allocating per sample', () => {
-  const fn = slice('F.lockDial = function (hintX, hintY)', 'F.sample = function');
+  const fn = slice('F.lockDial = function (hintX, hintY, span)', 'F.sample = function');
   assert.match(fn, /rimMask\(r\)/, 'lockDial must mark the rim once');
   assert.match(fn, /rimHits\(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20\)/);
   assert.ok(!/Math\.cos|Math\.sin/.test(fn), 'the direction tables must replace per-sample trig');
@@ -100,7 +100,7 @@ test('the rim helpers are built from tables and read channels by index', () => {
 // spent only on something that grab already saw.
 
 test('one quarter-scale grab per scan tick feeds every detector', () => {
-  const snap = slice('function snapshot()', 'function spx(p)');
+  const snap = slice('function snapshot()', '// <scan-core>');
   assert.match(snap, /scanTickMs\) \|\| 66/, 'the snapshot must throttle itself to one grab per tick');
   assert.match(CORE, /scanTickMs: 66/, 'the shared scan tick is missing from the defaults');
   assert.equal((CORE.match(/!downscale\(\)/g) || []).length, 1, 'a detector took its own copy of the layer again');
@@ -143,13 +143,49 @@ test('the catch-card scan is throttled to about 10 Hz', () => {
 test('the bubble branch escalates instead of tapping the same blob forever', () => {
   const btn = CORE.indexOf('const b = F.findBubble();');
   assert.ok(btn > 0, 'the bubble branch is missing');
-  const branch = CORE.slice(btn, btn + 2400);
+  const branch = CORE.slice(btn, btn + 2600);
   assert.match(branch, /const rung = \(F\.bubbleMiss = \(F\.bubbleMiss \|\| 0\) \+ 1\);/);
   assert.match(branch, /castRecovery\(rung\)/);
   assert.match(branch, /if \(rec\.tap\)/);
   assert.match(branch, /if \(rec\.space\)/);
-  // a plain unconditional tap() is what caused the stall
+  // a plain unconditional tap() that ignored the ladder is what caused the first stall
   assert.doesNotMatch(branch, /\n\s{8}tap\(b\.cx, b\.cy\);/);
+  // ... but the ladder must never give the click up either. Measured live 2026-10-29: rungs 14-36
+  // were all `tap:false`, so the bot pressed a key the game ignored for twenty minutes while a
+  // REEL! prompt sat on screen. The click is the one input that has ever started the minigame.
+  assert.match(branch, /if \(rec\.tap\) tap\(b\.cx, b\.cy\);/);
+  assert.doesNotMatch(CORE, /return \{ tap: false, space: true/);
+});
+
+test('the dial hint follows the prompt it can see, not only the prompt it clicked', () => {
+  const btn = CORE.indexOf('const b = F.findBubble();');
+  const branch = CORE.slice(btn, btn + 2600);
+  const hint = branch.indexOf('F.hint = { x: b.cx, y: b.cy + 53 };');
+  const tap = branch.indexOf('if (rec.tap) tap(b.cx, b.cy);');
+  assert.ok(hint > 0, 'the bubble branch must set the dial hint');
+  assert.ok(tap > hint, 'the hint belongs before the tap gate, or a rung that stops tapping freezes it');
+});
+
+test('the dial rim search accepts a real rim, not only a perfect one', () => {
+  // The live dial measures 17/20 rim samples at a 1680x1031 viewport, so a 17-of-20 gate sat
+  // exactly on its own boundary: one anti-aliased sample and lockDial found nothing.
+  const fn = slice('F.lockDial = function (hintX, hintY, span)', 'F.sample = function');
+  assert.match(fn, /hit >= 15/);
+  assert.doesNotMatch(fn, /hit >= 17/);
+});
+
+test('a dial that locked before is tried first, so a drifted hint cannot hide it', () => {
+  const fn = slice('F.lockDial = function (hintX, hintY, span)', 'F.sample = function');
+  const remembered = fn.indexOf('if (F.lastGeo)');
+  const search = fn.indexOf('const mask = rimMask(r)');
+  assert.ok(remembered > 0, 'lockDial must try the last known dial geometry');
+  assert.ok(search > remembered, 'the remembered circle has to be tried before the search');
+  assert.match(CORE, /F\.lastGeo = \{ cx: g\.cx, cy: g\.cy, R: g\.R \};/);
+});
+
+test('a prompt that went away starts the recovery ladder over', () => {
+  assert.match(CORE, /castRungResetMs: \d+/);
+  assert.match(CORE, /F\.bubbleMiss = 0;\n?\s*F\.lastBubble = b;/);
 });
 
 test('a locked dial resets the recovery ladder, so the next cast starts at rung one', () => {
@@ -160,11 +196,15 @@ test('a locked dial resets the recovery ladder, so the next cast starts at rung 
   assert.ok(lock - m.index < 900, 'the reset belongs next to the lock');
 });
 
-test('the cast retry uses the same ladder, so a stall with no bubble still stands up', () => {
+test('the cast retry sends only the keybind - there is no bubble to click', () => {
+  // The ladder used to be called here and its answer dropped, so the test certified a no-op.
+  const from = CORE.indexOf('if (F.opts.castRetryMs');
   const at = CORE.indexOf("L('cast retry'");
-  assert.ok(at > 0);
-  const around = CORE.slice(at - 700, at + 60);
-  assert.match(around, /castRecovery\(rung\)/);
+  assert.ok(from > 0 && at > from);
+  const around = CORE.slice(from, at + 60);
+  assert.match(around, /space\(F\.opts\.spaceTarget\)/);
+  assert.doesNotMatch(around, /castRecovery\(/, 'the stall path has no bubble to click');
+  assert.doesNotMatch(around, /tap\(/, 'the stall path has no coordinates to tap');
 });
 
 // Fishing in this game is seat-based: the cast prompt is emitted only by the sit-down path
@@ -198,4 +238,90 @@ test('the ladder counts cast attempts, not frames', () => {
   assert.ok(gate > 0, 'the debounce gate is missing');
   const rung = branch.indexOf('const rung = (F.bubbleMiss = (F.bubbleMiss || 0) + 1);');
   assert.ok(rung > gate, 'the rung must only advance once per cast attempt (inside the debounce gate)');
+});
+
+// The whole-surface scan runs ~3x/s over ~108k downscaled pixels. `spx()` built a 4-element array
+// per pixel and the flood fill built another per visited pixel - the same allocation pattern that
+// dropped the page to 27.6 fps in bubbleInBox, reintroduced in the one loop nobody rewrote.
+const SCAN_OPEN = '// <scan-core>';
+const SCAN_CLOSE = '// </scan-core>';
+const scanA = CORE.indexOf(SCAN_OPEN);
+const scanB = CORE.indexOf(SCAN_CLOSE);
+if (scanA < 0 || scanB < 0) throw new Error('scan-core sentinels are missing from autofish.js');
+const SCAN = new Function(CORE.slice(scanA + SCAN_OPEN.length, scanB) + '\nreturn { floodComponents };')();
+
+test('floodComponents finds 4-connected blobs and honours minPx', () => {
+  const w = 8, h = 6;
+  const d = new Uint8ClampedArray(w * h * 4);
+  const put = (x, y) => { d[(y * w + x) * 4 + 3] = 255; };
+  [[1, 1], [2, 1], [1, 2], [6, 0], [7, 0], [0, 5]].forEach(([x, y]) => put(x, y));
+  const seen = new Uint8Array(w * h);
+  const out = SCAN.floodComponents(w, h, d, (buf, i) => buf[i + 3] > 120, 2, seen);
+  assert.equal(out.length, 2, 'the lone edge pixel is below minPx');
+  const byCount = out.slice().sort((a, b) => b.count - a.count);
+  assert.deepEqual(byCount[0], { x0: 1, y0: 1, x1: 2, y1: 2, count: 3 });
+  assert.deepEqual(byCount[1], { x0: 6, y0: 0, x1: 7, y1: 0, count: 2 }, 'a blob on the top edge is not clipped');
+});
+
+test('the connected-component pass allocates no per-pixel arrays', () => {
+  const fn = CORE.slice(CORE.indexOf('function floodComponents'), scanB);
+  assert.ok(!/spx\(/.test(fn), 'spx() allocates an array per pixel');
+  assert.ok(!/const near = \[/.test(fn), 'the neighbour array is back');
+  assert.match(fn, /near4\[0\]/, 'the scratch neighbour array is missing');
+  assert.ok(CORE.indexOf('function spx(') < 0, 'spx() must be gone, not merely unused');
+  const blobs = CORE.slice(CORE.indexOf('function blobs('), CORE.indexOf('function blobs(') + 400);
+  assert.match(blobs, /floodComponents\(sw, sh, sdata, match, minPx, seenBuf\)/, 'blobs must pass the shared snapshot and scratch');
+});
+
+// The prompt box was measured on a 1620x1031 surface. As a fixed rectangle it only fits that size:
+// at 1100x700 the bubble centre lands at (550, 243), left of the old x=690, so the cheap boxed scan
+// saw nothing and every prompt paid a whole-surface pass instead.
+const BOX_OPEN = '// <prompt-box>';
+const BOX_CLOSE = '// </prompt-box>';
+const boxA = CORE.indexOf(BOX_OPEN);
+const boxB = CORE.indexOf(BOX_CLOSE);
+if (boxA < 0 || boxB < 0) throw new Error('prompt-box sentinels are missing from autofish.js');
+const BOX = new Function(CORE.slice(boxA + BOX_OPEN.length, boxB) + '\nreturn { promptBox, BUBBLE_BOX_REF };')();
+
+test('the prompt box at the measured size is exactly the measured rectangle', () => {
+  assert.deepEqual(BOX.promptBox(1620, 1031), { x: 690, y: 215, w: 360, h: 210 });
+  assert.deepEqual(BOX.promptBox(), { x: 690, y: 215, w: 360, h: 210 }, 'no canvas means the reference surface');
+  assert.equal(BOX.BUBBLE_BOX_REF.cw, 1620);
+});
+
+test('the prompt box follows a smaller live surface and still holds the bubble', () => {
+  const box = BOX.promptBox(1100, 700);
+  const bx = 810 * 1100 / 1620, by = 358 * 700 / 1031;   // where the bubble centre lands
+  assert.ok(box.x <= bx && bx <= box.x + box.w, 'the box misses the bubble horizontally');
+  assert.ok(box.y <= by && by <= box.y + box.h, 'the box misses the bubble vertically');
+  assert.ok(box.w < 360 && box.h < 210, 'a smaller window must not read a bigger box');
+  assert.ok(box.w >= 260 && box.h >= 150, 'the bubble itself does not shrink with the window');
+});
+
+test('the prompt box contains the prompt measured live at 1117x785', () => {
+  // Field run 2026-10-29: the CAST! bubble was detected at (558,234). The fixed 1620x1031 box
+  // (690..1050) could never contain it, so all 11 prompts came from the whole-surface fallback.
+  const box = BOX.promptBox(1117, 785);
+  assert.ok(box.x <= 558 && 558 <= box.x + box.w, 'the live prompt is left of the box again');
+  assert.ok(box.y <= 234 && 234 <= box.y + box.h, 'the live prompt is above the box again');
+  assert.ok(box.w * box.h < 1117 * 785 / 4, 'the boxed scan must stay much cheaper than the whole surface');
+});
+
+test('the prompt box never leaves the surface', () => {
+  for (const [w, h] of [[1680, 1031], [1100, 700], [640, 400], [320, 200], [200, 120]]) {
+    const b = BOX.promptBox(w, h);
+    assert.ok(b.x >= 0 && b.y >= 0, 'negative origin at ' + w + 'x' + h);
+    assert.ok(b.x + b.w <= w, 'overflows width at ' + w + 'x' + h);
+    assert.ok(b.y + b.h <= h, 'overflows height at ' + w + 'x' + h);
+    assert.ok(b.w > 0 && b.h > 0);
+  }
+});
+
+test('both prompt scans size their box from the live canvas, not a literal', () => {
+  assert.doesNotMatch(CORE, /BOX_BUBBLE\b/);
+  for (const start of ['function bubbleInBox()', 'function bubbleGate()']) {
+    const fn = fnBody(start);
+    assert.match(fn, /promptBox\(uiCanvas && uiCanvas\.width, uiCanvas && uiCanvas\.height\)/, start + ' must size its box from the canvas');
+    assert.match(fn, /readUI\(box\.x|box\.x \/ SDOWN/, start + ' must use the computed box');
+  }
 });
