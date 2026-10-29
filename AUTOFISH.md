@@ -1277,6 +1277,13 @@ and thin. `d544589` is merged into this line now; the duplicate day store added 
 favour of the budget store (`autofish:today:v1` and its test are gone), and the merged build is
 3.8.0 with 177 tests.
 
+**Re-measured on 3.8.0 after the merge** (installed userscript, 1117×785, 140 s, ~94 fps):
+**10 bubble detections, 10 from the boxed scan, 0 from `bubble anywhere`**, prompt at (558,232);
+7 dials all locked at (557,287) R=83 with the first 7.6 s after Start; **21 presses, 21 accepted,
+0 rejected** (acceptance 1.0); 4 caught of 4 attempts, **0 lost, 0 misses**; 4 `catch logged` rows.
+The detector fixes and the merged feature batch run together, so the merge did not regress either
+side.
+
 ## Measured facts
 
 All live, at a 1522×954 viewport, dpr 1. These correct several things in `SPIKE.md`.
