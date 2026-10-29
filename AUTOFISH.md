@@ -1688,3 +1688,50 @@ Two details worth keeping:
 - **The memo is the least useful readback in the call.** 33 hits in 4,899 calls (0.7%) for 2.66-2.77 ms
   of a 5.68 ms `lockDial`, i.e. the search is the cheap part and the remembered circle is what is left.
   That is the case 3.8.7 tried to make with a gate; it stays unlanded until a gate is measured seated.
+
+#### 3.8.7 landed on evidence: the gate measured while fishing (2026-10-30)
+
+The gate shipped once on a controlled A/B alone and was reverted the same day, because its install
+reload left the character standing and no dial ever appeared. It is now re-landed (revert of the
+revert) and measured in a session that was actually landing fish.
+
+**Fishing is unchanged.** Session totals, 3.8.7, Chromium at 1117x785, `scanCompiled: true`,
+`memo.skipped` reporting:
+
+| | 3.8.6 (the validated release) | 3.8.7 (this session) |
+|---|---|---|
+| caught / attempts | 8 / 9 (89%) | **14 / 15 (93%)** |
+| presses a catch | 6.1 | **5.6** |
+| `pressAcceptRate` | 1.0, 0 rejected | **1.0, 0 rejected** |
+| lost | 1 | 1 |
+| fps | 123-139 | 111 |
+
+Presses-per-catch matching 5.6 is the number that matters: a gate that delayed the remembered circle
+past a reeling dial would show up as extra presses or rejected presses, and neither appeared (184
+accepted, 0 rejected by the end of the session).
+
+**The gate's own cost, as a 192 s delta window** on the same page (cumulative counters differenced so
+the throttled stretch below is excluded), 5.95 `lockDial` calls a second:
+
+| phase | 3.8.7, ms a call | 3.8.6, ms a call |
+|---|---|---|
+| memo | **1.06** | 2.66-2.77 |
+| grab | 4.13 | 1.83 |
+| mask | 0.46 | 0.44 |
+| scan | 1.54 | 0.89 |
+| refine | 0.32 | 0.28 |
+| `lockDial` | 7.51 | 5.66-5.85 |
+
+The gate skipped **76.3% of calls** (873 of 1,144). A memo attempt still costs 4.48 ms in this state, so
+each skipped call avoids 4.48 ms: **3.42 ms a call, ~20 ms/s of main thread**. Ungated, the same window
+would have spent 4.48 ms on every call and `lockDial` would have been 10.93 ms rather than 7.51.
+
+**Do not read the absolute 7.51 against 3.8.6's 5.7 as a regression.** `grab` - a phase the gate cannot
+touch - doubled from 1.83 to 4.13 ms, and `scan` from 0.89 to 1.54, because the browser window was not
+focused: the page ran at 40 fps with 60-75 ms p95 frames, and a GPU readback queued behind the
+compositor costs more there. `Emulation.setFocusEmulationEnabled` restored it to 111 fps for the
+measured window, but the readback never returned to the 1.83 ms of the earlier run, so the fair claim
+is the within-session one above: the gate's 3.5 ms a call, measured directly, not the absolute total.
+
+**Decision:** keep. Catches, presses a catch and acceptance all match the validated 3.8.6 build while
+the readback the gate targets fell by 73%, so 3.8.7 stays the shipped release.
