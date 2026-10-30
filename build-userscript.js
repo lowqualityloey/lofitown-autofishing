@@ -26,7 +26,12 @@ const OUT = path.join(ROOT, 'dist', 'autofish.user.js');
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 // GitHub serves the newest release's asset under this fixed path, so an installed copy can find
 // its own updates. Every release has to attach the build under exactly this file name.
-const UPDATE_URL = 'https://github.com/lowqualityloey/lofitown-autofishing/releases/latest/download/autofish.user.js';
+//
+// It points at the public distribution repository, not this one: the source repository is private,
+// so its release assets answer an unauthenticated Tampermonkey update check with 404. The dist
+// repository holds no source - just the built file - so both browsers can update without a
+// GitHub session. Publish every release there too, with the asset named autofish.user.js.
+const UPDATE_URL = 'https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js';
 
 const HEADER = [
   '// ==UserScript==',

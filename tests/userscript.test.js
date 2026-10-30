@@ -22,7 +22,9 @@ test('the userscript version matches package.json, so a bump cannot half-happen'
 });
 
 test('the header advertises the stable release asset for updates', () => {
-  const url = 'https://github.com/lowqualityloey/lofitown-autofishing/releases/latest/download/autofish.user.js';
+  // Must be the PUBLIC dist repository: a private repository's release asset 404s for an
+  // unauthenticated Tampermonkey check, which is the whole point of the separate mirror.
+  const url = 'https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js';
   const dl = src.match(/^\/\/ @downloadURL\s+(\S+)$/m);
   const up = src.match(/^\/\/ @updateURL\s+(\S+)$/m);
   assert.ok(dl, 'expected a @downloadURL directive');
