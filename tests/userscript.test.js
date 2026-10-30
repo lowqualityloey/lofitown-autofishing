@@ -21,6 +21,16 @@ test('the userscript version matches package.json, so a bump cannot half-happen'
   assert.match(src, new RegExp('^// @version\\s+' + pkg.version.replace(/\./g, '\\.') + '$', 'm'));
 });
 
+test('the header advertises the stable release asset for updates', () => {
+  const url = 'https://github.com/lowqualityloey/lofitown-autofishing/releases/latest/download/autofish.user.js';
+  const dl = src.match(/^\/\/ @downloadURL\s+(\S+)$/m);
+  const up = src.match(/^\/\/ @updateURL\s+(\S+)$/m);
+  assert.ok(dl, 'expected a @downloadURL directive');
+  assert.ok(up, 'expected an @updateURL directive');
+  assert.strictEqual(dl[1], url);
+  assert.strictEqual(up[1], url, 'both directives must point at the same file');
+});
+
 test('the version is stamped into the core, not only into the header', () => {
   // Two browsers, one dist: a tab can only say which build it runs if F.version comes from the
   // build. The header and the console have to agree with it, so package.json is the only source.

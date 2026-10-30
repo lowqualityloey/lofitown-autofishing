@@ -24,6 +24,9 @@ const ROOT = __dirname;
 const OUT = path.join(ROOT, 'dist', 'autofish.user.js');
 // One source of truth: the header version is package.json's, so a bump cannot half-happen.
 const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+// GitHub serves the newest release's asset under this fixed path, so an installed copy can find
+// its own updates. Every release has to attach the build under exactly this file name.
+const UPDATE_URL = 'https://github.com/lowqualityloey/lofitown-autofishing/releases/latest/download/autofish.user.js';
 
 const HEADER = [
   '// ==UserScript==',
@@ -31,6 +34,8 @@ const HEADER = [
   '// @namespace    lofitown-autofishing',
   '// @version      ' + VERSION,
   '// @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.',
+  '// @downloadURL  ' + UPDATE_URL,
+  '// @updateURL    ' + UPDATE_URL,
   '// @match        https://app.lofi.town/*',
   '// @run-at       document-idle',
   '// @grant        none',
