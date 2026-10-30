@@ -1,14 +1,16 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.0 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.8.10 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
-  oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed
-- **Overall Status**: ACTIVE — private repo published at github.com/lowqualityloey/lofitown-autofishing
-- **Target Release / Deadline**: v1.0.0 usable panel / not tracked
-- **Current Working Branch**: main
-- **Last Updated**: 2026-10-29
-- **Engine Version**: v2.0.1 @ unknown
+  oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
+  (self-updating distribution) closed
+- **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
+  distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
+- **Target Release / Deadline**: next patch (3.8.11) / not tracked
+- **Current Working Branch**: `autofish-3.8.10` (this worktree); `main` is the integration branch
+- **Last Updated**: 2026-10-30
+- **Runtime**: Node v26.13.0, no dependencies, no bundler
 
 ---
 
@@ -22,13 +24,17 @@
   browser; 1 Salmon caught by the bot in 24 s at 1234x1023.
 
 - [/] **Milestone 2** — trustworthy accuracy: the per-fish-attempt oracle replaced per-press scoring
-  (28 caught / 30 attempts, Wilson 95% CI 78.7-98.2%); the dial search went from 83 ms to 4 ms a
-  call; fishing was found to be seat-based, so a missing cast prompt is now named, the session clock
-  pauses while unseated, and the pause honours the clock window and the daily cap. 178 tests after the
-  2026-10-29 review round (dial memory + whole-surface recovery, card-text cursor, press acceptance,
-  local day store, CSS coordinate conversion).
+  (latest long run 103 caught / 112 attempts, 92.0%, Wilson 95% CI 85.4-95.7%); the dial search went
+  from 83 ms to ~1 ms a call; fishing was found to be seat-based, so a missing cast prompt is now
+  named, the session clock pauses while unseated, and the pause honours the clock window and the
+  daily cap. 182 tests after the 2026-10-30 release work.
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
   (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
+- [x] **Milestone 3** — self-updating distribution: a private repository's release assets answer an
+  anonymous Tampermonkey update check with 404, so every release is mirrored to the public
+  `lofitown-autofishing-dist` repository, and `scripts/release.js` refuses unless the build committed
+  at the tag, the source asset and the anonymously served mirror asset are byte-identical. 3.8.9
+  added the stable `@updateURL`; 3.8.10 moved it to the mirror.
 
 ### Active Milestone Task Breakdown
 Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued, `[!]` Blocked):
@@ -50,9 +56,12 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
 - **Active RFC / Spec**: `docs/specs/2026-10-28-catch-log.md` (the panel spec itself was never committed; its decisions are the ADR log in §6)
 - **Active Task Spec**: `docs/tasks/autofish-panel.md`
-- **Key Source Files in Flight**: `autofish.js`, `panel.js`, `session.js`, `layout.js`, `build-userscript.js`, `dist/autofish.user.js`, `tests/*.test.js`
+- **Key Source Files in Flight**: `autofish.js`, `panel.js`, `session.js`, `layout.js`, `build-userscript.js`, `scripts/release.js`, `dist/autofish.user.js`, `tests/*.test.js`
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
+  - Build: `node build-userscript.js`; a test fails when the committed `dist/` is stale
+  - Release mirror: `node scripts/release.js --check` after every tag — verifies both release assets
+    against the tagged build and fetches the public URL anonymously
   - Server smoke: `FISHSERVE_PORT=8741 node fishserve.js` then `curl -s localhost:8741/recent?n=1`
   - Typecheck / Linter: none configured
 
@@ -159,21 +168,22 @@ Staging area for rules observed during sessions but not yet approved as invarian
 
 ## 5. Known Blockers, Risks & Open Questions
 - **Blockers**:
-  - none for the panel code; live in-game verification of the guards and of actual fishing at the
-    user's window size is still outstanding.
+  - none.
 - **Architectural Questions**:
   - none open — placement, history storage, pause semantics and the clock-window meaning were settled
     in the approved spec.
+- **Open questions**:
+  - The 30-minute seat cap, the clock-window stop and the daily-cap stop have never fired in the
+    field; only an overnight run shows what they cost when they do.
+  - The whole-surface prompt scan's false-positive rate against other white UI (name tags, chat
+    bubbles) is unmeasured at window sizes nobody has run.
 - **Technical Debt & Risks**:
-  - **Viewport-sensitive core.** `findBubble`/`findCatch` scan fixed rects
-    (`autofish.js:111` box x690-1050 y215-425, `autofish.js:150` box x620-985 y315-720) tuned for
-    1522x954 with the user's camera position. Measured in the agent browser at 1620x1031: the live
-    `REEL!` bubble rendered at (810,88), i.e. 127 px above the scan box, and `__fish.findBubble()`
-    returned `null` while the prompt was plainly on screen, so the bot never cast. The prompt is
-    anchored in world space above the player, so it moves with the camera, not only with the window
-    size. Not fixed here on purpose: the current boxes are the configuration the account has 85
-    logged catches with. A wider or player-relative scan is the follow-up if the bot ever stops
-    casting in the user's own window.
+  - **Viewport sensitivity: closed.** The fixed 1620x1031 CAST/REEL box is gone: `promptBox` derives
+    it from the live canvas, the dial hint is persisted per canvas size (`autofish:dial:v1`), and a
+    whole-surface pass recovers a stale hint. A 1117x785 field run took 14/14 prompts from the box;
+    no hardcoded seed remains.
+  - **Zen frame budget unmeasured.** Every timing figure in AUTOFISH.md from 3.8.2 on is Chromium. A
+    Gecko readback is not a Chromium one; measure with `__fish.perf()` before changing a throttle.
   - **Port collision.** Port 8731 on the Windows host is held by an older fishserve that answers
     404 for `/panel.js`. The browser talks to whatever listens there, not to the WSL instance. Use
     `FISHSERVE_PORT=8741` (or stop the old process) — the panel derives its API origin from its own
@@ -198,48 +208,21 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-10-28 | Frame budget (dial search) | The dominant cost was `lockDial` at 83.3 ms a call eight times a second (670 ms/s, 67% of the main thread) - 99,000 rim samples per call, each with its own trig call and a fresh 4-element array. Geometry unchanged: trig tables, a `Uint8Array` rim mask per read, index-only predicates, and `inkMix` without per-pixel arrays. `findCatch` throttled to 100 ms. Measured: 4.2-4.3 ms a call, idle frame rate 32.2 -> 140.6 fps. | `AUTOFISH.md` 2026-10-28 the dial search was the real lag |
 | 2026-10-29 | Session budget | `autofish:budget:v1` in localStorage is the authority for today's minutes and the cooldown; the server's `/sessions` is merged by `max()` and is no longer required. A stop folds the session into `todayMs`, so a restart counts it. | `AUTOFISH.md` 2026-10-29 |
 | 2026-10-29 | Catch history | The ledger key is per profile (`autofish:log:v1:<profile>`), migrating the pre-profile key to `default`. A species outside the catalogue is logged as `Unknown`, shown in a `UNK` cell and kept in an `unknown` worklist. | `AUTOFISH.md` 2026-10-29 |
+| 2026-10-30 | Distribution | The source repository stays private, so its release assets answer an anonymous update check with 404. Every release is also published to the public `lofitown-autofishing-dist` repository under the same tag, and `scripts/release.js` refuses unless the build committed at the tag, the source asset and the anonymously fetched mirror asset are byte-identical. The publish target is read from the userscript's `@updateURL`, never kept as a second constant. | `README.md` Releasing; `scripts/release.js` |
 
 ---
 
 ## 7. Next Immediate Actions (Queued)
-0. ~~**2026-10-29 — watch it fish**~~ (done): the fixed core was injected into the live tab at
-   1117x785 and fished **9/9 attempts, 0 lost**, 19 dial locks / 19 landed hits / 46 presses =
-   **5.1 presses per catch**, and **18/18 `bubble` rows logged `tap:true`** (rungs 1-2, the exact
-   range where the old ladder dropped the click), with 10 catches in `catches.csv`. The two fishing
-   windows ended only because the game stopped emitting cast prompts (`needs a seat`). One caveat worth knowing: a fresh `start()` seeds
-   `F.hint` from a hardcoded 1620x1031 point, so a window of a different size has no lockable dial
-   until the first prompt corrects the hint — here that took one prompt, 28 s after start. A run
-   with a prompt scan that misses at an unusual size would sit blind. **Fixed 2026-10-29**: the
-   circle is persisted per canvas size (`autofish:dial:v1`) and tried first, and `dialAnywhere()`
-   recovers a lock from the wedge after 2.5 s with no dial - the hardcoded seed is gone. Both paths
-   were then verified on a real canvas at real scale (the game tab's frames were suspended): no hint
-   at all locked a painted (840,411) R=96 dial at (839,412) R=96, and a remembered circle locked in
-   2 ms from a hint 740 px wrong. The recovery's first size filter rejected that dial; 157 tests now
-   guard the window. Re-import `dist/autofish.user.js` for persistence — an injected core is lost on
-   reload.
-1. ~~Re-import and reload~~ (done 2026-10-28): the page now runs the shipped userscript with one
-   panel, and the seat pause was measured live - `paused`/`seat` with `fishingMs` frozen at 898 993
-   across 2.6 s, then `running` again on the same clock. The window/cap branches are still reducer
-   tests only, because they need a schedule boundary to actually pass.
-2. Watch a real overnight run: the 30-minute seat cap, the window stop and the cap stop have never
-   fired in the field, and only a night will show whether a stall costs hours or nothing.
-3. Settle the two lost fish in the 28/30 sample. Both scored `cast prompt`; one showed a
-   shape-accepted card (304x420 / 320x436, ink 0.115-0.116) that never produced parsed text, so
-   `parseCatch` can still drop a win silently when no dial is locked - fix that path or prove the
-   loss genuine.
-4. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
+1. Watch a real overnight run: the 30-minute seat cap, the clock-window stop and the daily-cap stop
+   have never fired in the field, and only a night shows whether a stall costs hours or nothing.
+2. Extend the 112-attempt run to 200 catches if a long seated session is available; 103/112 is a real
+   sample and the README now quotes it, so a larger one is worth having.
+3. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
    bubbles) at window sizes nobody has tested yet.
-5. ~~Measure the new press-acceptance rate live~~ (done 2026-10-29): rebuilt core injected into the
-   real game at 1117×785, one 4.6-minute session — **6 caught, 0 lost, 32/32 scored presses accepted,
-   0 rejected, 5.2 presses per catch**, 16 dial locks, 0 errors. The first dial locked 18.2 s after
-   Start, **0.53 s after the REEL tap**, using the play-area seed (within 2 px here); the memory key
-   `autofish:dial:v1` was written as `{cx:557, cy:286, R:84, cw:1117, ch:785}`. Still open: wipe that
-   key and confirm `dialAnywhere()` finds a real dial on a fresh run (verified only on a synthetic
-   real-scale dial so far), and the fixed CAST box missed every prompt at this size (the whole-surface
-   fallback carried it) — see `AUTOFISH.md` 2026-10-29 live run. The box was fixed afterwards (live
-   surface) and the fresh-run recovery was verified; see the prompt-box section there.
-6. Measure the Zen frame budget with `__fish.perf()` (bot stopped, then running) before changing any
+4. Measure the Zen frame budget with `__fish.perf()` (bot stopped, then running) before changing any
    scan throttle; a Gecko readback is not a Chromium one.
+5. Run `node scripts/release.js --check` after every tag: it is the only check that proves the public
+   asset matches the tagged build.
 
 ---
 
@@ -251,6 +234,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | :--- | :--- | :--- | :--- |
 | 2026-10-27 | lead (DSH session) | M1 catch-card freeze | Commits 228c517, 28e77b1, 14abfe6: card detection by solid rectangle (integral image, solid seed grown while solid, tap the seed centre), `cardAnywhere()` removed, stale-canvas and opaque-layer guards; 34 tests. Cause found from pixels: an event card's artwork spills outside the frame, so the connected blob measured 700x576 at 46% fill and `findCatch()` returned null. Live: the stuck card dismissed, then 22 s and 25 s runs with 28/28 dials closed, 0 errors, Eel/Herring/Bass logged. |
 | 2026-10-27 | lead (DSH session) | M1 fix round after first user trial | Commits 1ab882d, 6682c20, ba2c9e6: adaptive prompt scan (fixed boxes first, then the whole UI layer), capture-phase drag listeners, `POST /diag` + `__fish.captureUI()`, `readUI` canvas-loss guard, reducer clock fallback; 33 tests. Live: drag releases, `REEL!` 108x44 at (618,270) found, 1 Salmon in 24 s. |
+| 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
 | 2026-10-28 | lead (DSH session) | Dial search was the lag | The user reported lag still there after importing. rAF attribution put 84% of the main thread in the userscript loop; instrumented function timers put 67% of it in `lockDial` (83.34 ms x 8/s), 16% in `findCatch`. Fix: precomputed trig tables, `rimMask`/`rimHits` over a `Uint8Array`, index-only `isRim`/`isGreen`/`isPin`, `inkMix` without arrays, `cardCheckMs` 100. Live: 4.2-4.29 ms per lock over 82 calls, idle fps 32.2 -> 140.6, 1/1 fish caught with 0 ghosts 0 errors. 4 new `tests/perf.test.js` guards; 94 tests pass. |
 | 2026-10-28 | lead (DSH session) | Fishing is seat-based | The long "bot stops casting" stall was finally explained from the game bundle: the cast prompt is only emitted from the sit path, so standing up (a stray tap, a walk) kills fishing until the player sits again. Commit 58abc48 replaced the walk rung of the cast-recovery ladder with a `needsSeat` watchdog; 6d91243 put the same fact in the panel footer. 103 tests. |
 | 2026-10-28 | lead (DSH session) | Seat pause + repo published | da2d328 pauses the session clock while unseated (core untouched, 30 min cap, `no-seat`), f13967f makes that pause honour the clock window and a spent daily cap. Added README, MIT licence, docs index and the docs/STATE refresh; repo pushed private to github.com/lowqualityloey/lofitown-autofishing (28 files, `shots/` excluded). 110 tests. |
@@ -258,7 +242,6 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-10-29 | lead (DSH session) | Cast ladder + dial hint | The live tab was still running a stale `3.6.1` build with perf wrappers whose `castRecovery(3)` returned `tap:false`, so earlier live readings described the old ladder. Fixed core injected and watched at 1117x785: 7 catches / 7 attempts, 0 lost, 16 dials / 16 hits / 35 presses (5.0 presses a catch), 14/14 bubble rows `tap:true`; `catches.csv` agrees (Epic Betta, Uncommon Tripod Fish). Session ended at `needs a seat`, not a dial defect. 127 tests. |
 | 2026-10-29 | lead (DSH session) | 3.6.1 reinstalled in both; the panel carries the report | Both browsers updated to 3.6.1 and confirmed in-page (`__fish.version` and the panel head read `3.6.1`). Because Zen takes no synthetic keystrokes, 3.6.1 also renders `perf()` on the panel: fps / p50 / p95 / worst, each detector's ms per second, and the full JSON on click. Zen live, running, in front: 55.6 fps, p50 15, p95 46, worst 78 ms; `snapshot` 105.4, `findBubble` 54.5, `lockDial` 259.9, `findCatch` 76.4 ms/s. The expanded report read `lockDial` at 6.3 calls/s x 43.74 ms = 274.7 ms/s = 27.5% (`snapshot` 4.21 x 25.1 = 10.6%, `findBubble` 0.77 x 59.5 = 4.6%). The rate did not rise and the per-call cost did not fall (37.58 -> 43.74 ms), so the 24.6% -> 7% projection is withdrawn; the search is ~1.1 ms of a 43.74 ms call, so ~34 ms is unaccounted for and the next step is to split lockDial's timer inside the live loop (grab / rimMask / coarse scan / refine / sample), not to add a rate cap. Neo could not be read - its tab was behind a full-screen video and a covered tab is throttled to ~1 fps (14.8 fps, p95 1002 ms), which measures occlusion, not the bot. 141 tests. |
 | 2026-10-29 | lead (DSH session) | Zen: lockDial's per-circle helper | The Zen tab (Gecko, 3.6.0) reported `lockDial` at 37.58 ms x 6.5/s = 24.6% of the main thread. In-page probes: the 240x240 readback is flat at 7-9 ms at any size, `rimMask` is 0.38 ms, and the 99,000-sample scan is 0.75 ms inlined but ~22 ms through 4,950 per-circle `rimHits` calls - the earlier 4.2 ms Chromium figure hid the split. Fix in 3.6.1: inline the coarse scan over the mask (same centres, radii, `hit >= 17` and first-max tie-break), keep `rimHits` for the 17-call refinement. Live, same frame: 31-33 ms -> 8-11 ms. A time-based gate was rejected: 791 shadow scans in 120 s found 4 dials, one more than 20 s after the last press. 140 tests. |
-| 2026-10-27 | lead (DSH session) | M1 tasks 1-9 | Commits 3bbc92a..ec04344: `session.js`, `layout.js`, server session routes, core hooks, `panel.js`, `install.html`, `autofish.user.js`, 30 passing tests. Three live bugs found and fixed (null `ui` refs, `.wrap{position:fixed}`, `F.zones()` before first bubble). |
 | 2026-10-29 | lead (DSH session) | Senior review round | Fixed the six review findings: persisted dial geometry + whole-surface recovery (no hardcoded seed), text cursor advance on an unparsed card, press acceptance by the new-triangle spawn (`sweepReport`/`accuracy` rewired), dead cast-retry ladder call removed, `floodComponents` de-allocation, local day store for the daily cap, CSS coordinate conversion at the tap/zones boundary. 156 tests; `dist/` rebuilt. |
 | 2026-10-29 | lead (DSH session) | Live-surface prompt box | The CAST/REEL box is derived from the live canvas (`promptBox`) instead of the 1620x1031 literal. Field run at 1117x785: 14/14 bubbles from the box, 0 from `bubble anywhere` (was 11/11 fallback), 8 caught / 8 attempts, 0 lost, 34/34 presses accepted. `build-userscript.js` now stamps `F.version` from `package.json`, so an updated install no longer reports `autofish 3.0`. 163 tests. |
 | 2026-10-29 | lead (DSH session) | Merge of the parallel feature branch | Installing 3.7.1 replaced a 3.6.1 build from the `repo-ingest` branch and lost the budget store, per-profile ledger, 181-species catalogue, hidden-stop/chain controls and the perf probe the user noticed. Merged `d544589` into this branch, resolved the panel budget duplication in favour of the budget store (removing `autofish:today:v1`), and released 3.8.0. Re-measured live at 1117x785: 10/10 bubbles from the box, 0 fallback, 21/21 presses accepted, 4/4 caught, 0 lost, first lock 7.6 s. 177 tests. |
@@ -268,6 +251,13 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-10-29 | lead (DSH session) | lockDial extraction: negative result | 3.8.3-3.8.5 lift the coarse scan out of `lockDial` into `coarseScan`. Live 3.8.3, 1117x785, 180 s: scan 30.26 ms a call, `lockDial` 35.09 at 6.6/s = 23.1% - the same as 3.8.2, so the extraction changed nothing. It did rule things out: the same source eval'd fresh is 2.26 ms, the shipped instance with a synthetic 240x240 mask is 29 ms and never warms up over 120 calls, function size (1,200 statements) 2.2-4.0 ms, closure scope (2,000 locals) 2.3 ms, a large injected script 1.7 ms. The difference travels with the function instance inside the installed userscript, not with its input; the remaining hypothesis (compilation context keeps it unoptimised) is unproven. Next experiment: compile the scan with `new Function` at startup and re-read the phases. 3.8.5 installed and fishing (1 caught, acceptance 1.0, 0 lost). 179 tests. |
 | 2026-10-29 | lead (DSH session) | lockDial's missing 34 ms is the coarse scan | 3.8.2 splits `lockDial`'s own timer into memo / grab / mask / scan / refine and reports it from `perf().lockPhases`. Live Chromium, 1117x785, 180 s: 35.02 ms a call at 6.9/s = 24.1% of wall clock, of which the coarse scan is 30.28 ms (86.5%); grab 1.97, memo 2.49 (8 hits in 1,242), mask 0.17, refine 0.10. 4 caught of 8 attempts, acceptance 1.0, 0 lost, 104.5 fps, p50 7 ms. The scan does not do more work: the same loop standalone is 1.4 ms, padded with 1,200 statements 2.2-4.0 ms (so not function size), while the live call is 32-36 ms and 100 ms at span 40. A 20 s CPU profile attributes only 13 ms a call to `lockDial` self (8.9%), so the loop is running unoptimised in place rather than being attributable JavaScript. Next step is to lift the scan into its own function and re-measure; a rate cap stays rejected. 179 tests. |
 | 2026-10-29 | lead (DSH session) | Branch convergence: 3.8.1 | The `repo-ingest` worktree held uncommitted 3.6.1 work (an inlined dial rim scan for Gecko and an on-screen perf box). Committed it, merged it here, and kept the measured 15/20 rim gate - the incoming patch used 17/20, the threshold that made dial locks fail on the live dial. Release 3.8.1, 178 tests; both branches now point at one commit. |
+| 2026-10-30 | lead (DSH session) | 3.8.6 re-confirmed after the 3.8.7 rollback | 3.8.7 (the memo gate) was reverted unproven after its install reload left the character standing; repo and browser are back on 3.8.6, dist rebuilt, 179 tests. A seated live run then checked the released build: 7 minutes, sampled every 60 s at 1117x785, 8 caught of 9 attempts (89%), 49 presses (6.1 a catch), `pressAcceptRate` 1.0 with 89 accepted / 0 rejected, 1 lost; fps 123-139, p95 8.6-10.6 ms, scan 0.88-0.90 ms, `lockDial` 5.66-5.85 ms, memo 33 hits in 4,899 calls (0.7%). Matches the 3.8.6 signature run (12/13, 5.6 a catch, acceptance 1.0), so nothing regressed by rolling back. The seat watchdog tripped twice mid-run without stopping the session. |
+| 2026-10-30 | lead (DSH session) | 3.8.7 landed on evidence: the gate, measured seated | Re-landed the memo gate as a revert of the revert and measured it in a session that was landing fish: 14 caught of 15 attempts (93%), 5.6 presses a catch, `pressAcceptRate` 1.0 with 184 accepted / 0 rejected, 1 lost - the same signature as 3.8.6, so the gate stays. Phase delta over a 192 s window (counters differenced, 5.95 `lockDial` calls/s): memo 2.7 -> **1.06 ms** a call with 76.3% of calls skipped (873 of 1,144), grab 4.13, scan 1.54, mask 0.46, refine 0.32, `lockDial` 7.51 measured against 10.93 estimated ungated - 3.42 ms saved a call, ~20 ms/s of main thread. The absolute 7.51 is not comparable to 3.8.6's 5.7 because the unfocused window ran the page at 40 fps and doubled `grab` (1.83 -> 4.13), a phase the gate cannot touch; `Emulation.setFocusEmulationEnabled` restored 111 fps for the measured window. 179 tests. |
+| 2026-10-30 | lead (DSH session) | 3.8.8: the memo also needs a live dial | 3.8.7 still spent one readback every 500 ms between catches to prove a remembered circle is not a dial, so 3.8.8 also requires a lock inside `MEMO_RECENT_MS` (2000) and counts that skip as `memo.cold`. One 399.6 s delta window at 136.8 fps / p95 9.5 ms: memo **8 attempts in 2,668 calls** (99.7% skipped, 2,644 cold, 3 hits) for **22.2 ms total = 0.008 ms a call**, down from 1.06 in 3.8.7 and 2.7 in 3.8.6; grab 3.15, scan 1.21, mask 0.31, refine 0.16, `lockDial` 4.84 ms. Fishing improved rather than decayed: **11 caught of 11 attempts (100%), 56 presses (5.1 a catch), 78 accepted / 0 rejected, 0 lost**. The memo is effectively retired during normal play and only helps just after a dial is found, which is the only time it could. 180 tests. |
+| 2026-10-30 | lead (DSH session) | 3.8.8 long safety run: 103 catches, memo never cost a dial | Ran 3.8.8 through one continuous seated session with the attempt recorder installed (75.2 active min, 139.8 fps median, p95 8.05): 103 caught / 112 attempts (92%), 5.84 presses a catch, 218 dials closed with 217 hit, 0 rejected presses of 602, all 9 losses `cast prompt`; memo 33 hits in 30,190 calls (99.6% skipped, 29,834 cold) at 0.008 ms a call, 252 ms total. The run was cut at 103 catches by a seat loss (~845 unconsumed `cast retry`) and then the 240 min cap, so 200 catches is still open; bot left paused, no code change. Recorded in AUTOFISH.md. |
+| 2026-10-30 | lead (DSH session) | 3.8.9: a stable update URL | Added `@downloadURL`/`@updateURL` to the built header pointing at the GitHub `releases/latest/download/autofish.user.js` path, so an installed copy can find its own updates instead of a dead loopback server. Installed to both browsers through Tampermonkey's Update path (settings preserved); Neo's diff showed the directive change. 181 tests. |
+| 2026-10-30 | lead (DSH session) | 3.8.10: public mirror + verified release script | The private repo's release asset answers an anonymous update check with 404, so the built userscript now updates from the public `lofitown-autofishing-dist` repository, which carries only the generated file. Added `scripts/release.js`: it publishes the build committed at the tag, requires the source asset to match it byte-for-byte, uploads those bytes, then fetches the mirror asset anonymously and compares hashes. `--check` verified both releases at 210,402 bytes / sha256 1fbf6b69b533 and the public latest URL; 182 tests. |
+| 2026-10-30 | lead (DSH session) | Docs refresh | README now installs from the public release URL and quotes the 3.8.8 long run (103/112, 92.0%); STATE brought to 3.8.10 with the mirror ADR and the continuity rows moved back into §8; screenshots recaptured from the 3.8.10 panel. |
 
 ---
 
@@ -281,7 +271,3 @@ Compact record of pairing sessions to enable instant chat resumption:
 - **Running total**: not tracked — refreshed by `pk:checkpoint`; keep measured tokens and heuristic context-payload ranges as separate totals and never add them together. One row per real work session (trivial sessions under ~5 turns with no workflow usage write nothing). When host metering is unavailable, compute the lower and upper bounds independently via the heuristic (`turns × 8k` through `turns × 15k tok/turn`) rather than emitting a midpoint or `not measured`.
 - **Note evidence**: use `duration=<value>; repairs=<count or not tracked>; interventions=<count or not tracked>; verification=<result or not tracked>; outcome=<accepted | rejected | incomplete | blocked | not tracked>`. Never infer `0`, `passed`, or `accepted` from missing evidence.
 - **Evidence boundary**: this ledger is operational telemetry, not CPAC benchmark evidence. Heuristic context payload is not provider billing telemetry or actual spend; avoided rework remains `not measured` without comparative evidence. Preserve historical rows and the five-column shape without silent backfill.
-| 2026-10-30 | lead (DSH session) | 3.8.6 re-confirmed after the 3.8.7 rollback | 3.8.7 (the memo gate) was reverted unproven after its install reload left the character standing; repo and browser are back on 3.8.6, dist rebuilt, 179 tests. A seated live run then checked the released build: 7 minutes, sampled every 60 s at 1117x785, 8 caught of 9 attempts (89%), 49 presses (6.1 a catch), `pressAcceptRate` 1.0 with 89 accepted / 0 rejected, 1 lost; fps 123-139, p95 8.6-10.6 ms, scan 0.88-0.90 ms, `lockDial` 5.66-5.85 ms, memo 33 hits in 4,899 calls (0.7%). Matches the 3.8.6 signature run (12/13, 5.6 a catch, acceptance 1.0), so nothing regressed by rolling back. The seat watchdog tripped twice mid-run without stopping the session. |
-| 2026-10-30 | lead (DSH session) | 3.8.7 landed on evidence: the gate, measured seated | Re-landed the memo gate as a revert of the revert and measured it in a session that was landing fish: 14 caught of 15 attempts (93%), 5.6 presses a catch, `pressAcceptRate` 1.0 with 184 accepted / 0 rejected, 1 lost - the same signature as 3.8.6, so the gate stays. Phase delta over a 192 s window (counters differenced, 5.95 `lockDial` calls/s): memo 2.7 -> **1.06 ms** a call with 76.3% of calls skipped (873 of 1,144), grab 4.13, scan 1.54, mask 0.46, refine 0.32, `lockDial` 7.51 measured against 10.93 estimated ungated - 3.42 ms saved a call, ~20 ms/s of main thread. The absolute 7.51 is not comparable to 3.8.6's 5.7 because the unfocused window ran the page at 40 fps and doubled `grab` (1.83 -> 4.13), a phase the gate cannot touch; `Emulation.setFocusEmulationEnabled` restored 111 fps for the measured window. 179 tests. |
-| 2026-10-30 | lead (DSH session) | 3.8.8: the memo also needs a live dial | 3.8.7 still spent one readback every 500 ms between catches to prove a remembered circle is not a dial, so 3.8.8 also requires a lock inside `MEMO_RECENT_MS` (2000) and counts that skip as `memo.cold`. One 399.6 s delta window at 136.8 fps / p95 9.5 ms: memo **8 attempts in 2,668 calls** (99.7% skipped, 2,644 cold, 3 hits) for **22.2 ms total = 0.008 ms a call**, down from 1.06 in 3.8.7 and 2.7 in 3.8.6; grab 3.15, scan 1.21, mask 0.31, refine 0.16, `lockDial` 4.84 ms. Fishing improved rather than decayed: **11 caught of 11 attempts (100%), 56 presses (5.1 a catch), 78 accepted / 0 rejected, 0 lost**. The memo is effectively retired during normal play and only helps just after a dial is found, which is the only time it could. 180 tests. |
-| 2026-10-30 | lead (DSH session) | 3.8.8 long safety run: 103 catches, memo never cost a dial | Ran 3.8.8 through one continuous seated session with the attempt recorder installed (75.2 active min, 139.8 fps median, p95 8.05): 103 caught / 112 attempts (92%), 5.84 presses a catch, 218 dials closed with 217 hit, 0 rejected presses of 602, all 9 losses `cast prompt`; memo 33 hits in 30,190 calls (99.6% skipped, 29,834 cold) at 0.008 ms a call, 252 ms total. The run was cut at 103 catches by a seat loss (~845 unconsumed `cast retry`) and then the 240 min cap, so 200 catches is still open; bot left paused, no code change. Recorded in AUTOFISH.md. |
