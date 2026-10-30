@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.8.10) - presses land, fish are caught, and catch cards are auto-dismissed so it
+Status: **WORKING (3.8.11) - presses land, fish are caught, and catch cards are auto-dismissed so it
 fishes continuously.** Read [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
 before trusting it for real fishing.
 
