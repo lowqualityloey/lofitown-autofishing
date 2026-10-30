@@ -92,3 +92,18 @@ test('the panel is the UI and the chip is only its fallback', () => {
   // No chip is built at load time - only showChip(), which the timers call.
   assert.ok(src.indexOf('el = makeChip()') > src.indexOf('function showChip()'));
 });
+
+test('the release script publishes to the repository the update URL advertises', () => {
+  // A mirror to keep in sync by hand is a mirror that drifts, so the script derives its target
+  // from the built header's UPDATE_URL rather than holding a second copy of the repository name.
+  const { UPDATE_URL } = require('../build-userscript.js');
+  const { mirrorFromUpdateUrl } = require('../scripts/release.js');
+  assert.deepStrictEqual(mirrorFromUpdateUrl(UPDATE_URL), {
+    repo: 'lowqualityloey/lofitown-autofishing-dist',
+    asset: 'autofish.user.js',
+  });
+  assert.throws(
+    () => mirrorFromUpdateUrl('https://github.com/x/y/releases/download/v1/x.user.js'),
+    /releases\/latest\/download/
+  );
+});
