@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, castRecovery };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle', 'castRecovery']) {
+  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -247,20 +247,64 @@ test('castRecovery walks up a bounded ladder: tap, then the keybind as well', ()
   assert.deepEqual(T.castRecovery(1), { tap: true, space: false, walk: false });
   // A click that changed nothing buys the game's own keybind as well.
   assert.deepEqual(T.castRecovery(2), { tap: true, space: true, walk: false });
-  // Then the keybind alone while the pointer path has proven useless.
-  assert.deepEqual(T.castRecovery(3), { tap: false, space: true, walk: false });
-  assert.deepEqual(T.castRecovery(9), { tap: false, space: true, walk: false });
+  // The click is NEVER dropped: a prompt is a button. Dropping it turned the ladder into a
+  // one-way door (measured live 2026-10-29: 140 cast retries, rungs 14-36, every one tap:false,
+  // while a REEL! prompt sat on screen for twenty minutes).
+  assert.deepEqual(T.castRecovery(3), { tap: true, space: true, walk: false });
+  assert.deepEqual(T.castRecovery(9), { tap: true, space: true, walk: false });
+});
+
+test('perfRates reports calls/second, ms/call, ms/s and share of wall time', () => {
+  const r = T.perfRates({ sample: 600, findCatch: 0 }, { sample: 1200, findCatch: 0 }, 10_000);
+  assert.equal(r.sample.callsPerSec, 60);
+  assert.equal(r.sample.msPerCall, 2);
+  assert.equal(r.sample.msPerSec, 120);
+  assert.equal(r.sample.share, 0.12);
+  assert.equal(r.findCatch.msPerCall, null);
+  assert.equal(r.findCatch.msPerSec, 0);
+  assert.deepEqual(T.perfRates({}, {}, 0), {}, 'nothing measured is an empty report, not NaN');
+  // no uptime yet: rates are unknown, but a per-call average is still knowable
+  const cold = T.perfRates({ sample: 10 }, { sample: 5 }, 0);
+  assert.equal(cold.sample.callsPerSec, null);
+  assert.equal(cold.sample.msPerSec, null);
+  assert.equal(cold.sample.msPerCall, 0.5);
 });
 
 test('castRecovery never walks - a walk would stand the character out of the fishing seat', () => {
   // Seat-based fishing: the cast prompt only exists while seated, so walking cannot recover a cast
   // and can strand the character somewhere unfishable (measured live 2026-10-28).
   for (let n = 0; n < 40; n++) assert.equal(T.castRecovery(n).walk, false, 'rung ' + n);
-  // Bounded: the last rung repeats and never taps again.
-  assert.deepEqual(T.castRecovery(5), { tap: false, space: true, walk: false });
-  assert.deepEqual(T.castRecovery(39), { tap: false, space: true, walk: false });
+  // Bounded: the last rung repeats, and it still taps.
+  assert.deepEqual(T.castRecovery(5), { tap: true, space: true, walk: false });
+  assert.deepEqual(T.castRecovery(39), { tap: true, space: true, walk: false });
   // Junk input must not crash.
   assert.deepEqual(T.castRecovery(0), { tap: true, space: false, walk: false });
   assert.deepEqual(T.castRecovery(null), { tap: true, space: false, walk: false });
   assert.equal(T.castRecovery(2.7).tap, true);
+});
+
+// A press is not a win. The game either spawns a fresh triangle (accepted) or keeps the same one
+// (rejected), and only the finishing press ever closes the dial - so the dial's "ended soon after"
+// verdict cannot score timing. These are the press's own verdicts.
+
+test('a press is accepted when the game spawns a new triangle', () => {
+  const press = { delta: 0, width: 85, t: 1000 };
+  // a thickness jump is the new triangle
+  assert.deepEqual(T.pressOutcome({ press, s: { t: 1016, delta: 5, width: 92, omega: 300 }, blinks: 0 }), { verdict: 'accepted' });
+  // the ring blinking out twice is a new spawn too
+  assert.deepEqual(T.pressOutcome({ press, s: { t: 1016, delta: 5, width: 85, omega: 300 }, blinks: 2 }), { verdict: 'accepted' });
+  // and a delta jump the rotation cannot explain
+  assert.deepEqual(T.pressOutcome({ press, s: { t: 1016, delta: 40, width: 85, omega: 300 }, blinks: 0 }), { verdict: 'accepted' });
+});
+
+test('a press is rejected when the same triangle survives the grace', () => {
+  const press = { delta: 0, width: 85, t: 1000 };
+  const same = (t) => ({ t, delta: 300 * (t - 1000) / 1000, width: 85, omega: 300 });
+  assert.deepEqual(T.pressOutcome({ press, s: same(1100), blinks: 0, graceMs: 250 }), { verdict: 'pending' });
+  assert.deepEqual(T.pressOutcome({ press, s: same(1260), blinks: 0, graceMs: 250 }), { verdict: 'rejected' });
+});
+
+test('pressOutcome has no verdict without a press or a sample', () => {
+  assert.deepEqual(T.pressOutcome({}), { verdict: 'none' });
+  assert.deepEqual(T.pressOutcome({ press: { t: 1, width: 85, delta: 0 } }), { verdict: 'pending' });
 });

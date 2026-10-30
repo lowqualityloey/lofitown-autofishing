@@ -1,6 +1,6 @@
 {
   "name": "lofitown-autofishing",
-  "version": "3.5.0",
+  "version": "3.8.8",
   "private": true,
   "description": "Plays the lofi.town fishing loop: casts, reels, presses the reel dial on a predicted crossing, and keeps a local catch ledger. Ships as one self-contained userscript.",
   "license": "MIT",

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.5.0
+// @version      3.8.8
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @match        https://app.lofi.town/*
 // @run-at       document-idle
@@ -53,8 +53,40 @@ window.__autofishInstalled = true;
 (() => {
   if (window.__fish) { try { window.__fish.stop(); } catch (e) {} }
 
-  const F = { version: 'autofish 3.0' };
+  /**
+   * build-userscript.js replaces 'dev' with package.json's version, so the header, __fish.version
+   * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
+   * the honest answer: that copy has no build step to stamp it.
+   */
+  const F = { version: "3.8.8" };
   const now = () => performance.now();
+
+  /* ---- performance probe -------------------------------------------------
+   * Zen/Gecko pays far more for a canvas readback than Chromium does, and the only honest way to
+   * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
+   * average cost of each detector, so a change can be justified by numbers rather than a guess.
+   */
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0 };
+  /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
+   * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
+   * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
+   * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
+   * time names itself instead of being inferred. */
+  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
+  /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
+   *  inside a reel (the dial persists across presses) at a third of the old read count. */
+  const MEMO_EVERY_MS = 500;
+  /** The remembered circle can only help while a dial is actually on screen: it caches the last
+   *  circle, and between dials there is nothing at that spot to verify. So an attempt also needs a
+   *  dial to have been locked inside this window - a readback that can only fail is pure cost. */
+  const MEMO_RECENT_MS = 2000;
+  function resetPerf() {
+    perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
+    perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
+    perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
+    perf.card = 0; perf.cardN = 0;
+    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
+  }
 
   /* ---- timing core -----------------------------------------------------
    * Pure functions, no DOM and no state. tests/timing.test.js extracts this block by its
@@ -301,14 +333,141 @@ window.__autofishInstalled = true;
    * cannot create one - and the walk itself stands the character up (200 ms of held movement) and,
    * measured live, walked it behind a building where it was neither visible nor fishable. The seat
    * watchdog in step() names that condition instead of flailing.
+   *
+   * Never stop clicking either. The ladder used to drop the click from rung 3 and press only the
+   * keybind, and the rung was only ever reset by a successful dial lock - so two failed taps locked
+   * the bot into keybind-only forever. Measured live 2026-10-29: 140 cast retries over 20 minutes,
+   * rungs 14-36 every one `tap:false`, while a REEL! prompt sat on screen the whole time, and the
+   * panel then paused the session with "nothing to bite: sit on a chair by the water" at a character
+   * that was sitting on one. A prompt is a button: press it every time, and add the keybind on top
+   * once a click has not taken.
    */
+  /**
+   * Did the game accept that press?
+   *
+   * A good press does not close the dial - the game spawns a fresh triangle in the same widget - so
+   * "the dial ended soon after" only ever scores the finishing press. The observable present on
+   * every press is that spawn: `newTriangle` already detects it (a thickness jump, a delta jump
+   * beyond the predicted rotation, or the ring blinking out). No spawn inside the grace means the
+   * game did not act on the press.
+   *
+   * st: { press, s, blinks, opts, graceMs } -> { verdict: 'none'|'pending'|'accepted'|'rejected' }
+   */
+  function pressOutcome(st) {
+    const w = st || {};
+    if (!w.press) return { verdict: 'none' };
+    const o = w.opts || {};
+    const grace = w.graceMs != null ? w.graceMs : (o.pressGraceMs != null ? o.pressGraceMs : 250);
+    if (!w.s) return { verdict: 'pending' };
+    if (newTriangle(w.press, w.s, w.blinks, o)) return { verdict: 'accepted' };
+    if (isFinite(w.press.t) && isFinite(w.s.t) && w.s.t - w.press.t >= grace) return { verdict: 'rejected' };
+    return { verdict: 'pending' };
+  }
   function castRecovery(n) {
     const i = Math.floor(n) || 0;
     if (i <= 1) return { tap: true, space: false, walk: false };   // the normal path: click the bubble
-    if (i === 2) return { tap: true, space: true, walk: false };   // the click did not take: also press the key
-    return { tap: false, space: true, walk: false };                // the keybind alone, then hold
+    return { tap: true, space: true, walk: false };                // click and the keybind together
+  }
+
+  /**
+   * Cumulative counters -> rates, so the perf probe says WHERE the frame time goes (ms/s and share
+   * of wall clock), not just how long one call took. Pure, so the arithmetic is tested.
+   * `share` is the fraction of wall time spent on the main thread; nested calls overlap
+   * (findBubble includes its snapshot), so read it as attribution, not a partition.
+   */
+  function perfRates(calls, totals, uptimeMs) {
+    const secs = uptimeMs > 0 ? uptimeMs / 1000 : 0;
+    const out = {};
+    for (const key of Object.keys(totals)) {
+      const ms = totals[key] || 0;
+      const n = calls[key] || 0;
+      const msPerSec = secs ? ms / secs : null;
+      out[key] = {
+        callsPerSec: secs ? n / secs : null,
+        msPerCall: n ? ms / n : null,
+        msPerSec,
+        share: msPerSec == null ? null : msPerSec / 1000,
+      };
+    }
+    return out;
   }
   // </timing-core>
+
+  /* ---- coordinate frame ------------------------------------------------
+   * Everything the detectors see is in the UI canvas's backing-store pixels. Everything the DOM
+   * does - elementFromPoint, PointerEvent, the panel's exclusion rect - is in CSS pixels. Those
+   * are the same only while the canvas is 1:1 with its CSS box, which is true at the dpr the game
+   * was measured at and is not something to keep assuming silently.
+   */
+  // <coords>
+  function cssPoint(x, y, frame) {
+    if (!frame) return { x: x, y: y };
+    const kx = frame.cw ? frame.w / frame.cw : 1;
+    const ky = frame.ch ? frame.h / frame.ch : 1;
+    return { x: frame.left + x * kx, y: frame.top + y * ky };
+  }
+  // </coords>
+
+  /* ---- dial memory ------------------------------------------------------
+   * The reel widget sits in one place for a whole session, so its circle is worth remembering: a
+   * fresh start has no prompt to learn it from, and the old seed was a literal point measured at
+   * one viewport. It is stored with the canvas size it was measured at, because the widget's place
+   * in the UI layer scales with the canvas, not with the window's CSS size.
+   */
+  // <dial-memory>
+  const DIAL_KEY = 'autofish:dial:v1';
+  const DIAL_R_MIN = 60, DIAL_R_MAX = 140;
+
+  const finite = (n) => typeof n === 'number' && isFinite(n);
+  const finitePositive = (n) => finite(n) && n > 0;
+
+  /**
+   * Validate a stored circle against the canvas it will be used on. Same canvas -> unchanged; a
+   * proportionally bigger/smaller canvas -> scaled; anything else -> null, because a circle from a
+   * different aspect is a different camera, not a resize.
+   */
+  function dialGeoFit(stored, cw, ch) {
+    if (!stored || !finitePositive(cw) || !finitePositive(ch)) return null;
+    const cx = Number(stored.cx), cy = Number(stored.cy), R = Number(stored.R);
+    const sw0 = Number(stored.cw), sh0 = Number(stored.ch);
+    if (!finite(cx) || !finite(cy) || !finite(R) || !finitePositive(sw0) || !finitePositive(sh0)) return null;
+    let k = 1;
+    if (sw0 !== cw || sh0 !== ch) {
+      k = cw / sw0;
+      if (Math.abs(ch / sh0 - k) > 0.02) return null;          // not the same camera, just a resize
+    }
+    const out = { cx: Math.round(cx * k), cy: Math.round(cy * k), R: Math.round(R * k) };
+    if (out.R < DIAL_R_MIN || out.R > DIAL_R_MAX) return null;
+    if (out.cx < 0 || out.cy < 0) return null;
+    return out;
+  }
+
+  function loadDialMemory() {
+    let raw = null;
+    try { raw = window.localStorage.getItem(DIAL_KEY); } catch (e) { return null; }
+    if (!raw) return null;
+    try {
+      const p = JSON.parse(raw);
+      if (!p || p.v !== 1) return null;
+      return { cx: p.cx, cy: p.cy, R: p.R, cw: p.cw, ch: p.ch };
+    } catch (e) { return null; }
+  }
+
+  function saveDialMemory(g) {
+    if (!g || !uiCanvas || !uiCanvas.width) return false;
+    try {
+      window.localStorage.setItem(DIAL_KEY, JSON.stringify({
+        v: 1, cx: Math.round(g.cx), cy: Math.round(g.cy), R: Math.round(g.R),
+        cw: uiCanvas.width, ch: uiCanvas.height,
+      }));
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function sameDial(a, b) {
+    return !!a && !!b && Math.abs(a.cx - b.cx) <= 2 && Math.abs(a.cy - b.cy) <= 2 && Math.abs(a.R - b.R) <= 2;
+  }
+  // </dial-memory>
 
   /* ---- catch log --------------------------------------------------------
    * A durable, server-free record of every parsed catch. The data helpers in the block below are
@@ -322,45 +481,62 @@ window.__autofishInstalled = true;
   // <catch-log>
   // <species-catalogue>
 const SPECIES = [
-  ["Anchovy","Common",0.1,0.3,5], ["Bass","Common",1,8,8], ["Bluegills","Common",0.1,2,6], ["Catfish","Common",2,20,12],
-  ["Cod","Common",2,15,10], ["Flounder","Common",1,5,7], ["Golden Shiner","Common",0.05,0.5,5], ["Herring","Common",0.5,2,7],
-  ["Largemouth Bass","Common",1,10,10], ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9],
-  ["Minnow","Common",0.01,0.1,5], ["Mud Crab","Common",0.1,1,7], ["Sardine","Common",0.2,1,6], ["Sea Urchin","Common",0.5,3,8],
-  ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6], ["Swamp Barb","Common",0.05,0.3,6],
-  ["Tadpole","Common",0.01,0.05,5], ["White Sucker","Common",0.5,3,8], ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30],
+  ["Anchovy","Common",0.1,0.3,5], ["Arctic Cod","Common",0.1,1,7], ["Bass","Common",1,8,8], ["Black Sea Bass","Common",1,10,7],
+  ["Bluegills","Common",0.1,2,6], ["Capelin","Common",0.1,1,7], ["Catfish","Common",2,20,12], ["Cod","Common",2,15,10],
+  ["Firefly Squid","Common",0.01,0.1,7], ["Flounder","Common",1,5,7], ["Frozen Fish","Common",1,10,7], ["Golden Shiner","Common",0.05,0.5,5],
+  ["Hatched Fish","Common",0.01,0.1,7], ["Herring","Common",0.5,2,7], ["Lantern Fish","Common",0.1,1,7], ["Largemouth Bass","Common",1,10,10],
+  ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9], ["Minnow","Common",0.01,0.1,5],
+  ["Mud Crab","Common",0.1,1,7], ["Northern Shrimp","Common",0.01,0.1,7], ["Sand Lance","Common",0.01,0.1,7], ["Sardine","Common",0.2,1,6],
+  ["Sea Urchin","Common",0.5,3,8], ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6],
+  ["Swamp Barb","Common",0.05,0.3,6], ["Tadpole","Common",0.01,0.05,5], ["The Deepest Rock","Common",1,10,7], ["White Sucker","Common",0.5,3,8],
+  ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30], ["Arctic Char","Uncommon",1,10,20], ["Arctic Skate","Uncommon",1,10,20],
   ["Asian Swamp Eel","Uncommon",0.5,5,18], ["Clown Fish","Uncommon",0.2,1,19], ["Crawfish","Uncommon",0.02,0.2,15], ["Eel","Uncommon",2,25,25],
-  ["European Toad","Uncommon",0.02,0.15,16], ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20],
-  ["Mudskipper","Uncommon",0.05,0.3,17], ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19],
-  ["Salmon","Uncommon",5,30,28], ["Seahorse","Uncommon",0.1,1,17], ["Squid","Uncommon",1,15,24], ["Sturgeon","Uncommon",20,350,35],
-  ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22], ["Tuna","Uncommon",20,400,35],
-  ["Walleye","Uncommon",1,10,24], ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50],
-  ["Bull Frog","Rare",0.2,0.8,48], ["Coelacanth","Rare",15,180,75], ["Flying Fish","Rare",1,5,42], ["Frog Fish","Rare",0.1,1,50],
-  ["Goldfish","Rare",0.5,2,45], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Mekong Catfish","Rare",50,300,75],
-  ["Nurse Shark","Rare",50,150,70], ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60],
-  ["Snapping Turtle","Rare",5,35,58], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
-  ["American Alligator","Epic",200,1000,200], ["Arowana","Epic",3,20,110], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120],
-  ["Fried Egg Jellyfish","Epic",5,35,95], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
+  ["European Toad","Uncommon",0.02,0.15,16], ["Greenland Halibut","Uncommon",1,10,20], ["Hagfish","Uncommon",0.1,1,20], ["Kelp Snailfish","Uncommon",0.1,1,20],
+  ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20], ["Mudskipper","Uncommon",0.05,0.3,17],
+  ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19], ["Salmon","Uncommon",5,30,28],
+  ["Seahorse","Uncommon",0.1,1,17], ["Snow Crab","Uncommon",1,10,20], ["Spiny Dogfish","Uncommon",1,10,20], ["Squid","Uncommon",1,15,24],
+  ["Sturgeon","Uncommon",20,350,35], ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22],
+  ["Tripod Fish","Uncommon",0.1,1,20], ["Tubenose Poacher","Uncommon",0.1,1,20], ["Tuna","Uncommon",20,400,35], ["Walleye","Uncommon",1,10,24],
+  ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50], ["Bull Frog","Rare",0.2,0.8,48],
+  ["Coelacanth","Rare",15,180,75], ["Dragon Fish","Rare",1,10,55], ["Dumbo Octopus","Rare",0.1,1,55], ["Flying Fish","Rare",1,5,42],
+  ["Frog Fish","Rare",0.1,1,50], ["Giant Isopod","Rare",1,10,55], ["Goldfish","Rare",0.5,2,45], ["Greenland Shark","Rare",100,1000,55],
+  ["Harp Seal","Rare",100,1000,55], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Lumpsucker","Rare",0.1,1,55],
+  ["Mekong Catfish","Rare",50,300,75], ["Nautilus","Rare",0.1,1,55], ["Nurse Shark","Rare",50,150,70], ["Pancake Batfish","Rare",0.1,1,55],
+  ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60], ["Snapping Turtle","Rare",5,35,58],
+  ["Snipe Eel","Rare",0.1,1,55], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
+  ["American Alligator","Epic",200,1000,200], ["Anomalocaris","Epic",1,10,140], ["Arowana","Epic",3,20,110], ["Basking Shark","Epic",1000,10000,140],
+  ["Beluga Whale","Epic",1000,10000,140], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120], ["Fried Egg Jellyfish","Epic",5,35,95],
+  ["Frilled Shark","Epic",100,1000,140], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
   ["Lais Tembiring","Epic",5,50,120], ["Lion Fish","Epic",1,5,85], ["Manta Ray","Epic",600,5000,200], ["Marlin","Epic",100,1800,175],
-  ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Paddle Fish","Epic",25,200,165],
-  ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
-  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Wels Catfish","Epic",50,300,190],
-  ["Whale Shark","Epic",15000,40000,220], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600], ["Cthulhu","Legendary",50000,200000,1000],
-  ["Definitely not Catfish","Legendary",50,300,750], ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500],
-  ["Kappa","Legendary",50,200,900], ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950],
-  ["Marlin's Boot","Legendary",50,300,20], ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800],
-  ["Nyarlathotep","Legendary",1000,50000,1000], ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750],
-  ["Phantom Jellyfish","Legendary",10,100,500], ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800],
-  ["Swamp Monster","Legendary",5000,50000,950], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700], ["Barreleye Fish","Secret",1,5,1500],
-  ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000], ["Ghost Shark","Secret",1,16,1750],
-  ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100],
-  ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150], ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200],
-  ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180], ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250],
-  ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75], ["Walrus","Christmas",500,1500,200]
+  ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Orca","Epic",1000,10000,140],
+  ["Paddle Fish","Epic",25,200,165], ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Polar Bear","Epic",100,1000,140],
+  ["Spider Crab","Epic",1,10,140], ["Stargazer Fish","Epic",1,10,140], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
+  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Viperfish","Epic",1,10,140],
+  ["Wels Catfish","Epic",50,300,190], ["Whale Shark","Epic",15000,40000,220], ["Wolffish","Epic",1,10,140], ["A Penguin?","Legendary",1,10,800],
+  ["Akhlut","Legendary",100,1000,800], ["Amarok","Legendary",100,1000,800], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600],
+  ["Berg","Legendary",1000,10000,800], ["Bowhead Whale","Legendary",1000,10000,800], ["Cthulhu","Legendary",50000,200000,1000], ["Definitely not Catfish","Legendary",50,300,750],
+  ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500], ["Kappa","Legendary",50,200,900],
+  ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950], ["Marlin's Boot","Legendary",50,300,20],
+  ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800], ["Nyarlathotep","Legendary",1000,50000,1000],
+  ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750], ["Phantom Jellyfish","Legendary",10,100,500],
+  ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800], ["Swamp Monster","Legendary",5000,50000,950],
+  ["The Bloop","Legendary",1000,10000,800], ["True Blobfish","Legendary",1,10,800], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700],
+  ["Barreleye Fish","Secret",1,5,1500], ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000],
+  ["Ghost Shark","Secret",1,16,1750], ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Plankton","Secret",0.01,0.1,1500],
+  ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100], ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150],
+  ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200], ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180],
+  ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250], ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75],
+  ["Walrus","Christmas",500,1500,200]
 ];
   // </species-catalogue>
 
   const TIER_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas'];
   const LOG_KEY = 'autofish:log:v1';
+  const LOG_PREFIX = LOG_KEY + ':';
+  // One catch history per profile. The ledger used to be keyed by origin alone, so two accounts in
+  // the same browser silently shared a strip. 'default' keeps the pre-profile key working.
+  let logProfile = 'default';
+  function logKey() { return LOG_PREFIX + logProfile; }
   const TIER_BY_LOWER = {};
   for (const tier of TIER_ORDER) TIER_BY_LOWER[tier.toLowerCase()] = tier;
   const SPECIES_BY_NAME = {};
@@ -455,7 +631,7 @@ const SPECIES = [
     const at = t == null ? Date.now() : t;
     const rarity = {};
     for (const tier of TIER_ORDER) rarity[tier] = 0;
-    return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, days: {}, last: null };
+    return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, unknown: {}, days: {}, last: null };
   }
 
   /** Append one described catch in place and return the same ledger. */
@@ -476,6 +652,12 @@ const SPECIES = [
       s.bestAt = at;
     }
     book.rarity[e.rarity] = (book.rarity[e.rarity] || 0) + 1;
+    // Unknown means the card printed no tier and the catalogue does not know the species. Keep the
+    // names so the gap is a worklist instead of an invisible pile of catches.
+    if (e.rarity === 'Unknown') {
+      if (!book.unknown) book.unknown = {};
+      book.unknown[name] = (book.unknown[name] || 0) + 1;
+    }
     if (e.shiny) book.shiny = (book.shiny || 0) + 1;
     if (e.golden) book.golden = (book.golden || 0) + 1;
     const key = logDay(at);
@@ -521,8 +703,10 @@ const SPECIES = [
       shiny: book.shiny || 0,
       golden: book.golden || 0,
       byRarity, top, best,
+      unknown: book.unknown || {},
+      unknownNames: Object.keys(book.unknown || {}).sort(),
       last: book.last || null,
-      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })) },
+      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })).concat(Object.keys(today.rarity || {}).filter((k) => TIER_ORDER.indexOf(k) < 0).map((k) => ({ rarity: k, n: today.rarity[k] }))) },
       updatedAt: book.updatedAt || null,
       days: Object.keys(book.days || {}).length,
     };
@@ -553,7 +737,13 @@ const SPECIES = [
   function loadLedger() {
     if (ledger) return ledger;
     let raw = null;
-    try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+    try { raw = window.localStorage.getItem(logKey()); } catch (e) { raw = null; }
+    if (!raw && logProfile === 'default') {
+      // The pre-profile ledger (autofish:log:v1) belongs to whoever used this browser first.
+      // Move it to the default profile once, so an upgrade never looks like lost history.
+      try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+      if (raw) { try { window.localStorage.setItem(logKey(), raw); } catch (e) {} }
+    }
     if (!raw) return (ledger = emptyLog());
     try {
       const parsed = JSON.parse(raw);
@@ -563,7 +753,20 @@ const SPECIES = [
   }
   function saveLedger(book) {
     ledger = book;
-    try { window.localStorage.setItem(LOG_KEY, JSON.stringify(book)); return true; } catch (e) { return false; }
+    try { window.localStorage.setItem(logKey(), JSON.stringify(book)); return true; } catch (e) { return false; }
+  }
+  /** Every profile that has a ledger in this browser, newest naming first. */
+  function logProfiles() {
+    const out = [];
+    try {
+      const st = window.localStorage;
+      for (let i = 0; i < (st.length || 0); i++) {
+        const k = st.key(i);
+        if (k && k.indexOf(LOG_PREFIX) === 0) out.push(k.slice(LOG_PREFIX.length));
+      }
+    } catch (e) { /* a blocked store simply has no discoverable profiles */ }
+    if (out.indexOf('default') < 0) out.unshift('default');
+    return out.sort();
   }
 
   // </catch-log>
@@ -582,6 +785,13 @@ const SPECIES = [
     const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
     gameCanvas = app ? app.renderer.canvas : cans[0];
     uiCanvas = cans.find((c) => c !== gameCanvas) || cans[1] || cans[0];
+  }
+
+  /** The UI canvas's CSS box, so a canvas pixel can become a CSS pixel at the DOM boundary. */
+  function uiFrame() {
+    if (!uiCanvas || !uiCanvas.width || !uiCanvas.getBoundingClientRect) return null;
+    const r = uiCanvas.getBoundingClientRect();
+    return { left: r.left, top: r.top, w: r.width, h: r.height, cw: uiCanvas.width, ch: uiCanvas.height };
   }
 
   let ubuf = null, uctx = null;
@@ -642,10 +852,31 @@ const SPECIES = [
                     && c[2] < 135 && c[0] - c[1] > 55;
 
   /* --------------------------------------------------------- bubbles ----- */
-  /** The CAST!/REEL! bubble: a white rounded prompt, clearly wider than it is tall. */
-  const BOX_BUBBLE = { x: 690, y: 215, w: 360, h: 210 };
+  // <prompt-box>
+  /**
+   * The CAST!/REEL! box was measured on a 1620x1031 surface. Read as a fixed rectangle it only
+   * fits that size: the bubble floats above the play area and moves with the viewport, so in a
+   * smaller window the boxed scan misses and every prompt pays a whole-surface pass. The box is
+   * therefore a fraction of the LIVE surface, keeping the measured placement and aspect. The
+   * minimum size keeps room for the bubble itself (108x50 at the reference size), which does not
+   * shrink with the window, and every result is clamped inside the surface.
+   */
+  const BUBBLE_BOX_REF = { x: 690, y: 215, w: 360, h: 210, cw: 1620, ch: 1031 };
+  const BUBBLE_BOX_MIN_W = 260, BUBBLE_BOX_MIN_H = 150;
+  function promptBox(cw, ch) {
+    const W = Math.max(1, Math.round(cw || BUBBLE_BOX_REF.cw));
+    const H = Math.max(1, Math.round(ch || BUBBLE_BOX_REF.ch));
+    const sx = W / BUBBLE_BOX_REF.cw, sy = H / BUBBLE_BOX_REF.ch;
+    const w = Math.min(W, Math.max(BUBBLE_BOX_MIN_W, Math.round(BUBBLE_BOX_REF.w * sx)));
+    const h = Math.min(H, Math.max(BUBBLE_BOX_MIN_H, Math.round(BUBBLE_BOX_REF.h * sy)));
+    const x = Math.max(0, Math.min(W - w, Math.round(BUBBLE_BOX_REF.x * sx)));
+    const y = Math.max(0, Math.min(H - h, Math.round(BUBBLE_BOX_REF.y * sy)));
+    return { x, y, w, h };
+  }
+  // </prompt-box>
   function bubbleInBox() {
-    const r = readUI(BOX_BUBBLE.x, BOX_BUBBLE.y, BOX_BUBBLE.w, BOX_BUBBLE.h);
+    const box = promptBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    const r = readUI(box.x, box.y, box.w, box.h);
     if (!r) return null;
     // Column counts straight off the buffer. The old loop built a fresh 4-element array for every
     // pixel - 75,600 allocations per frame, i.e. ~6M/s at the loop rate. That GC pressure is what
@@ -682,16 +913,17 @@ const SPECIES = [
   }
 
   /**
-   * Is anything prompt-bright inside the fixed box? Pure CPU on the shared snapshot, no readback.
-   * The box scan below costs a 360x210 GPU readback, and the box is empty for most of a session, so
-   * the snapshot says "maybe" first and only then is the full-resolution read spent.
+   * Is anything prompt-bright inside the prompt box? Pure CPU on the shared snapshot, no readback.
+   * The box scan below costs a ~360x210 GPU readback, and the box is empty for most of a session,
+   * so the snapshot says "maybe" first and only then is the full-resolution read spent.
    */
   const BUBBLE_GATE_PX = 10;
   function bubbleGate() {
-    const x0 = Math.max(0, Math.floor(BOX_BUBBLE.x / SDOWN));
-    const y0 = Math.max(0, Math.floor(BOX_BUBBLE.y / SDOWN));
-    const x1 = Math.min(sw, Math.ceil((BOX_BUBBLE.x + BOX_BUBBLE.w) / SDOWN));
-    const y1 = Math.min(sh, Math.ceil((BOX_BUBBLE.y + BOX_BUBBLE.h) / SDOWN));
+    const box = promptBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    const x0 = Math.max(0, Math.floor(box.x / SDOWN));
+    const y0 = Math.max(0, Math.floor(box.y / SDOWN));
+    const x1 = Math.min(sw, Math.ceil((box.x + box.w) / SDOWN));
+    const y1 = Math.min(sh, Math.ceil((box.y + box.h) / SDOWN));
     let n = 0;
     for (let y = y0; y < y1; y++) {
       for (let x = x0, i = (y * sw + x0) * 4; x < x1; x++, i += 4) {
@@ -706,10 +938,10 @@ const SPECIES = [
   /* -------------------------------------------------- adaptive search ---- */
   /**
    * The prompts hang off the play area, not the window: the bubble floats above the player and
-   * slides with the camera, so a fixed box only fits the window and camera position it was
-   * measured at. When the box misses, look for the same shapes anywhere on the UI layer, using a
-   * single 1/4-scale read of the whole surface. Both searches stop at "not found" and return null,
-   * so a resized window degrades to doing nothing rather than tapping blind.
+   * slides with the camera, so even a box that follows the viewport can miss when the camera has
+   * moved. When the box misses, look for the same shapes anywhere on the UI layer, using a single
+   * 1/4-scale read of the whole surface. Both searches stop at "not found" and return null, so a
+   * resized window degrades to doing nothing rather than tapping blind.
    */
   const SDOWN = 4;
   let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
@@ -740,6 +972,11 @@ const SPECIES = [
    */
   let snapAt = 0;
   function snapshot() {
+    const t0 = now();
+    try { return snapshotInner(); }
+    finally { perf.snap += now() - t0; perf.snapN++; }
+  }
+  function snapshotInner() {
     const t = now();
     if (sdata && t - snapAt < ((F.opts && F.opts.scanTickMs) || 66)) return true;
     if (!downscale()) return false;
@@ -747,36 +984,46 @@ const SPECIES = [
     return true;
   }
 
-  function spx(p) {
-    const i = p * 4;
-    return [sdata[i], sdata[i + 1], sdata[i + 2], sdata[i + 3]];
-  }
+  /**
+   * Flat white on the downscaled surface, read by index. `spx()` used to build a 4-element array
+   * per pixel tested - ~108k of them per whole-surface scan at 1680x1031 - which is exactly the
+   * allocation pattern that cost the page 141 -> 27.6 fps in bubbleInBox.
+   */
+  const WHT_S = (d, i) => d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225;
 
-  /** 4-connected components on the downscaled surface: bbox and pixel count per blob. */
-  let seenBuf = null;
-  function blobs(match, minPx) {
-    // One scratch buffer, cleared per scan: this runs on every shared scan tick, so a fresh
-    // 86 KB Uint8Array per call was pure garbage pressure.
-    const total = sw * sh;
-    if (!seenBuf || seenBuf.length !== total) seenBuf = new Uint8Array(total);
-    else seenBuf.fill(0);
-    const seen = seenBuf, out = [];
+  // <scan-core>
+  const near4 = new Int32Array(4);
+
+  /**
+   * 4-connected components over an RGBA buffer: bbox and pixel count per blob.
+   *
+   * Pure on purpose (buffer + scratch in, components out) so the flood fill can be tested on a
+   * hand-built image. `seen` is supplied because the caller reuses one scratch buffer: this runs
+   * on every shared scan tick, and a fresh 108 KB Uint8Array per call is pure garbage pressure.
+   */
+  function floodComponents(w, h, d, match, minPx, seen) {
+    const total = w * h;
+    seen.fill(0);
+    const out = [];
     for (let p0 = 0; p0 < total; p0++) {
-      if (seen[p0] || !match(spx(p0))) continue;
+      if (seen[p0] || !match(d, p0 * 4)) continue;
       const stack = [p0];
       seen[p0] = 1;
-      let x0 = sw, y0 = sh, x1 = 0, y1 = 0, count = 0;
+      let x0 = w, y0 = h, x1 = 0, y1 = 0, count = 0;
       while (stack.length) {
-        const p = stack.pop(), x = p % sw, y = (p / sw) | 0;
+        const p = stack.pop(), x = p % w, y = (p / w) | 0;
         count++;
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
         if (y < y0) y0 = y;
         if (y > y1) y1 = y;
-        const near = [x > 0 ? p - 1 : -1, x < sw - 1 ? p + 1 : -1, y > 0 ? p - sw : -1, y < sh - 1 ? p + sw : -1];
+        near4[0] = x > 0 ? p - 1 : -1;
+        near4[1] = x < w - 1 ? p + 1 : -1;
+        near4[2] = y > 0 ? p - w : -1;
+        near4[3] = y < h - 1 ? p + w : -1;
         for (let k = 0; k < 4; k++) {
-          const q = near[k];
-          if (q < 0 || seen[q] || !match(spx(q))) continue;
+          const q = near4[k];
+          if (q < 0 || seen[q] || !match(d, q * 4)) continue;
           seen[q] = 1;
           stack.push(q);
         }
@@ -785,8 +1032,14 @@ const SPECIES = [
     }
     return out;
   }
+  // </scan-core>
 
-  const WHT_S = (c) => c[3] > 120 && c[0] >= 225 && c[1] >= 225 && c[2] >= 225;
+  let seenBuf = null;
+  function blobs(match, minPx) {
+    const total = sw * sh;
+    if (!seenBuf || seenBuf.length !== total) seenBuf = new Uint8Array(total);
+    return floodComponents(sw, sh, sdata, match, minPx, seenBuf);
+  }
   const CREAM = (c) => c[3] > 60 && c[0] > 225 && c[1] > 200 && c[2] > 130 && c[2] < 238;
 
   /** Dark glyphs on a white field — what separates a prompt from any other white blob. */
@@ -1020,41 +1273,58 @@ const SPECIES = [
     return buf;
   }
 
+  // <card-text>
   const WEIGHT = /^\d+(?:\.\d+)?\s?(?:kg|g|t|lb)$/i;
-  const MONEY = /^\$ ?\d[\d,]*$/;
+  const MONEY = /^\$\s?\d[\d,]*(?:\.\d+)?$/;
   const WORD = /^[A-Za-z][A-Za-z'.\-]*(?: [A-Za-z'.\-]+)*$/;
 
-  /**
-   * Read one catch off the captured text. Card order is species, [rarity], weight, quality,
-   * value, then the catch date drawn digit by digit. Rarity is printed only on non-common fish,
-   * so the slot is resolved by position around the weight instead of by a list of tier names.
-   */
-  F.parseCatch = function () {
-    const buf = hookText();
-    const since = F.txtAt || 0;
+  /** Card strings drawn after `since`, minus the bubbles and the digit-at-a-time date. */
+  function textSince(buf, since) {
     const raw = [];
     for (const e of buf) {
-      if (e.t <= since) continue;
+      if (!e || e.t <= since) continue;
       const s = String(e.s).trim();
       if (!s || /!|^(cast|reel|bite)$/i.test(s)) continue;      // bubbles are not card text
       if (s.length < 2 && !/^\$/.test(s)) continue;             // the date is drawn one digit at a time
       raw.push(s);
     }
-    if (!raw.length) { F.parseWhy = 'empty'; return null; }    // nothing drawn since the last card: already logged
+    return raw;
+  }
+
+  /**
+   * Read one card's strings. Card order is species, [rarity], weight, quality, value, then the
+   * catch date drawn digit by digit. Rarity is printed only on non-common fish, so the slot is
+   * resolved by position around the weight instead of by a list of tier names.
+   */
+  function parseCard(raw, isTier) {
+    if (!raw.length) return { why: 'empty' };                  // nothing drawn since the cursor: already logged
     const wI = raw.findIndex((s) => WEIGHT.test(s));
     const vI = raw.findIndex((s) => MONEY.test(s));
-    if (vI < 0) { F.parseWhy = 'noprice'; return null; }     // every card prints its price
+    if (vI < 0) return { why: 'noprice' };                     // every card prints its price
     const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? raw[wI] : '', value: raw[vI], raw };
     const words = [];
     for (let i = 0; i < vI; i++) if (WORD.test(raw[i])) words.push([i, raw[i]]);
-    if (!words.length) { F.parseWhy = 'nowords'; return null; }
+    if (!words.length) return { why: 'nowords' };
     rec.species = words[0][1];
+    // The slot before the weight holds the rarity on a non-common fish and the quality on a common
+    // one: 'Whale Shark | Epic | 26.6t | Impressive' versus 'Lobster | Impressive | 3.36kg'. The
+    // tier list is the only thing that separates them, so the caller supplies it; without one the
+    // word is treated as quality, which is what the common layout needs.
+    const tier = typeof isTier === 'function' ? isTier : () => false;
     for (let k = 1; k < words.length; k++) {
-      if (wI < 0 || words[k][0] > wI) rec.quality = words[k][1];
-      else rec.rarity = words[k][1];
+      const [i, s] = words[k];
+      if (wI >= 0 && i > wI) { if (!rec.quality) rec.quality = s; }
+      else if (tier(s)) { if (!rec.rarity) rec.rarity = s; }
+      else if (!rec.quality) rec.quality = s;
     }
-    F.parseWhy = 'ok';
-    return rec;
+    return { why: 'ok', rec };
+  }
+  // </card-text>
+
+  F.parseCatch = function () {
+    const out = parseCard(textSince(hookText(), F.txtAt || 0), normTier);
+    F.parseWhy = out.why;
+    return out.rec || null;
   };
 
   /**
@@ -1126,6 +1396,19 @@ const SPECIES = [
     }
   }
   const PIN_N = PIN_F.length;
+  // Candidate offsets for the whole-surface recovery. The blob is an ARC, so its bbox centre can
+  // sit anywhere from the dial centre out to ~0.9R from it (an 85-degree sector's bbox centre is
+  // much closer than 0.7R) - sweeping every ring is what makes the guess independent of where the
+  // wedge happens to be. Each ring is sampled every ~6 px of arc, so the nearest candidate is at
+  // most 3 px from the true centre at any distance. Built once, like the rim tables.
+  const ANNULUS = [];
+  for (let dist = 0; dist <= 100; dist += 4) {
+    const n = dist === 0 ? 1 : Math.max(12, Math.ceil(2 * Math.PI * dist / 6));
+    for (let k = 0; k < n; k++) {
+      const rad = (k / n) * Math.PI * 2;
+      ANNULUS.push({ dx: dist * Math.cos(rad), dy: dist * Math.sin(rad) });
+    }
+  }
 
   /** RIM() read off the buffer: the same predicate, without allocating a pixel array. */
   function isRim(d, i) {
@@ -1171,25 +1454,20 @@ const SPECIES = [
   }
 
   /* ------------------------------------------------------------ dial ----- */
-  /** Find the dial near a hint: grey annulus + two-tone interior, else null. */
-  F.lockDial = function (hintX, hintY) {
-    const S = 240, hw = S / 2;
-    const r = readUI(hintX - hw, hintY - hw, S, S);
-    if (!r) return null;
-    // Mark the rim pixels once, then count them per candidate circle instead of re-testing the
-    // same ~4,950 circles pixel by pixel (that was 83 ms a call; this is ~10 ms).
-    const mask = rimMask(r);
-    let best = null;
-    for (let dy = -22; dy <= 22; dy += 3) {
-      for (let dx = -22; dx <= 22; dx += 3) {
-        const cx = Math.round(hintX + dx), cy = Math.round(hintY + dy);
-        for (let R = 78; R <= 120; R += 2) {
-          const hit = rimHits(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20);
-          if (hit >= 17 && (!best || hit > best.score)) best = { cx, cy, R, score: hit };
-        }
-      }
-    }
-    if (!best) return null;
+  /**
+   * Find the dial near a hint: grey annulus + two-tone interior, else null.
+   *
+   * The widget sits in ONE place for a whole session, so a circle that locked before is tried first.
+   * That matters because the hint can be wrong: false bubble detections (name tags, chat, the reel
+   * panel) moved it 100 px off the real dial on 2026-10-29, and a +/-22 px search around a wrong
+   * hint can never reach the dial. A hit costs one read and no mask; a miss falls through to the
+   * search below with the same cost as before.
+   */
+  /**
+   * Refine the best coarse circle and prove it is the dial. Shared by the hinted search and the
+   * whole-surface recovery, so their validation can never diverge.
+   */
+  function finishLock(r, mask, best) {
     let bestR = best.R, bestN = -1;
     for (let R = Math.max(74, best.R - 8); R <= best.R + 8; R++) {
       const n = rimHits(mask, r, best.cx, best.cy, R, RIM_C40, RIM_S40, 40);
@@ -1197,14 +1475,181 @@ const SPECIES = [
     }
     const geo = { cx: best.cx, cy: best.cy, R: bestR };
     const s = F.sample(geo);
-    if (!s || !s.valid || s.ring < 0.8) return null;
+    if (!s || !s.valid || s.ring < 0.75) return null;
     geo.width = s.width;
     return geo;
+  }
+
+  /**
+   * The coarse scan: every candidate circle around the hint, scored by how many of its 20 rim samples
+   * land on a rim pixel. Its own function because it was 30.28 ms a call in 3.8.2 while the same loop
+   * standalone was 1.4 ms - living inside `lockDial` kept it out of optimised code, and function size
+   * alone did not explain it (padding a bench function to 1,200 statements cost nothing).
+   *
+   * The scan is inlined over the mask rather than calling `rimHits` once per circle: on Gecko those
+   * helper calls cost more than the whole search (31-33 ms against 8-11 ms, same answer, measured
+   * 2026-10-29). 15/20, not 17 - see the note on the gate below.
+   */
+  function coarseScan(mask, rw, rh, ox, oy, hintX, hintY, half, step, C, S) {
+    let best = null;
+    for (let dy = -half; dy <= half; dy += step) {
+      for (let dx = -half; dx <= half; dx += step) {
+        const cx = Math.round(hintX + dx), cy = Math.round(hintY + dy);
+        for (let R = 78; R <= 120; R += 2) {
+          let hit = 0;
+          for (let k = 0; k < 20; k++) {
+            const x = Math.round(cx + R * C[k]) - ox, y = Math.round(cy + R * S[k]) - oy;
+            if (x >= 0 && y >= 0 && x < rw && y < rh && mask[y * rw + x]) hit++;
+          }
+          // 15, not 17. The gate used to accept only 17 of 20 rim samples, and the live dial at a
+          // 1680x1031 viewport measures EXACTLY 17 (R=96): one anti-aliased sample and the search
+          // finds nothing while the dial is plainly on screen. Measured 2026-10-29: 1 lock in 20
+          // minutes with the threshold at 17. The pin gate and the wedge requirement in sample()
+          // are what reject non-dials, not this count.
+          if (hit >= 15 && (!best || hit > best.score)) best = { cx, cy, R, score: hit };
+        }
+      }
+    }
+    return best;
+  }
+
+  /* The scan is also compiled as a standalone function at startup. In 3.8.2-3.8.5 the same loop took
+   * 30 ms a call inside the userscript while the identical source eval'd in the page took 2.3 ms, and
+   * 3.8.3's extraction into its own function changed nothing - so the difference is the instance's
+   * compilation context, not the code. `new Function` gives the same source a fresh, small scope with
+   * no closure at all (the direction tables are passed in for exactly that reason). If the page's CSP
+   * forbids eval, the call throws and the literal function is used instead: same answer, old cost.
+   */
+  let scanDial = coarseScan, scanCompiled = null, scanCompileError = null;
+  try {
+    scanCompiled = new Function('"use strict"; return (' + coarseScan.toString() + ');')();
+    scanDial = scanCompiled;
+  } catch (e) {
+    scanCompileError = String((e && e.message) || e);
+  }
+
+  F.lockDial = function (hintX, hintY, span) {
+    const S = 240, hw = S / 2;
+    // The span is how much the caller already distrusts its hint: +/-22 normally, wider after the
+    // whole-surface recovery hands over a blob centre, and 2 px steps when the target is close.
+    const half = span == null ? 22 : Math.max(0, Math.round(span));
+    const step = half <= 12 ? 2 : 3;
+    // The remembered circle is tried at most every memoEveryMs, not on every call. Tried every time
+    // (3.8.6) it answered 38 of 4,611 calls - 0.8% - and cost 2.84 ms of a 6.48 ms call, because
+    // step() asks for a dial ~4-6 times a second when there is nothing on screen. A miss is a full
+    // sample() readback that the search below then repeats. Gating it keeps the recovery (a wrong
+    // hint still finds the remembered widget, one gate-interval later) and drops the readback.
+    const tNow = now();
+    // Two conditions, counted separately: a dial must have been locked recently enough for the
+    // remembered circle to still be a dial, and the readback itself is rate-limited.
+    const recent = tNow - (F.lastLockAt || 0) <= MEMO_RECENT_MS;
+    if (F.lastGeo && recent && tNow - (F.memoAt || 0) >= MEMO_EVERY_MS) {
+      F.memoAt = tNow;
+      const tMemo = now();
+      const g = { cx: F.lastGeo.cx, cy: F.lastGeo.cy, R: F.lastGeo.R };
+      const s = F.sample(g);
+      perf.lockMemo += now() - tMemo;                 // the hit AND the miss: a miss still paid a read
+      if (s && s.valid && s.ring >= 0.8) { perf.lockMemoN++; F.lastLockAt = tNow; g.width = s.width; return g; }
+    } else if (F.lastGeo) {
+      perf.lockMemoSkipped++;
+      if (!recent) perf.lockMemoCold++;
+    }
+    const tGrab = now();
+    const r = readUI(hintX - hw, hintY - hw, S, S);
+    perf.lockGrab += now() - tGrab;
+    if (!r) return null;
+    // Mark the rim pixels once, then count them per candidate circle instead of re-testing the
+    // same ~4,950 circles pixel by pixel (that was 83 ms a call; this is ~10 ms).
+    const tMask = now();
+    const mask = rimMask(r);
+    perf.lockMask += now() - tMask;
+    const rw = r.w, rh = r.h, ox = r.x, oy = r.y;
+    const tScan = now();
+    const best = scanDial(mask, rw, rh, ox, oy, hintX, hintY, half, step, RIM_C20, RIM_S20);
+    perf.lockScan += now() - tScan;
+    if (!best) return null;
+    const tRefine = now();
+    const locked = finishLock(r, mask, best);
+    perf.lockRefine += now() - tRefine;
+    if (locked) F.lastLockAt = tNow;                // a dial is up: the memo is worth a read again
+    return locked;
   };
+
+  /** The wedge is the one green thing on the UI layer, and it has to survive a 4x downscale. */
+  const GREEN_LOOSE = (d, i) => d[i + 3] > 60 && d[i + 1] > d[i + 2] + 30 && d[i + 1] >= d[i] - 5;
+
+  /**
+   * Is this blob's full-resolution bbox the right size to hold a wedge? The wedge is a sector up to
+   * ~165 deg and ~0.55R-0.9R deep, so its bbox reaches ~1.8R per side - ~215 px at the largest dial.
+   * The first version of this window capped H at 90 px from a guess, which rejects the real widget;
+   * only specks and whole-surface washes are filtered here, and finishLock proves the circle.
+   */
+  function wedgeBoxOk(W, H) {
+    return W >= 24 && H >= 24 && W <= 340 && H <= 340;
+  }
+
+  function greenBlobs() {
+    if (!snapshot()) return [];
+    const out = [];
+    // 6 quarter-scale pixels = 96 full-resolution ones. A 30-degree arc at the smallest dial is
+    // still ~45 after the downscale; this only drops anti-aliasing speckle and thin fragments.
+    for (const b of blobs(GREEN_LOOSE, 6)) {
+      if (!wedgeBoxOk((b.x1 - b.x0 + 1) * SDOWN, (b.y1 - b.y0 + 1) * SDOWN)) continue;
+      out.push(b);
+      if (out.length >= 3) break;
+    }
+    return out;
+  }
+
+  /**
+   * Last-resort dial search. The hint can be wrong (no prompt yet, a false bubble earlier), and a
+   * +/-22 px search around a wrong hint can never reach the widget: measured 2026-10-29, F.hint sat
+   * at (739,369) while the dial was at (840,411). The wedge gives the position away: the dial's
+   * centre lies somewhere on an annulus around the blob's bbox centre, so one boxed full-resolution
+   * read tests that annulus with the same rim mask the normal search uses. Recovery
+   * only: the caller gates it on a long stretch with no dial, and the throttle keeps it off the
+   * per-frame path.
+   */
+  function dialAnywhere() {
+    const t = now();
+    if (t - (F.dialAnyAt || 0) < 900) return null;            // recovery: one pass a second at most
+    F.dialAnyAt = t;
+    const S = 420, hw = S / 2;
+    for (const b of greenBlobs()) {
+      const gx = Math.round((b.x0 + b.x1 + 1) * SDOWN / 2);
+      const gy = Math.round((b.y0 + b.y1 + 1) * SDOWN / 2);
+      const r = readUI(gx - hw, gy - hw, S, S);
+      if (!r) continue;
+      const mask = rimMask(r);
+      let best = null;
+      for (const off of ANNULUS) {
+        const cx = Math.round(gx + off.dx);
+        const cy = Math.round(gy + off.dy);
+        for (let R = 80; R <= 116; R += 4) {
+          const hit = rimHits(mask, r, cx, cy, R, RIM_C20, RIM_S20, 20);
+          if (hit >= 15 && (!best || hit > best.score)) best = { cx, cy, R, score: hit };
+        }
+      }
+      if (!best) continue;
+      // The annulus is a coarse grid: refine the centre before the rim count is allowed to decide.
+      let fine = best;
+      for (let dy = -4; dy <= 4; dy += 2) {
+        for (let dx = -4; dx <= 4; dx += 2) {
+          for (let R = Math.max(78, best.R - 4); R <= best.R + 4; R += 2) {
+            const hit = rimHits(mask, r, best.cx + dx, best.cy + dy, R, RIM_C20, RIM_S20, 20);
+            if (hit > fine.score) fine = { cx: best.cx + dx, cy: best.cy + dy, R, score: hit };
+          }
+        }
+      }
+      const geo = finishLock(r, mask, fine);
+      if (geo) { L('dial found anywhere', { cx: geo.cx, cy: geo.cy, R: geo.R, width: Math.round(geo.width) }); return geo; }
+    }
+    return null;
+  }
 
   /**
    * One frame of dial state. Re-tests the rim over a small radius band so the dial's
-   * fade-in / scale-in cannot drop the lock, then reads the wedge at 0.62R.
+   * fade-in / scale-in cannot drop the lock, then reads the wedge at 0.69R.
    */
   F.sample = function (geo) {
     const pad = 14, half = Math.round(Math.max(geo.R, 100) + pad);
@@ -1372,6 +1817,31 @@ const SPECIES = [
     F.pend = { id, at, geo };
   }
 
+  /**
+   * One press's verdict, counted once. `accepted` means the game spawned a new triangle, which is
+   * the only observable a good press leaves before the fish is landed. The sweep is keyed by the
+   * probe offset, so it now measures presses rather than dial closures.
+   */
+  function recordPressVerdict(verdict, biasMs) {
+    if (verdict !== 'accepted' && verdict !== 'rejected') return;
+    if (F.pressWait) F.pressWait.verdict = verdict;
+    F.stats[verdict === 'accepted' ? 'pressAccepted' : 'pressRejected']++;
+    const key = biasMs == null ? 0 : biasMs;
+    const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, accepted: 0, rejected: 0 });
+    cell.presses++;
+    cell[verdict]++;
+  }
+
+  /** Resolve the pending press from the sample stream: no new triangle inside the grace = rejected. */
+  function settlePress(s, blinks) {
+    const w = F.pressWait;
+    if (!w || w.verdict) return;
+    const out = pressOutcome({ press: w.press, s, blinks, opts: F.opts });
+    if (out.verdict !== 'accepted' && out.verdict !== 'rejected') return;
+    recordPressVerdict(out.verdict, w.biasMs);
+    L('press verdict', { verdict: out.verdict, biasMs: w.biasMs, width: Math.round((w.press && w.press.width) || 0) });
+  }
+
   function doPress(s, how) {
     if (!F.opts.press || !F.geo) return;
     const via = F.opts.pressWith === 'space' ? 'space' : 'pointer';
@@ -1383,7 +1853,11 @@ const SPECIES = [
     if (F.geo && F.geo._hist) F.geo._hist.length = 0;
     F.pressStamp = s ? { delta: s.delta, width: s.width, t: s.t != null ? s.t : now() } : null;
     F.dialBlinks = 0;
+    // A second press is only possible after the re-arm gate saw a spawn, so an unresolved press
+    // here was accepted by the game even though no frame managed to settle it.
+    if (F.pressWait && !F.pressWait.verdict) recordPressVerdict('accepted', F.pressWait.biasMs);
     F.lastPress = now();
+    F.pressWait = { press: F.pressStamp, at: F.lastPress, biasMs: (s && s.biasMs) || 0, verdict: null };
     F.stats.presses++; F.pressesThisDial++;
     if (F.attempt) {
       F.attempt.presses++;
@@ -1421,6 +1895,12 @@ const SPECIES = [
     const last = F.dialLastPress;
     const sincePress = last ? Math.round(t - last.t) : null;
     const hitMs = F.opts.hitMs || 1500;
+    // The dial is gone. A press still unresolved either ended the fish (accepted) or did nothing;
+    // the dial's own verdict below is about the DIAL, not about how accurate the press was.
+    if (F.pressWait && !F.pressWait.verdict) {
+      recordPressVerdict(presses > 0 && sincePress != null && sincePress <= hitMs ? 'accepted' : 'rejected', F.pressWait.biasMs);
+    }
+    F.pressWait = null;
     // A dial the bot never pressed that stayed up long enough to be real is a LOST FISH, not the
     // ring fading after a solved one: those fade in ~100 ms.
     // A locked ring that never rotated is the fade-out of a solved dial or a ripple, not a fish:
@@ -1446,12 +1926,6 @@ const SPECIES = [
     if (last && last.omega != null) rec.omega = Math.round(last.omega);
     F.outcomes.push(rec);
     while (F.outcomes.length > 400) F.outcomes.shift();
-    if (verdict !== 'no-press' && last && last.biasMs != null) {
-      const key = last.biasMs;
-      const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, hits: 0, misses: 0, wins: 0, losses: 0 });
-      cell.presses++;
-      if (verdict === 'hit') cell.hits++; else cell.misses++;
-    }
     // A press is NOT a fish. The game grows its level bar to 100 over several triangles, so a press
     // that pays out no card immediately is the normal case - scoring it a loss is what turned five
     // healthy presses of one Flounder into five failures. Keep the press only as the record that a
@@ -1488,13 +1962,15 @@ const SPECIES = [
 
   /* ----------------------------------------------------------- input ----- */
   function tap(x, y) {
-    let el = document.elementFromPoint(x, y) || gameCanvas;
+    // Detectors work in canvas pixels; elementFromPoint and PointerEvent want CSS pixels.
+    const p = cssPoint(x, y, uiFrame());
+    let el = document.elementFromPoint(p.x, p.y) || gameCanvas;
     // The panel sits above the game; if it covers the press point, aim at the canvas instead.
     if (el && el.closest && el.closest('#autofish-panel')) el = gameCanvas;
     if (!el) return false;
     const b = {
       bubbles: true, cancelable: true, composed: true,
-      clientX: x, clientY: y, screenX: x, screenY: y,
+      clientX: p.x, clientY: p.y, screenX: p.x, screenY: p.y,
       pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1,
     };
     el.dispatchEvent(new PointerEvent('pointerover', Object.assign({}, b, { buttons: 0 })));
@@ -1545,27 +2021,42 @@ const SPECIES = [
       sweep: null,                  // e.g. { min: -60, max: 60, step: 15 } - one probe per press
       ab: null,                     // { arms: [{name:'contain',trigger:'contain'},{name:'angle',trigger:'angle',midDeg:6}] } - one arm per FISH
       bubbleDebounceMs: 900,
+      castRungResetMs: 10000,       // the prompt was gone this long: the recovery ladder starts over
       castRetryMs: 5000,            // nothing has happened this long: cast with the game's own keybind
       seatWatchdogMs: 45000,        // no dial, no press, no prompt this long -> the character is not seated
       lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
+      dialFallbackMs: 2500,         // no dial this long -> one whole-surface search (0 disables)
+      pressGraceMs: 250,            // a press with no new triangle this long was not acted on
       cardCheckMs: 100,
       scanTickMs: 66,               // the shared quarter-scale grab is refreshed at most this often (~15 Hz)
       maxMinutes: 240,
     }, opts || {});
     surfaces();
+    resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
-      shapeHits: 0, castRetries: 0, stalls: 0,
+      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
-    F.geo = null; F.hint = { x: 861, y: 372 }; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
+    F.geo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
+    // A fresh start has no prompt to learn the widget from: prefer the circle the last run locked
+    // (scaled if the canvas was a different size), else the middle of the play area. Never a
+    // literal point measured at one viewport - dialAnywhere() is the backstop when this is wrong.
+    if (!F.lastGeo) {
+      const mem = dialGeoFit(loadDialMemory(), uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+      if (mem) { F.lastGeo = mem; L('dial remembered', { cx: mem.cx, cy: mem.cy, R: mem.R }); }
+    }
+    F.hint = F.lastGeo
+      ? { x: F.lastGeo.cx, y: F.lastGeo.cy }
+      : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
+          y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
     F.txtAt = now(); F.cardWait = null;                        // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
-    F.pressStamp = null; F.dialBlinks = 0;
+    F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.needsSeat = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
@@ -1583,9 +2074,11 @@ const SPECIES = [
 
   F.stop = function () {
     F.running = false;
+    perf.stoppedAt = now();   // freeze the measurement window; a later perf() must not be diluted
     cancelPend();
 
     clearPendingWin();
+    F.pressWait = null;
     if (F.attempt) { L('attempt abandoned', { n: F.attempt.n, presses: F.attempt.presses }); F.attempt = null; }
     if (F._raf) cancelAnimationFrame(F._raf);
     F._raf = null;
@@ -1600,6 +2093,7 @@ const SPECIES = [
     F.paused = true;
     cancelPend();
     clearPendingWin();
+    F.pressWait = null;
     F.geo = null; F.bad = 0; F.pressesThisDial = 0;   // re-lock on resume rather than press a stale wedge
     L('pause');
     return F.status();
@@ -1614,12 +2108,13 @@ const SPECIES = [
 
   /** Fresh counters without restarting: used when a panel session begins on a live loop. */
   F.resetStats = function () {
+    resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
-      shapeHits: 0, castRetries: 0, stalls: 0,
+      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bubbleMiss = 0; F.stallRetry = 0;
@@ -1630,14 +2125,23 @@ const SPECIES = [
     return F.status();
   };
 
-  /** Where the game is drawing right now, so overlays can keep clear of it. Rects are {x,y,w,h}. */
+  /** Where the game is drawing right now, so overlays can keep clear of it. Rects are CSS {x,y,w,h}. */
   F.zones = function () {
+    const f = uiFrame();
+    const kx = f && f.cw ? f.w / f.cw : 1, ky = f && f.ch ? f.h / f.ch : 1;
+    const box = (x, y, w, h) => {
+      const p = cssPoint(x, y, f);
+      return { x: p.x, y: p.y, w: w * kx, h: h * ky };
+    };
     const bubble = F.lastBubble
-      ? { x: F.lastBubble.cx - F.lastBubble.w / 2, y: F.lastBubble.cy - F.lastBubble.h / 2, w: F.lastBubble.w, h: F.lastBubble.h }
+      ? box(F.lastBubble.cx - F.lastBubble.w / 2, F.lastBubble.cy - F.lastBubble.h / 2, F.lastBubble.w, F.lastBubble.h)
       : null;
-    const dial = F.geo ? { x: F.geo.cx - F.geo.R, y: F.geo.cy - F.geo.R, w: F.geo.R * 2, h: F.geo.R * 2 } : null;
-    const hintZone = (!bubble && !dial && F.hint) ? { x: F.hint.x - 90, y: F.hint.y - 90, w: 180, h: 180 } : null;
-    return { bubble, dial, card: F.lastCardRect || null, hintZone };
+    const dial = F.geo ? box(F.geo.cx - F.geo.R, F.geo.cy - F.geo.R, F.geo.R * 2, F.geo.R * 2) : null;
+    const hintZone = (!bubble && !dial && F.hint) ? box(F.hint.x - 90, F.hint.y - 90, 180, 180) : null;
+    const card = F.lastCardRect
+      ? box(F.lastCardRect.x, F.lastCardRect.y, F.lastCardRect.w, F.lastCardRect.h)
+      : null;
+    return { bubble, dial, card, hintZone };
   };
 
   /**
@@ -1650,6 +2154,12 @@ const SPECIES = [
   function loop() {
     if (!F.running) { F._raf = null; return; }
     F._raf = requestAnimationFrame(loop);
+    const frameAt = now();
+    if (perf.last) {
+      perf.gaps.push(frameAt - perf.last);
+      if (perf.gaps.length > 600) perf.gaps.shift();   // ~10 s at 60 fps
+    }
+    perf.last = frameAt; perf.n++;
     // Inside rAF, before compositing, is the only moment the UI layer's buffer is still readable.
     if (F._shotWanted && uiCanvas) {
       F._shotWanted = false;
@@ -1721,6 +2231,11 @@ const SPECIES = [
           if (F.cardWait == null) F.cardWait = t;
           if (t - F.cardWait < 2500) { F.stats.cardWaits = (F.stats.cardWaits || 0) + 1; return; }
           L('catch text missing', { frac: card.frac, why: F.parseWhy });
+          // Move the cursor past a card that never parsed, or the NEXT card is read from this
+          // card's strings too: the old card's first word becomes the new species and its weight
+          // and purse win the lookups. A stale cursor is how one lost card poisons the next record.
+          F.txtAt = now();
+          F.stats.textGaps = (F.stats.textGaps || 0) + 1;
         }
         tap(card.cx, card.cy);
         F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0;
@@ -1751,6 +2266,9 @@ const SPECIES = [
     // 1. a bubble is always the next thing to press (CAST! or REEL!, same shape)
     const b = F.findBubble();
     if (b) {
+      // The ladder counts attempts on the prompt in front of us, not the whole run: a prompt that
+      // went away and came back is a new prompt, so it starts again at the first rung.
+      if (F.lastBubbleAt && t - F.lastBubbleAt > (F.opts.castRungResetMs || 10000)) F.bubbleMiss = 0;
       F.lastBubble = b; F.lastBubbleAt = t;
       // The cast prompt means the minigame is over, so an attempt still open is a fish that got
       // away. But the prompt is a bubble-shaped sprite and the card of a WIN is read up to ~3 s
@@ -1773,10 +2291,12 @@ const SPECIES = [
         F.lastRung = rung;
         F.needsSeat = false;                                  // a prompt is up: the character is seated
         const rec = castRecovery(rung);
-        if (rec.tap) {
-          tap(b.cx, b.cy);
-          F.hint = { x: b.cx, y: b.cy + 53 };
-        }
+        // The dial appears in the widget under the prompt, so the hint follows the prompt we can
+        // SEE, not the last one we happened to click: a rung that no longer taps used to freeze the
+        // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
+        // never reach a dial 100 px away.
+        F.hint = { x: b.cx, y: b.cy + 53 };
+        if (rec.tap) tap(b.cx, b.cy);
         F.lastPress = t;
         F.stats.bubbles++;
         L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, tap: rec.tap, space: rec.space });
@@ -1805,6 +2325,7 @@ const SPECIES = [
         return;
       }
       F.bad = 0;
+      settlePress(s, F.dialBlinks);
       s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
       if (F.geoReasons) F.geoReasons[F.planReason || 'none'] = (F.geoReasons[F.planReason || 'none'] || 0) + 1;
       const plan = planPress({
@@ -1854,7 +2375,12 @@ const SPECIES = [
     // 3. nothing on screen: look for a dial now and then (cheap enough at ~4 Hz)
     if (t - F.lastDialCheck > F.opts.dialCheckMs) {
       F.lastDialCheck = t;
-      const g = F.lockDial(F.hint.x, F.hint.y);
+      let g = F.lockDial(F.hint.x, F.hint.y);
+      // Nothing has locked for a while: the hint may be wrong rather than empty. One whole-surface
+      // pass (throttled inside dialAnywhere) is the only thing that can recover a blind run.
+      if (!g && F.opts.dialFallbackMs && t - Math.max(F.geoAt || 0, F.startedAt) > F.opts.dialFallbackMs) {
+        g = dialAnywhere();
+      }
       if (g) {
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
@@ -1869,6 +2395,8 @@ const SPECIES = [
         F.needsSeat = false;                                    // a dial means the cast took
         L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0 });
         F.lastRung = 0;                                         // logged above: which rung did the casting
+        if (!sameDial(F.lastGeo, g)) saveDialMemory(g);       // survives the next reload
+        F.lastGeo = { cx: g.cx, cy: g.cy, R: g.R };              // the widget position for the next dial
       }
     }
 
@@ -1880,11 +2408,12 @@ const SPECIES = [
     if (F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
       F.lastCastTry = t;
       F.stats.castRetries = (F.stats.castRetries || 0) + 1;
-      const rung = (F.stallRetry = (F.stallRetry || 0) + 1) + 1;   // rung 1 was the bubble tap
-      F.lastRung = rung;
-      castRecovery(rung);                                     // rungs only pick the key path now
+      const tries = (F.stallRetry = (F.stallRetry || 0) + 1);
+      // There is no bubble here to click, so the keybind is the only honest input: the recovery
+      // ladder governs the bubble branch, where the prompt's coordinates exist. Calling it here
+      // and dropping the answer only made the ladder look wired to a path that ignored it.
       const consumed = !space(F.opts.spaceTarget);
-      L('cast retry', { consumed, rung });
+      L('cast retry', { consumed, tries });
     }
 
     // The game shows a cast prompt only while the character is SEATED on a seat whose raycast
@@ -1959,6 +2488,7 @@ const SPECIES = [
     // Callable before the first start(): the panel and the chip both poll it while idle, and a
     // status() that throws blanks the whole HUD.
     const s = F.stats || {};
+    const frame = uiFrame();
     return {
       running: !!F.running,
       paused: !!F.paused,
@@ -1968,11 +2498,15 @@ const SPECIES = [
       hidden: !!F.hidden,
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,
       hint: F.hint,
+      pxScale: frame && frame.cw ? +(frame.w / frame.cw).toFixed(3) : null,
       needsSeat: !!F.needsSeat,
       stats: F.stats || {},
       accuracy: {
         attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
         presses: s.presses || 0, shapeHits: s.shapeHits || 0,
+        pressAccepted: s.pressAccepted || 0, pressRejected: s.pressRejected || 0,
+        pressAcceptRate: s.pressAccepted + s.pressRejected
+          ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
         openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses } : null,
       },
       pressesThisDial: F.pressesThisDial,
@@ -1983,18 +2517,18 @@ const SPECIES = [
   };
 
   /**
-   * Hit rate per probe offset. A miss costs the dial - it spins out its ~15.9 s timeout - so
-   * a sweep is a slow calibration pass, not a normal mode. Run it with press:true only.
+   * Press acceptance per probe offset. Acceptance means the game spawned a new triangle, so this is
+   * the one number a timing sweep can score: "dial closed soon after" only ever grades the press
+   * that finished the fish. A sweep is still a slow calibration pass, not a normal mode.
    */
   F.sweepReport = function () {
     return Object.keys(F.sweep)
       .map((k) => F.sweep[k])
       .sort((a, b) => a.biasMs - b.biasMs)
       .map((r) => ({
-        biasMs: r.biasMs, presses: r.presses, hits: r.hits, misses: r.misses,
-        wins: r.wins || 0, losses: r.losses || 0,
-        hitRate: r.presses ? +(r.hits / r.presses).toFixed(2) : null,
-        winRate: r.wins + (r.losses || 0) ? +((r.wins || 0) / (r.wins + (r.losses || 0))).toFixed(2) : null,
+        biasMs: r.biasMs, presses: r.presses || 0,
+        accepted: r.accepted || 0, rejected: r.rejected || 0,
+        acceptRate: r.presses ? +((r.accepted || 0) / r.presses).toFixed(2) : null,
       }));
   };
 
@@ -2036,6 +2570,9 @@ const SPECIES = [
       attempts: (F.attempts || []).length, caught, lost,
       catchRate: caught + lost ? +(caught / (caught + lost)).toFixed(3) : null,
       presses, pressesPerCatch: caught ? +(presses / caught).toFixed(2) : null,
+      pressAccepted: s.pressAccepted || 0, pressRejected: s.pressRejected || 0,
+      pressAcceptRate: s.pressAccepted + s.pressRejected
+        ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
       openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses, dials: F.attempt.dials, ms: Math.round(now() - F.attempt.startedAt) } : null,
       shapeHits: s.shapeHits || 0,
       byBand: F.bandReport(), byArm: F.armReport(),
@@ -2051,6 +2588,19 @@ const SPECIES = [
   F.log = function () {
     return logSummary(loadLedger(), Date.now());
   };
+  /** Which catch history the panel reads and writes. No argument reads it. */
+  F.logProfile = function (name) {
+    if (name === undefined) return logProfile;
+    const next = String(name || '').trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 24) || 'default';
+    if (next !== logProfile) {
+      logProfile = next;
+      ledger = null;              // the cache belongs to the old profile
+      F.txtAt = now();            // text drawn before the switch is another card
+    }
+    return logProfile;
+  };
+  /** Every profile this browser has a ledger for. */
+  F.logProfiles = function () { return logProfiles(); };
   /** The same ledger as one CSV row per species (paste it anywhere). */
   F.logCsv = function () {
     return logCsv(loadLedger());
@@ -2072,7 +2622,7 @@ const SPECIES = [
   };
 
   /** The timing maths, exposed so a live console can re-plan against a captured dial. */
-  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, castRecovery };
+  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, cssPoint };
 
   /** The embedded species table, for a console that wants to check a rarity by hand. */
   F.catalogue = { count: SPECIES.length, tiers: TIER_ORDER.slice(), info: speciesInfo, describe: describeCatch };
@@ -2080,6 +2630,7 @@ const SPECIES = [
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
   F.probeDial = (x, y) => new Promise((res) => requestAnimationFrame(() => res(F.lockDial(x, y))));
+  F.probeDialAnywhere = () => new Promise((res) => requestAnimationFrame(() => res(dialAnywhere())));
   F.spaceTest = (where) => ({ consumed: !space(where || 'window') });
 
   /**
@@ -2117,6 +2668,80 @@ const SPECIES = [
     }));
   };
 
+  /* Wrap the finished detectors last, so their numbers include everything they do. Two
+   * performance.now() calls per call is noise against a readback measured at ~2.1 ms. */
+  const PERF_KEYS = { findBubble: 'bubble', findCatch: 'card', lockDial: 'lock', sample: 'sample' };
+  Object.keys(PERF_KEYS).forEach((name) => {
+    const orig = F[name];
+    if (typeof orig !== 'function') return;
+    const key = PERF_KEYS[name];
+    F[name] = function () {
+      const t0 = now();
+      try { return orig.apply(this, arguments); }
+      finally { perf[key] += now() - t0; perf[key + 'N']++; }
+    };
+  });
+
+  /** lockDial's five phases as ms, ms per call and share of the call. */
+  function lockPhases() {
+    const total = perf.lock || 0, n = perf.lockN || 0;
+    const one = (ms, extra) => Object.assign({
+      ms: +ms.toFixed(1),
+      msPerCall: n ? +(ms / n).toFixed(2) : null,
+      pct: total ? +(100 * ms / total).toFixed(1) : null,
+    }, extra || {});
+    return {
+      memoTries: n,
+      memo: one(perf.lockMemo, { hits: perf.lockMemoN, skipped: perf.lockMemoSkipped, cold: perf.lockMemoCold }),
+      grab: one(perf.lockGrab),
+      mask: one(perf.lockMask),
+      scan: one(perf.lockScan),
+      refine: one(perf.lockRefine),
+    };
+  }
+
+  /**
+   * Frame budget and per-detector cost, from the last ~10 s of frames.
+   *
+   * Measure with the bot stopped, then running, and compare: the difference is what the bot costs.
+   * On Chromium the readback is cheap; on Gecko (Zen) the same numbers are often several times
+   * larger, which is a browser fact, not a bug in the detector.
+   */
+  F.perf = function () {
+    const gaps = perf.gaps.slice().sort((a, b) => a - b);
+    const q = (p) => gaps.length ? +gaps[Math.min(gaps.length - 1, Math.floor(p * gaps.length))].toFixed(1) : null;
+    const sum = gaps.reduce((s, v) => s + v, 0);
+    // Measuring after a stop is normal (stop, then read the report): freeze at the stop.
+    const end = (F.running || !perf.stoppedAt) ? now() : perf.stoppedAt;
+    const uptime = perf.startedAt ? end - perf.startedAt : 0;
+    const calls = { snapshot: perf.snapN, findBubble: perf.bubbleN, lockDial: perf.lockN, sample: perf.sampleN, findCatch: perf.cardN };
+    const totals = { snapshot: perf.snap, findBubble: perf.bubble, lockDial: perf.lock, sample: perf.sample, findCatch: perf.card };
+    const rates = perfRates(calls, totals, uptime);
+    for (const key of Object.keys(rates)) {
+      const r = rates[key];
+      r.callsPerSec = r.callsPerSec == null ? null : +r.callsPerSec.toFixed(1);
+      r.msPerCall = r.msPerCall == null ? null : +r.msPerCall.toFixed(2);
+      r.msPerSec = r.msPerSec == null ? null : +r.msPerSec.toFixed(1);
+      r.share = r.share == null ? null : +r.share.toFixed(3);
+    }
+    return {
+      frames: perf.n,
+      uptimeMs: Math.round(uptime),
+      fps: gaps.length ? +(1000 / (sum / gaps.length)).toFixed(1) : null,
+      p50: q(0.5), p95: q(0.95),
+      worst: gaps.length ? +gaps[gaps.length - 1].toFixed(1) : null,
+      // share is the fraction of wall time; findBubble includes its snapshot, so they overlap.
+      rates,
+      // Where lockDial's ms go. `pct` is that phase's share of lockDial's own total, so the parts
+      // account for the call instead of being compared against guesses. `memo.hits` counts the
+      // calls the remembered circle answered - a high hit rate is the fast path working.
+      lockPhases: lockPhases(),
+      // false means the page's CSP refused `new Function` and the in-script scan is in use.
+      scanCompiled: !!scanCompiled,
+      scanCompileError,
+    };
+  };
+
   surfaces();
   window.__fish = F;
   return { installed: F.version, ui: !!uiCanvas, game: !!gameCanvas };
@@ -2137,6 +2762,8 @@ const SPECIES = [
     durationMs: 60 * 60 * 1000,
     cooldownMs: 30 * 60 * 1000,
     dailyCapMs: 4 * 60 * 60 * 1000,
+    hiddenStopMs: 2 * 60 * 1000,
+    chain: false,
     window: { on: false, start: '21:00', stop: '23:00' }
   };
 
@@ -2146,6 +2773,8 @@ const SPECIES = [
       durationMs: DEFAULTS.durationMs,
       cooldownMs: DEFAULTS.cooldownMs,
       dailyCapMs: DEFAULTS.dailyCapMs,
+      hiddenStopMs: DEFAULTS.hiddenStopMs,
+      chain: DEFAULTS.chain,
       window: { on: DEFAULTS.window.on, start: DEFAULTS.window.start, stop: DEFAULTS.window.stop },
       fishingMs: 0,
       todayMs: 0,
@@ -2213,6 +2842,11 @@ const SPECIES = [
 
   function stopSession(s, at, reason) {
     if (s.phase === 'running' && s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+    // The session's minutes become today's minutes. Keeping them in fishingMs meant a restart
+    // forgot them: the cap under-counted and the panel's "today" dropped back to the base.
+    var sessionMs = s.fishingMs;
+    s.todayMs = (s.todayMs || 0) + sessionMs;
+    s.fishingMs = 0;
     s.phase = 'cooldown';
     s.cooldownUntil = at + s.cooldownMs;
     s.stopReason = reason || 'user';
@@ -2222,7 +2856,7 @@ const SPECIES = [
     return [
       { type: 'stopCore' },
       { type: 'releaseWakeLock' },
-      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(s.fishingMs / 60000), catches: s.catchCount },
+      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(sessionMs / 60000), catches: s.catchCount },
       { type: 'persist' }
     ];
   }
@@ -2269,7 +2903,7 @@ const SPECIES = [
     if (s.pauseReason === 'hidden') {
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
-        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
         return { state: s, actions: [] };
       }
       if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
@@ -2382,6 +3016,30 @@ const SPECIES = [
     if (fact.type === 'tick') {
       if (s.phase === 'cooldown') {
         if (s.cooldownUntil != null && at >= s.cooldownUntil) {
+          // Optional chaining: rest, then run again, for an unattended night. It is still bounded
+          // by the clock window and the daily cap, and a hidden tab never starts a run.
+          var canChain = s.chain && fact.visible !== false && withinWindow(s.window, at) && (s.todayMs || 0) < s.dailyCapMs;
+          if (canChain) {
+            s.phase = 'running';
+            s.cooldownUntil = null;
+            s.stopReason = null;
+            s.fishingMs = 0;
+            s.catchCount = 0;
+            s.retries = 0;
+            s.errCount = 0;
+            s.errTotal = 0;
+            s.startedAt = at;
+            s.lastTickAt = at;
+            s.lastCatchAt = at;
+            return {
+              state: s,
+              actions: [
+                { type: 'startCore', maxMinutes: Math.ceil(s.durationMs / 60000) + 2 },
+                { type: 'wakeLock' },
+                { type: 'persist' }
+              ]
+            };
+          }
           s.phase = 'idle';
           s.cooldownUntil = null;
           return { state: s, actions: [{ type: 'persist' }] };
@@ -2414,7 +3072,7 @@ const SPECIES = [
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
         s.lastTickAt = at;
-        if (at - s.hiddenSince > HIDDEN_STOP_MS) return { state: s, actions: stopSession(s, at, 'hidden') };
+        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
         if (at - s.hiddenSince > HIDDEN_PAUSE_MS) return paused(s, at, 'hidden');
         return { state: s, actions: [] };
       }
@@ -2600,18 +3258,23 @@ const SPECIES = [
   // The server that served this file is the server we talk to. Deriving it from our own
   // <script src> means the bookmarklet can point at any port (WSL forwards Windows localhost
   // into the distro, and 8731 may already be taken on the Windows side).
+  // null when the panel was inlined in the userscript: there is no server to talk to, and the
+  // session clock must not depend on one. Only the bookmarklet path (a real <script src>) has one.
   var BASE = (function () {
     var s = document.currentScript;
     if (s && s.src) { try { return new URL(s.src).origin; } catch (e) { /* fall through */ } }
-    return 'http://127.0.0.1:8731';
+    return null;
   })();
   var PREF_KEY = 'autofish.prefs';
   var POS_KEY = 'autofish.panel';
   var LIVE_KEY = 'autofish.live';
+  var BUDGET_KEY = 'autofish:budget:v1';
   var TICK_MS = 1000;
 
   var state = null;
   var baseTodayMs = 0;        // fishing minutes already logged today before this session
+  var budgetAt = 0;           // last periodic write of BUDGET_KEY
+  var budgetDay = '';         // the local day BUDGET_KEY belongs to, for a rollover mid-run
   var banner = '';
   var tickTimer = null;
   var placeTimer = null;
@@ -2639,6 +3302,8 @@ const SPECIES = [
   }
 
   async function deps() {
+    if (window.__fish && window.AutoFishSession && window.AutoFishLayout) return;
+    if (!BASE) throw new Error('this panel has no server to load its dependencies from');
     if (!window.__fish) await loadScript('autofish', '/autofish.js');
     if (!window.AutoFishSession) await loadScript('session', '/session.js');
     if (!window.AutoFishLayout) await loadScript('layout', '/layout.js');
@@ -2664,6 +3329,9 @@ const SPECIES = [
     }
     prefs.resumeAfterReload = !!p.resumeAfterReload;
     prefs.hideUpsell = !!p.hideUpsell;
+    if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
+    prefs.chain = !!p.chain;
+    if (p.profile) prefs.profile = String(p.profile);
     return prefs;
   }
 
@@ -2672,9 +3340,38 @@ const SPECIES = [
       durationMs: state.durationMs,
       cooldownMs: state.cooldownMs,
       dailyCapMs: state.dailyCapMs,
+      hiddenStopMs: state.hiddenStopMs,
+      chain: !!state.chain,
       window: state.window,
       resumeAfterReload: !!window.__panel.resumeAfterReload,
-      hideUpsell: !!window.__panel.hideUpsell
+      hideUpsell: !!window.__panel.hideUpsell,
+      profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
+    });
+  }
+
+  /* ------------------------------------------------------------ budget ---- */
+  /*
+   * Today's fishing time and the cooldown are local facts, not server facts. They used to live
+   * only in memory (cooldown) or only in fishserve's sessions.csv (today's minutes), so a reload
+   * reset the cap to zero and skipped the cooldown entirely. The server is still written to, but
+   * it is a mirror: the browser now knows the budget with or without it.
+   */
+  function loadBudget() {
+    var b = readJSON(BUDGET_KEY, null) || {};
+    var today = dayKey();
+    var ms = typeof b.ms === 'number' && isFinite(b.ms) ? b.ms : 0;
+    if (b.day && b.day !== today) ms = 0;              // a new day starts at zero
+    var cd = typeof b.cooldownUntil === 'number' && b.cooldownUntil > Date.now() ? b.cooldownUntil : null;
+    return { day: today, ms: ms, cooldownUntil: cd };
+  }
+
+  function syncBudget() {
+    if (!state) return;
+    baseTodayMs = state.todayMs || 0;
+    writeJSON(BUDGET_KEY, {
+      day: dayKey(),
+      ms: Math.round((state.todayMs || 0) + (state.fishingMs || 0)),
+      cooldownUntil: state.phase === 'cooldown' && state.cooldownUntil ? state.cooldownUntil : null
     });
   }
 
@@ -2780,14 +3477,21 @@ const SPECIES = [
   }
 
   async function loadToday() {
+    // The local budget already answered; the server is only a mirror and may not exist at all
+    // (the inlined userscript has BASE null by design).
+    var local = baseTodayMs || 0;
+    if (!BASE) return;
     try {
       var r = await fetch(BASE + '/sessions?day=' + dayKey(), { cache: 'no-store' });
       var j = await r.json();
-      baseTodayMs = (j.minutes || 0) * 60000;
-    } catch (e) { baseTodayMs = 0; }
+      var server = (j.minutes || 0) * 60000;
+      // Whichever knows about more fishing today wins; a failed fetch keeps the local budget.
+      baseTodayMs = Math.max(local, server);
+    } catch (e) { baseTodayMs = local; }
   }
 
   function postSessionRow(reason, minutes, catches) {
+    if (!BASE) return;                       // the budget is already local; nothing to mirror
     try {
       fetch(BASE + '/session', {
         method: 'POST',
@@ -2803,6 +3507,7 @@ const SPECIES = [
    * corrected from what the game actually drew instead of from guesses.
    */
   function captureDiag(note) {
+    if (!BASE) return;                       // no server: nothing to upload to, and no alarm to raise
     try {
       var f = fish();
       if (!f || !f.captureUI) { banner = 'this core cannot grab a frame'; return; }
@@ -2824,14 +3529,46 @@ const SPECIES = [
 
   function fish() { return window.__fish; }
 
+  /** Which build this tab is running. The bundle stamps __fish.version from package.json. */
+  function versionLabel() {
+    var api = fish();
+    var v = api && api.version;
+    if (!v) return '';
+    return v === 'dev' ? 'dev' : 'v' + v;
+  }
+
+  /** The profile picker: every ledger key that exists, plus the one in use. */
+  function fillProfiles() {
+    if (!ui.profile) return;
+    var f = fish();
+    var current = (f && f.logProfile) ? f.logProfile() : 'default';
+    var names = [];
+    try { names = (f && f.logProfiles) ? f.logProfiles() : []; } catch (e) { names = []; }
+    if (names.indexOf('default') < 0) names.unshift('default');
+    if (names.indexOf(current) < 0) names.push(current);
+    ui.profile.textContent = '';
+    names.forEach(function (name) {
+      var opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      ui.profile.appendChild(opt);
+    });
+    ui.profile.value = current;
+  }
+
   var RUNNERS = {
-    startCore: function (a) { fish().start({ maxMinutes: a.maxMinutes }); },
+    startCore: function (a) {
+      // A second Start in the same page must see the minutes the first session just logged; the
+      // reducer has already reset fishingMs, so the day's total has to come from the store.
+      baseTodayMs = loadBudget().ms;
+      fish().start({ maxMinutes: a.maxMinutes });
+    },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
     pauseCore: function () { try { fish().pause(); } catch (e) {} },
     resumeCore: function () { try { fish().resume(); } catch (e) {} },
     wakeLock: function () { acquireWakeLock(); },
     releaseWakeLock: function () { releaseWakeLock(); },
-    persist: function () { savePrefs(); writeHeartbeat(); },
+    persist: function () { savePrefs(); writeHeartbeat(); syncBudget(); },
     sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches); },
     refuse: function (a) {
       banner = a.reason === 'cooldown' ? 'cooling down — wait for the timer' : 'daily cap reached — no more fishing today';
@@ -2913,6 +3650,8 @@ const SPECIES = [
     '.dot.running{background:#5ad18b;box-shadow:0 0 0 3px rgba(90,209,139,.18)}',
     '.dot.waiting{background:#f2c14e}.dot.paused{background:#f08a4b}.dot.cooldown{background:#7aa2f7}',
     '.title{font-weight:600;letter-spacing:.2px;flex:1}',
+    '.ver{flex:none;font-size:9px;color:#6d7883;letter-spacing:.3px;font-variant-numeric:tabular-nums}',
+    '.ver:empty{display:none}',
     '.chip{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:#aab4bf;border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:1px 7px}',
     '.icon{border:0;background:transparent;color:#9aa4ae;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:6px}',
     '.icon:hover{background:rgba(255,255,255,.08);color:#e8ecef}',
@@ -2934,6 +3673,7 @@ const SPECIES = [
     '.banner:empty{display:none}',
     '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
     '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-top-color:rgba(122,162,247,.30)}',
+    '.banner.info{color:#cfd6dd;background:rgba(255,255,255,.05);border-top-color:rgba(255,255,255,.12)}',
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
@@ -2942,6 +3682,11 @@ const SPECIES = [
     '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
     '.tier span{font-size:8px;letter-spacing:.4px;text-transform:uppercase;color:#8b95a0}',
     '.last{font-size:10.5px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.sel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#e8ecef;font:inherit;font-size:11px;padding:2px 4px;max-width:104px}',
+    '.sel option{background:#12161c;color:#e8ecef}',
+    '.perfbox{display:flex;flex-direction:column;gap:1px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer}',
+    '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.hide{display:none}'
   ].join('\n');
@@ -2971,17 +3716,20 @@ const SPECIES = [
     var head = el('div', 'head');
     var dot = el('div', 'dot');
     var title = el('div', 'title', 'AutoFish');
+    var ver = el('div', 'ver', versionLabel());
+    ver.title = 'build ' + ((fish() && fish().version) || 'unknown');
     var chip = el('div', 'chip', 'idle');
     var min = el('button', 'icon', '–');
     min.title = 'collapse';
-    head.append(dot, title, chip, min);
+    head.append(dot, title, ver, chip, min);
 
     var body = el('div', 'body');
 
     body.append(
       stepperRow('Session', 'dur', 5, 240),
       stepperRow('Cooldown', 'cool', 5, 120),
-      stepperRow('Daily cap', 'cap', 30, 480)
+      stepperRow('Daily cap', 'cap', 30, 480),
+      stepperRow('Hidden stop', 'hidden', 2, 60)
     );
 
     // clock window
@@ -3005,6 +3753,26 @@ const SPECIES = [
     upsellRow.append(upsellLabel, upsellToggle);
     body.appendChild(upsellRow);
 
+    // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
+    // window and the cap still bound it.
+    var chainRow = el('div', 'row');
+    var chainLabel = el('div', 'label', 'Chain runs');
+    var chainToggle = el('button', 'icon', 'off');
+    chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
+    chainRow.append(chainLabel, chainToggle);
+    body.appendChild(chainRow);
+
+    // One ledger per profile, because two accounts in one browser used to share one history.
+    var profRow = el('div', 'row');
+    var profLabel = el('div', 'label', 'Profile');
+    var profSel = document.createElement('select');
+    profSel.className = 'sel';
+    profSel.title = 'which catch history this panel reads and writes';
+    var profAdd = el('button', 'icon', '+');
+    profAdd.title = 'new profile with its own catch history';
+    profRow.append(profLabel, profSel, profAdd);
+    body.appendChild(profRow);
+
     var meters = el('div', 'meters');
     meters.append(
       meter('left'), meter('catches'), meter('presses'), meter('today')
@@ -3025,12 +3793,34 @@ const SPECIES = [
       strip.appendChild(cell);
       return { name: name, num: num };
     });
+    // A catch the catalogue does not know is logged as Unknown. It used to have no cell at all, so
+    // the strip read all zeros while the ledger filled - which looks exactly like "not recording".
+    var unknownCell = el('div', 'tier');
+    var unknownNum = el('b', null, '0');
+    var unknownTag = el('span', null, 'UNK');
+    unknownCell.title = 'caught and logged, but the card printed no rarity and the species is not in the built-in catalogue';
+    unknownCell.style.color = TIER_COLORS.Common;
+    unknownCell.style.display = 'none';
+    unknownCell.append(unknownNum, unknownTag);
+    strip.appendChild(unknownCell);
+    tierCells.push({ name: 'Unknown', num: unknownNum, cell: unknownCell });
     var lastCatch = el('div', 'last', 'no catches yet');
     logBox.append(strip, lastCatch);
     body.appendChild(logBox);
 
     var primary = el('button', 'primary', 'Start');
     body.appendChild(primary);
+
+    // The frame report, on screen. DevTools is not always within reach - Zen takes no synthetic
+    // keystrokes, so __fish.perf() cannot be read there - and these are the numbers that decide
+    // whether a build needs another detour. Same source; a click expands the whole report.
+    var perfBox = el('div', 'perfbox');
+    var perfLine = el('div', 'perf', 'perf: no frames yet');
+    var perfMore = el('div', 'perf', '');
+    var perfJson = el('pre', 'perfjson hide', '');
+    perfBox.title = 'frame budget, same numbers as __fish.perf(); click for the full report';
+    perfBox.append(perfLine, perfMore, perfJson);
+    body.appendChild(perfBox);
 
     var bannerEl = el('div', 'banner');
 
@@ -3046,8 +3836,10 @@ const SPECIES = [
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
+      chainToggle: chainToggle, profile: profSel, profileAdd: profAdd,
       primary: primary, banner: bannerEl, pill: pill,
-      tierCells: tierCells, lastCatch: lastCatch
+      tierCells: tierCells, lastCatch: lastCatch,
+      perfLine: perfLine, perfMore: perfMore, perfJson: perfJson
     });
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
@@ -3058,6 +3850,15 @@ const SPECIES = [
 
     min.addEventListener('click', function () { setCollapsed(true); });
     pill.addEventListener('click', function () { setCollapsed(false); });
+    perfBox.addEventListener('click', function () {
+      // Expand, then read: the report is a snapshot of the last ~10 s, not a live feed.
+      var hidden = perfJson.classList.toggle('hide');
+      if (!hidden) {
+        try { perfJson.textContent = JSON.stringify(fish().perf(), null, 1); }
+        catch (e) { perfJson.textContent = String((e && e.message) || e); }
+      }
+      place();
+    });
     primary.addEventListener('click', function () {
       if (state.phase === 'idle' || state.phase === 'cooldown') dispatch({ type: 'start', at: Date.now() });
       else dispatch({ type: 'stop', at: Date.now(), reason: 'user' });
@@ -3070,7 +3871,28 @@ const SPECIES = [
       setUpsellHidden(!upsellOn);
       savePrefs();
     });
+    chainToggle.addEventListener('click', function () {
+      dispatch({ type: 'config', at: Date.now(), patch: { chain: !state.chain } });
+      savePrefs();
+    });
+    profSel.addEventListener('change', function () {
+      var f = fish();
+      if (f && f.logProfile) f.logProfile(profSel.value);
+      savePrefs();
+      renderLog();
+    });
+    profAdd.addEventListener('click', function () {
+      var f = fish();
+      if (!f || !f.logProfile) return;
+      var name = prompt('New profile name (its own catch history)', 'alt');
+      if (!name) return;
+      f.logProfile(name);
+      savePrefs();
+      fillProfiles();
+      renderLog();
+    });
     head.addEventListener('pointerdown', startDrag);
+    fillProfiles();
 
     restorePosition();
     render();
@@ -3149,6 +3971,7 @@ const SPECIES = [
   function keyConf(key) {
     if (key === 'dur') return { field: 'durationMs', min: 5 * 60000, max: 720 * 60000, unit: 5 * 60000 };
     if (key === 'cool') return { field: 'cooldownMs', min: 1 * 60000, max: 120 * 60000, unit: 1 * 60000 };
+    if (key === 'hidden') return { field: 'hiddenStopMs', min: 2 * 60000, max: 60 * 60000, unit: 1 * 60000 };
     return { field: 'dailyCapMs', min: 30 * 60000, max: 1440 * 60000, unit: 60 * 60000 };
   }
 
@@ -3198,6 +4021,8 @@ const SPECIES = [
       var n = byTier[cell.name] || 0;
       cell.num.textContent = String(n);
       cell.num.style.opacity = n ? '1' : '.35';
+      // UNK only takes space when it has something to say
+      if (cell.cell) cell.cell.style.display = n ? '' : 'none';
     });
     var last = book && book.last;
     if (!last) {
@@ -3208,9 +4033,29 @@ const SPECIES = [
     var bits = [last.species];
     if (last.weight) bits.push(last.weight);
     if (last.rarity && last.rarity !== 'Unknown') bits.push((last.derived ? '~' : '') + last.rarity);
+    else if (last.rarity === 'Unknown') bits.push('rarity unknown');
     if (last.at) bits.push(new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     ui.lastCatch.textContent = bits.join(' · ');
-    ui.lastCatch.title = 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
+    ui.lastCatch.title = last.rarity === 'Unknown'
+      ? 'caught and logged, but the card printed no rarity and the species is not in the built-in catalogue'
+      : 'last catch' + (last.derived ? ' — rarity from the built-in catalogue, the card printed none' : '');
+  }
+
+  /**
+   * The same numbers as __fish.perf(), where a screenshot can read them: fps and the frame
+   * percentiles, then each detector's share of wall time in ms per second. The share is the
+   * currency that decides a fix - 8 ms/s is noise, 800 ms/s is the frame.
+   */
+  function renderPerf() {
+    if (!ui.perfLine) return;
+    var p = null;
+    try { p = (fish() && fish().perf) ? fish().perf() : null; } catch (e) { p = null; }
+    if (!p || !p.frames) { ui.perfLine.textContent = 'perf: no frames yet'; ui.perfMore.textContent = ''; return; }
+    ui.perfLine.textContent = p.fps + ' fps · p50 ' + p.p50 + ' · p95 ' + p.p95 + ' · worst ' + p.worst + ' ms';
+    var r = p.rates || {};
+    function share(key) { return (r[key] && r[key].msPerSec != null) ? r[key].msPerSec : '–'; }
+    ui.perfMore.textContent = 'ms/s: snap ' + share('snapshot') + ' · bub ' + share('findBubble') +
+      ' · dial ' + share('lockDial') + ' · card ' + share('findCatch');
   }
 
   function render() {
@@ -3231,6 +4076,8 @@ const SPECIES = [
     ui.dur.val.textContent = minutesText(state.durationMs);
     ui.cool.val.textContent = minutesText(state.cooldownMs);
     ui.cap.val.textContent = minutesText(state.dailyCapMs);
+    ui.hidden.val.textContent = minutesText(state.hiddenStopMs);
+    ui.chainToggle.textContent = state.chain ? 'on' : 'off';
     ui.time_from.val.textContent = state.window.start;
     ui.time_to.val.textContent = state.window.stop;
 
@@ -3242,8 +4089,9 @@ const SPECIES = [
     else ui.mLeft.textContent = minutesText(state.durationMs);
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));
     ui.mPresses.textContent = String(stats.presses || 0);
-    ui.mToday.textContent = minutesText(baseTodayMs + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
+    ui.mToday.textContent = minutesText((state.todayMs || 0) + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
     renderLog();
+    renderPerf();
 
     var primary = ui.primary;
     if (phase === 'running' || phase === 'paused' || phase === 'waiting') {
@@ -3276,11 +4124,24 @@ const SPECIES = [
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
     var focusNote = focus ? FOCUS_NOTE : '';
-    var note = stallNote || seatNote || focusNote || banner;
+    // A stop is the thing the player most needs to understand, and it used to be invisible: the
+    // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
+    var stopNote = '';
+    if (!stallNote && !seatNote && !focusNote && !banner && (phase === 'idle' || phase === 'cooldown') && state.stopReason) {
+      stopNote = 'last stop: ' + state.stopReason;
+      if (phase === 'cooldown' && state.cooldownUntil) {
+        stopNote += ' · start after ' + new Date(state.cooldownUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } else if (state.window.on) {
+        stopNote += ' · window ' + state.window.start + '–' + state.window.stop;
+      }
+      if (state.chain) stopNote += ' · chaining on';
+    }
+    var note = stallNote || seatNote || focusNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (focus && !banner) ui.banner.className = 'banner focus';
+    else if (stopNote && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
 
@@ -3387,6 +4248,14 @@ const SPECIES = [
   /* -------------------------------------------------------------- loop ---- */
 
   function tick() {
+    // A run that crosses midnight starts the new day at zero, the same way a reload does.
+    var dayNow = dayKey();
+    if (budgetDay && dayNow !== budgetDay) {
+      budgetDay = dayNow;
+      baseTodayMs = 0;
+      state.todayMs = 0;
+      syncBudget();
+    }
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
 
@@ -3422,6 +4291,7 @@ const SPECIES = [
     }
 
     if (Date.now() - heartbeatAt > 30000) { heartbeatAt = Date.now(); writeHeartbeat(); }
+    if (Date.now() - budgetAt > 10000) { budgetAt = Date.now(); syncBudget(); }
     if (banner && state.phase === 'running' && banner.indexOf('offline') === -1) { /* keep guard text visible */ }
 
     render();
@@ -3449,11 +4319,29 @@ const SPECIES = [
 
     var S = window.AutoFishSession;
     var prefs = loadPrefs();
-    state = S.createState(prefs.window ? { window: prefs.window, durationMs: prefs.durationMs, cooldownMs: prefs.cooldownMs, dailyCapMs: prefs.dailyCapMs } : prefs);
+    // The ledger key is per profile, and the choice has to survive a reload with the history it names.
+    if (prefs.profile && fish() && fish().logProfile) fish().logProfile(prefs.profile);
+    var budget = loadBudget();
+    var win = prefs.window || S.DEFAULTS.window;
+    state = S.createState({
+      window: { on: !!win.on, start: win.start, stop: win.stop },
+      durationMs: prefs.durationMs || S.DEFAULTS.durationMs,
+      cooldownMs: prefs.cooldownMs || S.DEFAULTS.cooldownMs,
+      dailyCapMs: prefs.dailyCapMs || S.DEFAULTS.dailyCapMs,
+      hiddenStopMs: prefs.hiddenStopMs || S.DEFAULTS.hiddenStopMs,
+      chain: !!prefs.chain,
+      todayMs: budget.ms,
+      cooldownUntil: budget.cooldownUntil,
+      phase: budget.cooldownUntil ? 'cooldown' : 'idle'
+    });
+    baseTodayMs = budget.ms;
+    budgetDay = budget.day;
     window.__panel = window.__panel || {};
     window.__panel.resumeAfterReload = !!prefs.resumeAfterReload;
 
     await loadToday();
+    state.todayMs = baseTodayMs;
+    syncBudget();
 
     // A core already running from a previous session is not ours to guess about.
     var before = null;

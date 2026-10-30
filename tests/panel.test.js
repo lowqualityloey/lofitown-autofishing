@@ -10,6 +10,15 @@ const path = require('node:path');
 // the collapse button inside the head never fired.
 const src = fs.readFileSync(path.join(__dirname, '..', 'panel.js'), 'utf8');
 
+test('the panel head names the build, so a stale tab is visible at a glance', () => {
+  // The Neo tab ran a build from before perf() with no way to tell from the panel. The label is
+  // derived from __fish.version (stamped by build-userscript.js), never a hand-typed constant.
+  assert.ok(src.includes('function versionLabel()'), 'the label is derived, not hard-coded');
+  assert.match(src, /head\.append\(dot, title, ver, chip, min\)/, 'the label sits in the head');
+  assert.ok(src.includes("v === 'dev' ? 'dev' : 'v' + v"), 'an unbundled copy says dev, not vdev');
+  assert.ok(src.includes("ver.title = 'build '"), 'hovering explains what it is');
+});
+
 test('the collapse button is wired, and the pill brings the panel back', () => {
   assert.match(src, /min\.addEventListener\('click', function \(\) \{ setCollapsed\(true\); \}\)/);
   assert.match(src, /pill\.addEventListener\('click', function \(\) \{ setCollapsed\(false\); \}\)/);
@@ -36,6 +45,22 @@ test('collapsing actually hides the card and shows the 48px pill', () => {
   // the choice has to survive a reload
   assert.match(setCollapsed, /pos\.collapsed = collapsed/);
 });
+test('the panel never assumes a local server it was not served from', () => {
+  assert.ok(src.indexOf("'http://127.0.0.1:8731'") < 0, 'the server-free build must not guess a port');
+  const post = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
+  assert.match(post, /if \(!BASE\) return;/, 'no fetch without a server');
+  assert.match(src, /function syncBudget\(\)/, 'the finished session counts in the local budget');
+  assert.match(src, /if \(!BASE\) return;/, 'diagnosis uploads must not run without a server');
+});
+
+test('the daily cap survives a reload and a second session in the same page', () => {
+  const load = src.slice(src.indexOf('async function loadToday()'), src.indexOf('function postSessionRow'));
+  assert.match(load, /if \(!BASE\) return;/, 'the server is optional, the local budget is not');
+  const start = src.slice(src.indexOf('startCore: function'), src.indexOf('stopCore:'));
+  assert.match(start, /baseTodayMs = loadBudget\(\)\.ms/, 'a new session must re-read the day');
+  assert.match(src, /var BUDGET_KEY = 'autofish:budget:v1'/);
+});
+
 test('the session, cooldown and cap steppers reach overnight ranges', () => {
   // the point of the ranges is "leave it fishing while I sleep", so assert the numbers a
   // sleeper needs are actually reachable through the steppers, not just parseable.
@@ -127,4 +152,51 @@ test('the Cozier popup hider is opt-in, cosmetic, and tags only what it recognis
   assert.ok(src.includes("upsellToggle.textContent = upsellOn ? 'on' : 'off'"), 'the toggle shows state');
   // cosmetic means cosmetic: nothing here may touch the game or the account
   assert.ok(!/fetch\(|localStorage\.removeItem/.test(fn + sweep), 'the hider makes no network calls and deletes no state');
+});
+
+test('a catch outside the catalogue is visible: an UNK cell and an honest last line', () => {
+  // The Zen account showed "Tubenose Poacher · 0.49kg" with a strip of zeros. The catch was in the
+  // ledger, but Unknown had no cell, so the panel looked like it was recording nothing at all.
+  assert.ok(src.includes("tierCells.push({ name: 'Unknown'"), 'the strip has an Unknown cell');
+  assert.ok(src.includes("cell.cell.style.display = n ? '' : 'none'"), 'it only takes space when it has fish');
+  assert.ok(src.includes("bits.push('rarity unknown')"), 'the last-catch line says why there is no tier');
+  assert.ok(src.includes('not in the built-in catalogue'), 'the tooltip explains the catalogue miss');
+});
+
+test('the frame report is on the panel, because a browser may take no console at all', () => {
+  // The Zen tab takes no synthetic keystrokes, so __fish.perf() cannot be read there. The numbers
+  // still have to be reachable: on the panel, and from a screenshot.
+  assert.ok(src.includes('perfLine: perfLine'), 'the line is registered for render');
+  assert.ok(src.includes('perfBox.append(perfLine, perfMore, perfJson)'), 'the block is built in the card');
+  const fn = src.slice(src.indexOf('function renderPerf('), src.indexOf('function render()'));
+  assert.ok(fn.length > 0, 'renderPerf exists');
+  assert.ok(fn.includes('fish().perf()'), 'the numbers are perf()\'s, not re-derived counters');
+  assert.ok(fn.includes('p.p50') && fn.includes('p.p95') && fn.includes('p.worst'), 'the frame percentiles are shown');
+  assert.ok(fn.includes("'ms/s: snap '"), 'each detector prints its share of wall time');
+  assert.ok(fn.includes("share('lockDial')"), 'the dial search is one of them');
+  assert.ok(fn.includes('catch (e) { p = null; }'), 'a missing perf() must not take the panel down');
+  assert.ok(src.includes('renderPerf();'), 'render() refreshes it on the tick');
+  const toggle = src.slice(src.indexOf("perfBox.addEventListener('click'"), src.indexOf('function zoneRect('));
+  assert.ok(toggle.length > 0, 'the block is clickable');
+  assert.ok(toggle.includes('JSON.stringify(fish().perf()'), 'the click prints the whole report');
+  assert.ok(toggle.indexOf('place()') > 0, 'the card is re-measured after it grows');
+});
+
+test('the budget is local: today and the cooldown survive a reload', () => {
+  assert.ok(src.includes("var BUDGET_KEY = 'autofish:budget:v1'"), 'the budget key exists');
+  assert.ok(src.includes('function syncBudget()'), 'the budget is written');
+  assert.match(src, /budgetAt > 10000/, 'it is flushed every ten seconds, so a crash costs at most that');
+  assert.ok(src.includes('baseTodayMs = Math.max(local, server)'), 'the server is a mirror, not the authority');
+  assert.ok(src.includes('} catch (e) { baseTodayMs = local; }'), 'an offline fetch keeps the local budget');
+  assert.ok(src.includes('state.todayMs = baseTodayMs'), 'mount restores the day before the first tick');
+  assert.ok(src.includes("phase: budget.cooldownUntil ? 'cooldown' : 'idle'"), 'a live cooldown is restored, not bypassed');
+});
+
+test('a stop says what stopped it, and the hidden threshold is configurable', () => {
+  assert.ok(src.includes("stopNote = 'last stop: ' + state.stopReason"), 'the reason is shown');
+  assert.ok(src.includes("start after '"), 'and when the cooldown ends');
+  assert.ok(src.includes("stepperRow('Hidden stop', 'hidden', 2, 60)"), 'the hidden stop has a stepper');
+  assert.match(src, /field: 'hiddenStopMs'/, 'the stepper writes the reducer field');
+  assert.ok(src.includes('chainToggle: chainToggle'), 'the chain toggle is wired');
+  assert.ok(src.includes('Chain runs'), 'and labelled');
 });

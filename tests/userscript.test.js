@@ -21,6 +21,18 @@ test('the userscript version matches package.json, so a bump cannot half-happen'
   assert.match(src, new RegExp('^// @version\\s+' + pkg.version.replace(/\./g, '\\.') + '$', 'm'));
 });
 
+test('the version is stamped into the core, not only into the header', () => {
+  // Two browsers, one dist: a tab can only say which build it runs if F.version comes from the
+  // build. The header and the console have to agree with it, so package.json is the only source.
+  const pkg = require('../package.json');
+  assert.ok(
+    src.indexOf('const F = { version: ' + JSON.stringify(pkg.version) + ' };') > 0,
+    '__fish.version must carry package.json version'
+  );
+  assert.ok(src.indexOf("const F = { version: 'dev' };") < 0, 'the dev placeholder must not survive a build');
+  assert.match(src, /version: F\.version/, '__fish.report() still reports it');
+});
+
 test('the bot core is inlined exactly once', () => {
   const n = src.split('window.__fish = F').length - 1;
   assert.strictEqual(n, 1);

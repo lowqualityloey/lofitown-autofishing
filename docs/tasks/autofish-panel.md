@@ -1,6 +1,6 @@
 # Task: AutoFish control panel
 
-Spec: [2026-10-27-in-game-panel-design.md](../specs/2026-10-27-in-game-panel-design.md) · Plan: [2026-10-27-autofish-panel.md](../superpowers/plans/2026-10-27-autofish-panel.md)
+Spec: never committed; the approved decisions are recorded in [STATE.md §6](../STATE.md). This file is the task record.
 
 Goal: replace "paste this into the DevTools console" with an in-game panel offering Start/Stop, bounded sessions, a clock window, safety guards, and a session log. Three phases:
 
