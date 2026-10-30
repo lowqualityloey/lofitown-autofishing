@@ -171,4 +171,6 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { build, OUT, PARTS };
+// UPDATE_URL is exported so scripts/release.js publishes to exactly the repository the header
+// advertises: a second copy of that URL is how the two releases would drift apart.
+module.exports = { build, OUT, PARTS, UPDATE_URL };

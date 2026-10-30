@@ -1,7 +1,8 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING - presses land, fish are caught, and catch cards are auto-dismissed so it fishes continuously.**
-"2026-10-27 findings" before trusting it for real fishing.
+Status: **WORKING (3.8.10) - presses land, fish are caught, and catch cards are auto-dismissed so it
+fishes continuously.** Read [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
+before trusting it for real fishing.
 
 Note: **coins are not a valid success signal** — the counter does not move without the Cozy
 subscription, so it stays at 5,484 whether or not anything is caught. Judge a press by whether the
@@ -16,19 +17,25 @@ The easiest path by a wide margin: **one file, and the whole HUD is inside it**.
 session rules (length / cooldown / daily cap / clock window), the catch list and the fishing core are
 all inlined in `dist/autofish.user.js`; no local server, no bookmarklet, no console.
 
+1. Install Tampermonkey (or Violentmonkey) in the browser that plays lofi.town.
+2. Open <https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js>
+   and let Tampermonkey install it (if the browser downloads the file instead, import it from
+   Tampermonkey's **Utilities** tab). That fixed URL serves the newest build, and Tampermonkey checks it for
+   updates on its own - no GitHub session needed, because the source repository is private and its
+   assets answer an anonymous check with 404.
+3. Open https://app.lofi.town. The **AutoFish panel** appears in a free corner, marked `IDLE`.
+4. Press **Start** in the panel. Stop / Pause / Resume and the session rules all work offline.
+   Drag it by the header; the `–` in the header collapses it to a 48 px 🎣 pill, and clicking the
+   pill brings it back.
+
+Building it yourself produces the same file; install that one with
+Tampermonkey -> Dashboard -> Utilities -> **Import from file**:
+
 ```bash
 node build-userscript.js      # writes dist/autofish.user.js (committed; rerun after editing
                               # autofish.js, session.js, layout.js or panel.js)
 npm run build:userscript      # same thing
 ```
-
-1. Install Tampermonkey (or Violentmonkey) in the browser that plays lofi.town.
-2. Tampermonkey -> Dashboard -> Utilities -> **Import from file** -> `dist/autofish.user.js`.
-   (Or, while `fishserve` is running, open `http://127.0.0.1:8731/autofish.user.js` and press Install.)
-3. Open https://app.lofi.town. The **AutoFish panel** appears top-left, marked `IDLE`.
-4. Press **Start** in the panel. Stop / Pause / Resume and the session rules all work offline.
-   Drag it by the header; the `–` in the header collapses it to a 48 px 🎣 pill, and clicking the
-   pill brings it back.
 
 Why the first load is OFF on purpose: an install must never start pressing keys in a tab you just
 opened. The remembered choice lives in `localStorage` (`autofish:on`, `autofish.prefs`,
@@ -1335,7 +1342,7 @@ finally produced clean detections. Do not go back to luminance.
 
 ## Next step
 
-**First, the Space question.** [spacetest.js](spacetest.js) is the experiment: one key target per dial
+**First, the Space question.** `spacetest.js` (a local scratch file, never committed) is the experiment: one key target per dial
 (`window` → `document` → `body` → `canvas` → pointer control), pressing only at a ≥25° margin.
 A dial always dies at ~15.7s on its own, so a press the game receives must end it early; the
 pointer control proves whether the timing path itself works. Read `__spacetest.status().dials`,
