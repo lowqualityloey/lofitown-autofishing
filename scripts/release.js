@@ -10,6 +10,8 @@
  * week's.
  *
  * So this script never builds bytes of its own:
+ *   - it refuses to publish unless the mirror repository is public, because an anonymous
+ *     update check gets 404 from a private one - before any write, not after;
  *   - it takes dist/autofish.user.js as committed at the release tag;
  *   - it requires the source release's asset to be byte-identical to that file;
  *   - it uploads those verified bytes to the mirror, then downloads the mirror asset again
@@ -81,6 +83,22 @@ function sourceRepo() {
   const m = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remote);
   if (!m) throw new Error('origin is not a GitHub remote: ' + remote);
   return m[1] + '/' + m[2];
+}
+
+/**
+ * Tampermonkey's update check is anonymous - no token, no session. GitHub answers anonymous
+ * release-asset requests with 404 when the repository is not public, so a private or internal
+ * mirror publishes successfully and still serves no updates. Refuse before any write.
+ */
+function requirePublicRepo(repo) {
+  const visibility = gh(['api', 'repos/' + repo, '--jq', '.visibility']);
+  if (visibility !== 'public') {
+    throw new Error(
+      'the mirror repository ' + repo + ' is ' + visibility +
+      ' — anonymous update checks get 404 — make it public first: gh repo edit ' + repo + ' --visibility public'
+    );
+  }
+  return visibility;
 }
 
 function releaseInfo(repo, tag) {
@@ -157,6 +175,7 @@ async function main() {
 
   console.log('autofish ' + version + ' · ' + tag + (CHECK_ONLY ? ' · check only' : ''));
   gh(['auth', 'status']); // fail before any writes if gh has no credentials
+  console.log('  mirror repo    ' + mirror.repo + ' · ' + requirePublicRepo(mirror.repo));
 
   let tagCommit;
   try {
@@ -240,7 +259,10 @@ async function main() {
       published = true;
       served = await expectPublic(tagUrl, committed, 10, 3000);
       if (hash(served.bytes) !== hash(committed)) {
-        throw new Error('the mirror still does not serve the tagged build after upload (status ' + served.status + ')');
+        throw new Error(
+          'the mirror still does not serve the tagged build after upload (status ' + served.status + ')' +
+          (served.status === 404 ? ' — check that ' + mirror.repo + ' is still public' : '')
+        );
       }
     }
     console.log('  mirror asset   ' + size(served.bytes) + ' · sha256 ' + hash(served.bytes).slice(0, 12) + ' · match' + (published ? ' · published' : ''));
