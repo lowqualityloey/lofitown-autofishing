@@ -1,14 +1,14 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.8.10 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.8.11 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
-- **Target Release / Deadline**: next patch (3.8.11) / not tracked
-- **Current Working Branch**: `autofish-3.8.10` (this worktree); `main` is the integration branch
+- **Target Release / Deadline**: 3.8.11 release / not tracked
+- **Current Working Branch**: `autofish-3.8.11` (this worktree); `main` is the integration branch
 - **Last Updated**: 2026-10-30
 - **Runtime**: Node v26.13.0, no dependencies, no bundler
 

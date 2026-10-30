@@ -73,7 +73,7 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 
 ## How well does it fish?
 
-The shipped core - 3.8.8, unchanged through 3.8.9 and 3.8.10 - closed a 75-minute seated session at **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise.
+The shipped core - 3.8.8, unchanged through 3.8.9, 3.8.10 and 3.8.11 - closed a 75-minute seated session at **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise.
 
 Per-press timing is scored by whether the game spawned a new triangle (a press it acted on), not by whether the dial closed - only the finishing press can do that. Read `__fish.status().accuracy.pressAcceptRate`.
 
@@ -126,7 +126,7 @@ __fish.opts        // press timing, windows, retry ladders (live-editable)
 
 `__fish.perf()` is the measurement any tuning has to come from: `rates.<detector>.share` is the
 fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`).
-It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.8.10`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
+It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.8.11`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
 
 On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
 
