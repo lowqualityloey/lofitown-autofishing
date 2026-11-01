@@ -95,8 +95,12 @@ Two operational traps that cost a whole evening:
 __fish.start()                        // run, pressing the dial with Space
 __fish.start({ press: false })        // observe only, never press
 __fish.start({ pressWith: 'pointer' })// press the dial with a click instead of Space
+__fish.start({ logUrl: 'http://127.0.0.1:8731/catch' }) // opt-in local catch CSV POST
 __fish.status()                       // counters + last events
 __fish.report()                       // counters + last 250 events
+__fish.accuracy()                     // by speed band, dial width and caught rarity
+__fish.calibration()                  // live knobs + width/rarity reports
+__fish.tune({ marginDeg: 5 })         // apply numeric timing knobs to the live run
 __fish.stop()                         // hard kill (also stop before reloading the page)
 __fish.calibrate()                    // colour dump while a dial is on screen
 ```
@@ -111,14 +115,22 @@ Then open **http://127.0.0.1:8741/install** in the lofi.town tab and drag the bu
 bookmarks bar. On the game page, click the bookmark once: a small **AutoFish** card appears in the
 corner of the game and runs from there.
 
-- **Session / Cooldown / Daily cap** — set with `−` / `+` steppers (hold to accelerate). Defaults
-  60 min, 30 min, 4 h. Ranges: session 5 min – **12 h**, cooldown **1 min** – 2 h, daily cap 30 min –
-  **24 h**. A session stops when its timer runs out: the cooldown then runs and the panel goes **idle** —
-  it does not chain sessions on its own, so one night needs one long session. The cap only refuses a
-  Start once the day's total is spent.
-- **Clock window** — optional "only fish between HH:MM and HH:MM"; times move in 15-minute steps and
-  the stop time wins over the duration.
-- **Start / Stop** — one button. Every Stop starts the cooldown; a pause does not.
+- **Session / Cooldown / Daily time cap / Hidden stop** — click the value and type (`90`, `1h 30`)
+  or use `−` / `+` (hold to accelerate). Defaults 60 min, 30 min, 4 h. Ranges: session 5 min –
+  **12 h**, cooldown **1 min** – 2 h, daily cap 30 min – **24 h**. The cap is fishing **time**, not a
+  fish count. A session that reaches its timer stops into the cooldown; a clock-window or daily-cap
+  stop goes **idle without a cooldown**.
+- **Clock window** — optional "only fish between HH:MM and HH:MM"; type the time or step it in
+  15-minute increments. The stop time wins over the duration.
+- **Pause / Resume, Stop, Start now** — Pause is a hold: it credits the elapsed time, sends no
+  session row, starts no cooldown, and a tick will not auto-resume it. Stop ends the session and
+  rests. A live cooldown offers **Start now** (with a confirmation) because the rest is self-imposed.
+- **Catch history** — all-time and today totals, today's shiny/golden, lifetime shiny/golden and the
+  kept-day count. The strip toggles **all/today**; `↺` clears the current profile after confirmation.
+  The ledger keeps 60 day buckets; all-time species and tier totals are never trimmed.
+- **Resume after reload / POST catches** — both off by default. Resume starts a fresh session after
+  a reload (the interrupted one is logged first; a user-held pause is not auto-resumed). POST sends
+  catches to the local fishserve CSV only when enabled; the local ledger always works.
 - **Meters** — time left, catches this session, presses this session, and today's total against the
   daily cap.
 - **Loop stall** — when the game stops handing the bot frames (an occluded or throttled tab), the
@@ -779,15 +791,20 @@ know stays `Unknown` - the bot never guesses a rarity from colour. Shiny and Gol
 prefixes* in the game's own display name (`Shiny Blobfish`), so the base species is recovered by
 stripping the prefix and the tier follows the base species.
 
-Catalogue facts (bundle `3763-*.js`): 135 real species. A naive regex finds 136 `name/rarityTier`
-objects, but the 136th is the `{name:"Empty"}` placeholder on `currentFish`, so it is excluded.
-Tiers: Common 23, Uncommon 22, Rare 19, Epic 25, Legendary 26, Secret 8, Halloween 6, Christmas 6.
+Catalogue facts (current bundles, 2026-11-02): **232 species**, including all **51 Volcanic**
+zone fish. The extractor reads both the literal `{name,rarityTier,...}` rows and the size-based
+`n(name,tier,min,max)` helper rows; the old literal-only scan silently dropped the seasonal and
+Volcanic half, which is how a live Volcanic catch became `Unknown`. The `Empty` placeholder on
+`currentFish` is excluded. Tiers: Common 33, Uncommon 31, Rare 28, Epic 35, Legendary 33,
+Secret 9, Halloween 6, Christmas 6.
 
 **API.** `__fish.log()` (summary: totals, `byRarity` for all eight tiers, `top` five, `best`,
-`today`, `last`), `__fish.logCsv()` (one row per species:
-`species,rarity,derived,shiny,count,best_kg,first_seen,last_seen`), `__fish.logReset()`,
-`__fish.status().ledger` (`{total, species, shiny}`), `__fish.report().catchLog`. Nothing else reads
-the ledger, so it costs zero per frame.
+`today: {day,n,shiny,golden,byRarity}`, `since`, `days`, `last`), `__fish.logCsv()` (one row per
+species: `species,rarity,derived,shiny,count,best_kg,first_seen,last_seen`), `__fish.logReset()`,
+`__fish.status().ledger` (`{total, species, shiny}`), `__fish.report().catchLog`. The daily budget
+and cooldown are per profile (`autofish:budget:v1:<profile>`; `default` keeps the old key), so a
+second profile does not inherit the first profile's spent cap. Nothing else reads the ledger, so it
+costs zero per frame.
 
 **Panel.** Eight cells (COM/UNC/RAR/EPI/LEG/SEC/HAL/CHR) plus a last-catch line that reads
 `Shiny Tuna · 22.1 kg · ~Uncommon · 01:09`; a `~` before the tier means derived. The strip is fed
@@ -1837,3 +1854,272 @@ sat, and the bot was left paused. 112 attempts is a real sample and answers the 
 would have been better and is still open if a longer seated session is wanted.
 
 **Decision:** keep 3.8.8 unchanged. No code moved for this run.
+
+## 2026-11-02 audit pass: the field reports, checked against the code
+
+A user ran 3.8.11 for several days on BrowserOS Neo and reported seven things. Each is mapped to
+the code and to the change that addresses it; the ones that remain measurements rather than fixes
+are named at the end.
+
+**1. Volcanic fish all said Unknown.** Real catalogue bug, not a game label. The embedded table was
+from an older bundle and its extractor only read the literal `{name,rarityTier,...}` rows; the
+current bundle builds the seasonal and Volcanic half through a size-based helper. Regenerating from
+the live chunks gives **232 species**, including all **51 Volcanic** fish. `scripts/gen-catalogue.js`
+now reads both shapes and merges them, `tests/catchlog.test.js` asserts the Volcanic names, and a
+second parser bug was fixed at the same time: `Moʻo`, `A Penguin?` and `Mermaid?` contain Unicode or
+punctuation the old `WORD` matcher rejected, so those cards parsed as a species named from the next
+line (usually `Legendary`). `tests/cardtext.test.js` covers each shape.
+
+**2. Every interruption cost the cooldown.** The core reducer already had a pause; the panel only
+exposed Stop. A session with no clock window and no explicit Stop had no way to hold. The panel now
+has **Pause/Resume** as the primary action while a run is alive and **Stop** as a separate secondary
+action. Pause credits the elapsed time, starts no cooldown, sends no session row and cannot be
+auto-resumed by a visibility/seat tick; Resume continues the same remaining session. Stop keeps the
+cooldown. A live cooldown also offers **Start now** with a confirmation because it is self-imposed.
+
+**3. Daily-cap and window stops were also entering cooldown.** They are schedule boundaries, not
+rests, so they now go straight to `idle` with the reason shown. That means a window close at 23:00 no
+longer makes 23:00-23:30 unreachable when the next window opens at 21:00 the following day, and a
+spent cap does not add a 30-minute wait before the next day's first start.
+
+**4. The history was invisible after 24 hours.** It was persisted all along: `autofish:log:v1:<profile>`
+keeps per-species totals, 60 day buckets and all-time tier totals; the panel only rendered all-time
+by-rarity and the last catch. It now shows `all / today / shiny / golden`, the kept-day count, and a
+strip toggle between all-time and today. Day buckets now carry per-day shiny/golden counts, so "how
+many legendaries or shinies today" is answerable without reading the console. A `↺` control clears the
+current profile's catch history after a confirmation (the profile itself is not deleted).
+
+**5. "Why cap fish?"** It is not a fish cap. `dailyCapMs` is a limit on **fishing time**; the label
+is now **Daily time cap**, the tooltip says so, and the range reaches 24 h. The cap exists to stop an
+abandoned tab from fishing for days, not to limit how many fish a player may land.
+
+**6. "− / + is a hassle."** All four minute fields are text inputs now: `90`, `90 min`, `1h 30` and
+`1:30` all parse, clamp to the same `keyConf` range the steppers use, and restore the field on junk.
+The two clock-window fields accept `HH:MM` (single-digit hour/minute is fine) and reject an invalid
+time instead of silently turning it into midnight. The steppers still work and hold-to-accelerate.
+
+**7. Rare/secret dials sometimes spin and miss.** The honesty limit: a lost fish never prints a card,
+so its rarity is unknown. What can be measured is the dial itself, and each attempt now records its
+average width. `__fish.accuracy()` reports attempts/catches per speed band, per **width band**
+(`narrow <60°`, `mid <100°`, `wide <140°`, `full`), and per **caught** rarity; `__fish.status().accuracy.byWidth`
+feeds the panel's `acc` line. `__fish.calibration()` returns the live `leadMs/marginDeg/midDeg` knobs,
+the press acceptance rate and those bands; `__fish.tune({ marginDeg: 5 })` applies numeric knobs to the
+live run. This is a measurement surface, not an automatic retune: changing the timing without five
+narrow-band attempts would be a guess. The panel's perf block now prints the attempt rate and narrow
+slice, and its click dumps `perf + accuracy + calibration`.
+
+**Also fixed in the same pass.** The reload-resume path required a clock window to be on, so it never
+fired for the common no-window setup; it is now an explicit **Resume after reload** toggle and a
+reload does not turn a user-held pause into a running session. The core's catch POST no longer
+hardcodes `http://127.0.0.1:8731/catch`: a userscript with no server was firing a failed request on
+every catch. It is opt-in via **POST catches** or `__fish.start({ logUrl })`. Budget and cooldown are
+now keyed by profile, and profile switching is idle-only; the old `default` budget key is preserved.
+
+**What is deliberately still open.** (a) The width/rarity reports need a real seated sample before
+timing is changed; no claim is made that narrow dials are the cause. (b) A hidden/seat/no-catch stop
+still enters the cooldown; only the schedule boundaries were exempted. (c) `sessions.csv` has no
+profile column, so only the `default` profile mirrors sessions to the server and non-default profiles
+are local-only. (d) A paused session is ended by a reload rather than restored; the reload message
+says so. (e) The reset clears the current profile's catches, not the profile name or its budget.**Verification.** `node --test` = **201 passing** after rebuilding `dist/`; the focused suites cover
+the 232-row catalogue, Unicode/punctuation cards, pause/resume vs cooldown, typed-field parsing,
+per-profile budgets, day shiny/golden, width bands, and the opt-in network paths. No live fishing run
+was made for this audit pass, so the remaining accuracy questions are measured in the field, not
+asserted here.
+
+### 3.9.1: the field run found the real Unknown cause
+
+The 3.9.0 field run in BrowserOS Neo (36 attempts, 34 caught) still wrote **11 of those 34** as
+`Unknown`, and the captured card text says why:
+
+| draws on the card | 3.9.0 read | species |
+|---|---|---|
+| `Yellowstripe`, `Goatfish`, `0.24kg`, `Decent`, `$6` | `Yellowstripe` (quality `Goatfish`) | Yellowstripe Goatfish |
+| `Rocks with`, `Mussels`, `7.31kg`, `Exquisite`, `$26` | `Rocks with` (quality `Mussels`) | Rocks with Mussels |
+| `Keeltail`, `Needlefish`, ... | `Keeltail` | Keeltail Needlefish |
+
+The card **wraps a long species name into two draws**. `parseCard` took `words[0]` as the whole name,
+so the second half became the quality, the catalogue lookup could never match, and the tier fell to
+`Unknown`. Regenerating the catalogue was necessary but not sufficient: these names were already in
+the 232-row table and were still missed.
+
+`parseCard(raw, isTier, isKnown)` now joins the leading pre-weight draws and keeps the longest run the
+catalogue knows (`isKnown` comes from `speciesInfo`). A tier word is never joined, and with no
+catalogue match the old single-word read is kept, so an unknown wrapped name cannot swallow the
+quality word. `tests/cardtext.test.js` splits **every multi-word catalogue name** at its last space
+and requires the whole name back, plus the tier-not-joined and unknown-name fallback cases.
+
+**Not repaired:** ledger rows written before 3.9.1 keep the truncated name. The ledger stores the
+parsed species, not the raw draws, so there is nothing reliable to rejoin; the five names this run
+produced (`Keeltail`, `Flagtail`, `Semicircle`, `Rocks with`, `Yellowstripe`) are the worklist.
+
+**The run that found it.** 3.9.0 sat at 1117x785 for 30.3 min (25.9 min fishing) before the install:
+49 attempts, **47 caught (95.9%)**, 2 lost - both `cast prompt` (the seat was lost), **no dial loss** -
+257 presses, 257 accepted, 0 rejected. Width bands: **narrow 5/5** (45.0-58.3 deg, 29 presses), mid
+20/22, wide 20/20, full 2/2. 11 of the 47 catches were `Unknown` (23%), all five wrapped names above.
+That is the reported "rare fish spins and misses" not reproducing: with 5 narrow dials and 0 dial
+losses, this sample gives no evidence for a narrow-dial timing defect.
+
+**Verification (3.9.1).** `node --test` = **205 passing**; `dist/` rebuilt and installed over 3.9.0 in
+Neo with the ledger intact (3,613 -> 3,632 catches). A fresh wrapped card was **not** caught live:
+installing reloaded the game, which stood the character up, and the session sat on `needsSeat`. The
+whole-name claim therefore rests on the 232-name wrap test, not on a post-install card.
+
+### 3.9.2: per-attempt wedge telemetry
+
+The width report said where fish were caught or lost, not whether a press landed. Each fish now
+carries its own press outcomes:
+
+- `accepted` - the game spawned a fresh triangle after the press (the only observable a press
+  inside the wedge leaves);
+- `rejected` - no spawn inside the grace;
+- `dialHits` / `dialMisses` - the locked dial ended within `hitMs` of the last press, or outlived it.
+
+`__fish.accuracy()` keeps every existing field and adds `recent`: the last ten fish with `band`,
+`width`, `presses`, `accepted`, `rejected`, `pressHitRate`, `dials`, `dialHits`, `dialMisses`,
+`species`, `rarity`, `verdict` and `why`. Each width band in `byWidth` gains `accepted`, `rejected`,
+`pressHitRate`, `dialHits`, `dialMisses`, `dialHitRate` and `pressesPerAttempt`, and the panel's
+`acc` line ends in `· hit 257/257`.
+
+Reading it: compare `accepted` with `presses` on the narrow band. A narrow band whose accepted
+count is well below its presses is the reported miss, in numbers; if `accepted` equals `presses`
+and fish still escape, the loss is the dial's time limit or a returning cast prompt, not the press.
+A press whose verdict never settles is in `presses` but in neither counter, so it cannot bias the
+rate. This measures the claim - it does not change `leadMs`, `marginDeg` or any timing.
+
+### 3.9.3: the seat pause no longer fights the core
+
+A seat pause keeps the core running on purpose: the core is the only thing that can see the cast
+prompt return, and that is what lifts the pause. But the core also owns the cast retry, and the retry
+is not harmless while held. Measured live on 2026-11-02, after a reinstall stood the character up:
+69 retries while `paused / seat`, one of them put a line in the water, the prompt disappeared, and
+the pause - which only clears when the prompt appears - could never lift. Pressing Resume did not
+help: the very next tick saw the same `needsSeat` fact and re-paused, while the core kept retrying.
+
+Two changes close the loop:
+
+- **A seat hold now forbids casting.** `paused(s, at, 'seat')` emits `holdCasts: true`; the panel
+  maps it to `__fish.holdCasts(true)`, and the cast-retry branch in `step()` is gated on
+  `!F.castHold`. The core still scans for the prompt and can still press a dial - it just cannot
+  start a cast while the session is waiting for one. Any resume path (`runningAgain`, `resume`,
+  `stop`, `start`) clears the flag; clearing it also restarts the retry timer, so a Resume does not
+  fire a blind Space press on its first frame.
+- **Resume buys a 15 s grace window.** Resuming from a seat pause sets `seatOverrideUntil = at +
+  15 s`; `fact.seat === true` no longer re-pauses inside that window. That gives the user time to
+  reel a stuck line (or the core time to take a late bite) instead of watching the same pause come
+  straight back. When the window expires the seat watchdog wins again and the hold returns. A
+  `seat: false` tick, any new pause, a stop and a fresh start all clear the window.
+
+Verified by `tests/session.test.js` (hold on seat pause, Resume clears it, the seat fact cannot
+re-pause for 15 s, the hold returns after) and `tests/perf.test.js` (the retry is gated on
+`F.castHold`; clearing refreshes `lastCastTry`; start and stop reset it). `node --test` = 209
+passing, `dist/` rebuilt at 3.9.3.
+
+### 3.9.4 and 3.9.5: the prompt layer moved into the renderer (diagnostics)
+
+The game changed how it draws while the 3.9.3 field sample was being set up. Measured live on
+2026-11-02: the renderer canvas (canvas 0) held the whole scene, **965,753 painted pixels**, and the
+second 2D canvas AutoFish had always read was **completely empty, 0 alpha pixels**, while a CAST
+prompt was on screen and the status read 0 bubbles. The core still held the empty canvas.
+
+3.9.4 added `hasInk()` and an `adoptSurface()` path that swaps to the candidate with pixels; 3.9.5 made
+the swap unconditional once the second canvas read blank for four scans, and logged `ink` on every
+swap. Both failed for the same reason, and the log proved it: inside the bot's own
+`requestAnimationFrame` callback the renderer canvas **also** reads blank (`ink: false` on 222 swap
+events), while a fresh frame scheduled after the game's render reads ink on 256 of 256 samples. A
+WebGL buffer is cleared between renders; the bot was sampling it before the game drew, not after.
+
+That is a real architectural fix (run detection from a post-render hook, keep rAF only for the stall
+watchdog), not a threshold change. It is **not** in 3.9.6; 3.9.6 keeps the surface fallback and is
+still unable to see a prompt or a dial in this build of the game, so its gate is unmeasured live.
+
+### 3.9.6: the first press on a hard dial waits for a stable fit
+
+The user reported one or two misses in the first seconds of a dial. The first press of a dial is the
+one with the least evidence behind it: `fitOmega` accepts two frames 8 ms apart, the dial may still be
+settling its spin, and a narrow (<60 deg) or fast (>=300 deg/s) dial turns the same angular error
+into most of its window. A wide slow dial forgives an early fit; a secret-fish wedge does not.
+
+- **`fitStable(fit, opts)`** asks whether an estimate is mature: at least `firstPressMinN` (6) fit
+  points spanning `firstPressMinSpanMs` (150) with an RMS residual of at most `firstPressMaxRms` (2),
+  and never a fit whose rate was clamped to the limit. The width and speed thresholds
+  (`firstPressMaxWidthDeg` 60, `firstPressFastOmega` 300) and the release (`firstPressMaxWaitMs` 2500)
+  are knobs too; all of them appear in `__fish.calibration().opts` and are accepted by `__fish.tune()`.
+- **The gate applies to the first press only, on hard dials.** When `F.pressesThisDial === 0` and the
+  drawn width is under 60 deg or the spin is 300 deg/s or faster, an unstable fit cancels the pending
+  press and skips that crossing (`planReason: 'first-fit'`). One skipped revolution is cheap next to
+  a miss, which subtracts the last gain and zeroes the streak. Wide or slow dials press immediately,
+  exactly as before, and later presses on a hard dial are never held: once a press has landed, the fit
+  has the evidence it needs.
+- **The hold is bounded.** After `firstPressMaxWaitMs` (2500) from the geometry lock, the press is
+  forced even if the fit never settles, so a noisy dial cannot starve. The hold is counted in
+  `stats.firstPressHeld` and the give-up in `stats.firstPressForced`; both appear in
+  `__fish.accuracy().stats` and each event is logged once per dial (`first press held`,
+  `first press forced`) with width, omega and fit quality.
+
+Reading it: on a narrow band, `firstPressForced` means the gate gave up rather than that it fired;
+`firstPressHeld` without a later press means the dial was lost while waiting. A sample with held
+presses and no misses is the gate doing its job.
+
+**Verification (3.9.6).** `node --test` passes (212 tests), including a `fitStable` boundary test and
+source guards for the gate, its width/speed condition, the 2500 ms release and both counters. `dist/`
+rebuilt at 3.9.6. **No live sample:** the installed build cannot read the prompt layer (see 3.9.4/5),
+so the first-second claim is measured by construction, not yet in the field.
+
+### 3.9.7: detection runs after the game's draw
+
+The 3.9.4/3.9.5 attempts failed because they kept sampling from rAF; the buffer is cleared before the
+game draws, so the surface choice was never the whole bug. 3.9.7 moves the sample point instead:
+
+- **`installPostRender()`** walks from `__PIXI_DEVTOOLS__.app.renderer` to the prototype that owns
+  `render`, wraps that method, and keeps the original return value. The prototype, not the instance,
+  because Pixi recreates renderer instances on resize. The wrapper is tagged
+  (`__autofishPostRender`) so a restart cannot nest it, and it verifies the assignment took before
+  reporting success. Only the app's own renderer canvas triggers the step; an overlay renderer of the
+  same class is ignored.
+- **`postRenderTick()`** runs `step()` in the same task as the draw, with a re-entry guard and one
+  step per rAF frame. Every canvas read (`takeShot()`, the bubble/dial scans, the card reader) now
+  happens there, so it sees the frame that was just painted.
+- **rAF is the clock, not the sampler.** `loop()` still counts frames and retries the hook once a
+  second while it is missing, but while `_postRender` is true it returns before any capture or step.
+  A blank pre-render read can no longer cancel a press that a post-render frame just armed.
+- **The watchdog repairs a replaced renderer.** `checkStall()` re-wraps when a hook that was working
+  has produced no tick for a second; a game that is simply not drawing stays a reported stall instead
+  of falling back to blank reads.
+- **`status().postRender`** distinguishes "hooked but blind" from "not hooked", which the old
+  `version`/`frames` pair could not.
+
+**Live check (BrowserOS Neo, 2026-11-02, 1179x822).** 3.9.7 installed; `status().postRender` was
+**true**, and detection ran from the render hook for the whole session (~100 fps, `errors: 0`). The
+merged layer is readable and the detectors work on it: `captureUI()` uploaded a 63 KB frame of the
+full scene, and the first prompt the bot found was the new character-attached speech bubble —
+**116x54 at (627, 251)**, not the old centre-screen capsule.
+
+Once the bite cycle actually ran, the sample was clean: **4 caught / 4 attempts, 0 lost**, 21 presses
+with **21 accepted / 0 rejected**, 8 dials / 8 hits / 0 misses, and 14 parsed catch cards. The
+first-press gate was active in the same run (`firstPressHeld: 7`, `firstPressForced: 3`) and the one
+narrow-band fish was caught (1/1, 5 presses); the mid band was 3/3 (16 presses). An earlier, paused
+window showed 0 bubbles and blind casts - that was the character waiting between bites while the core
+had just restarted, not a blind surface. No false dials appeared in the successful run.
+
+### 3.9.8: containment takes the window that is already open
+
+The user noticed the dial sometimes needed almost another full rotation before pressing. `planPress`
+always scheduled the **midpoint** crossing; containment only widened the late-press check. So a pin
+that had just passed the midpoint while still inside the arc waited for the next crossing - up to a
+whole rotation, which on a slow dial is several seconds and reads as "slow to react".
+
+- **`inside-now`** (contain only): when the pin is moving away from the midpoint, is still inside the
+  arc now and at judgement time (`abs(delta) <= win` and `abs(pred) <= win`), and the next crossing
+  is more than `insideNowMs` (60) away, press immediately and cancel any pending timer. An
+  approaching pin still waits for the widest-tolerance crossing, and `trigger: 'angle'` is unchanged.
+- The rule is a pure planner function of `(delta, omega, width, armed, pendingAt)`; the 60 ms floor
+  prevents it from racing the normal `wait <= 0` branch on a pin that is about to cross anyway.
+
+**Verification (3.9.8).** `node --test` passes (222 tests), including the boundary test for
+past-midpoint-inside, approaching, outside, lead-edge, angle and disarmed. Live on BrowserOS Neo
+(1179x822): **7 caught / 7 attempts, 0 lost**, 14/14 dials hit, **37 presses accepted / 0 rejected**,
+with `firstPressHeld: 7`, `firstPressForced: 1`, and fitted spin rates up to **1342 deg/s**. The
+planner's reason histogram recorded `inside-now` (and `planReason: 'inside-now'` was observed while a
+dial was open), so the early press fires in the game rather than only in the unit test. `dist/`
+rebuilt at 3.9.8.
+

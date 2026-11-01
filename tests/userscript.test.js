@@ -53,8 +53,10 @@ test('the bot core is inlined exactly once', () => {
 
 test('nothing fetches the userscript from a local server any more', () => {
   assert.ok(src.indexOf('__FISHSERVE__') < 0);
-  // the unchanged core still POSTs catches; that call must stay non-fatal
-  assert.match(src, /fetch\(F\.logUrl[\s\S]*?\.catch\(function \(\) \{\}\)/);
+  // The catch POST is opt-in now: no default localhost URL, and no fetch without one.
+  assert.match(src, /F\.logUrl = \(opts && opts\.logUrl\) \? String\(opts\.logUrl\) : null/);
+  assert.match(src, /if \(F\.logUrl\) \{[\s\S]*?fetch\(F\.logUrl[\s\S]*?\.catch\(function \(\) \{\}\)/);
+  assert.ok(src.indexOf("'http://127.0.0.1:8731/catch'") < 0, 'no hardcoded catch endpoint');
 });
 
 test('the chip starts off, remembers a click, and can stop the bot', () => {

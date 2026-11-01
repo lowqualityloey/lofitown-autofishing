@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'planPress', 'sweepBias', 'omegaBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates']) {
+  for (const k of ['wrap180', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -84,6 +84,30 @@ test('fitOmega refuses stale frames, single frames and clamped nonsense', () => 
   const fit = T.fitOmega(fast, { now: fast[fast.length - 1].t });
   assert.equal(fit.omega, 1500);
   assert.equal(fit.clamped, true);
+});
+
+test('fitStable demands a mature fit before a first press on a hard dial', () => {
+  const pts = frames(300, 10);
+  const clean = T.fitOmega(pts, { now: pts[pts.length - 1].t, minSpanMs: 12 });
+  assert.ok(clean, 'the synthetic spin fits');
+  assert.equal(T.fitStable(clean, {}), true, '10 points over 150 ms is enough');
+  assert.equal(T.fitStable(clean, { firstPressMinN: 11 }), false, 'too few points');
+  assert.equal(T.fitStable(clean, { firstPressMinSpanMs: 200 }), false, 'too short a window');
+  assert.equal(T.fitStable(Object.assign({}, clean, { rms: 5 }), {}), false, 'a noisy fit is not trusted');
+  assert.equal(T.fitStable(Object.assign({}, clean, { clamped: true }), {}), false, 'a clamped rate is not trusted');
+  assert.equal(T.fitStable(null, {}), false);
+});
+
+test('the first press on a narrow or fast dial waits for a mature fit, and the hold is bounded', () => {
+  assert.match(SRC, /fitStable\(s\.fit, F\.opts\)/);
+  assert.match(SRC, /F\.pressesThisDial === 0/);
+  assert.match(SRC, /Number\(s\.width\) < \(F\.opts\.firstPressMaxWidthDeg \|\| 60\)/);
+  assert.match(SRC, /Math\.abs\(Number\(s\.omega\) \|\| 0\) >= \(F\.opts\.firstPressFastOmega \|\| 300\)/);
+  assert.match(SRC, /firstPressMaxWaitMs \|\| 2500/, 'the hold must not starve a dial');
+  assert.match(SRC, /F\.stats\.firstPressHeld/);
+  assert.match(SRC, /F\.stats\.firstPressForced/);
+  assert.match(SRC, /L\('first press held'/);
+  assert.match(SRC, /L\('first press forced'/);
 });
 
 test('planPress presses only inside the window, and schedules the crossing', () => {
@@ -138,6 +162,35 @@ test('containment accepts a late press the angle rule would drop', () => {
   const out = T.planPress({ t: 1000, width: 90, armed: true, delta: -30, omega: 746 },
     { trigger: 'contain', marginDeg: 4, leadMs: 25 });
   assert.equal(out.press, false);
+});
+
+test('contain takes an open window after the midpoint instead of waiting a turn', () => {
+  // 300 deg/s, 90 deg arc (win 41 after the 4 deg margin): the pin is 30 deg past the midpoint,
+  // still inside, and the next midpoint crossing is ~1.1 s away.
+  const contain = { trigger: 'contain', marginDeg: 4, leadMs: 25 };
+  const past = T.planPress({ t: 1000, width: 90, armed: true, delta: 30, omega: 300 }, contain);
+  assert.equal(past.press, true);
+  assert.equal(past.reason, 'inside-now');
+  assert.equal(past.cancel, true, 'an early press must drop a pending midpoint timer');
+  // Approaching the midpoint keeps the widest-tolerance schedule.
+  const coming = T.planPress({ t: 1000, width: 90, armed: true, delta: -30, omega: 300 }, contain);
+  assert.equal(coming.press, false);
+  assert.notEqual(coming.reason, 'inside-now');
+  // Past the midpoint but outside the window: nothing to take.
+  const outside = T.planPress({ t: 1000, width: 90, armed: true, delta: 60, omega: 300 }, contain);
+  assert.equal(outside.press, false);
+  // Inside now but the lead carries the pin out of the window: wait for the next crossing.
+  const edge = T.planPress({ t: 1000, width: 90, armed: true, delta: 38, omega: 300 }, contain);
+  assert.equal(edge.press, false);
+  assert.notEqual(edge.reason, 'inside-now');
+  // 'angle' never takes an early edge; it keeps the midpoint rule.
+  const angle = T.planPress({ t: 1000, width: 90, armed: true, delta: 30, omega: 300 },
+    { trigger: 'angle', midDeg: 6, leadMs: 25 });
+  assert.equal(angle.press, false);
+  // Disarmed stays disarmed even when the window is open.
+  const off = T.planPress({ t: 1000, width: 90, armed: false, delta: 30, omega: 300 }, contain);
+  assert.equal(off.press, false);
+  assert.equal(off.reason, 'disarmed');
 });
 
 test('planPress follows the spin direction and never fires backwards', () => {
@@ -200,6 +253,33 @@ test('omegaBand splits presses into the four speed bands', () => {
   assert.equal(T.omegaBand(746), 'blur');
   assert.equal(T.omegaBand(null), 'slow');
   assert.equal(T.omegaBand(undefined), 'slow');
+});
+
+test('widthBand separates the narrow dials rare fish paint from the wide ones', () => {
+  assert.equal(T.widthBand(30), 'narrow');
+  assert.equal(T.widthBand(59.9), 'narrow');
+  assert.equal(T.widthBand(60), 'mid');
+  assert.equal(T.widthBand(99.9), 'mid');
+  assert.equal(T.widthBand(100), 'wide');
+  assert.equal(T.widthBand(139.9), 'wide');
+  assert.equal(T.widthBand(140), 'full');
+  assert.equal(T.widthBand(200), 'full');
+  assert.equal(T.widthBand(null), 'unknown');
+  assert.equal(T.widthBand(undefined), 'unknown');
+  assert.equal(T.widthBand(0), 'unknown');
+});
+
+test('an attempt records dial width and the reports expose width and rarity', () => {
+  // The rare-fish complaint needs a number, not a hunch: attempts are scored per width band, and
+  // caught fish are also grouped by rarity. Both feed the panel's accuracy line.
+  assert.match(SRC, /a\.avgWidth = a\.widthN \?/, 'resolveAttempt computes the average dial width');
+  assert.match(SRC, /F\.widths\[a\.widthBand\]/, 'attempts land in a width bucket');
+  assert.match(SRC, /F\.rarities\[a\.rarity\]/, 'caught fish land in a rarity bucket');
+  assert.match(SRC, /F\.widthReport = function/, 'the width report exists');
+  assert.match(SRC, /F\.rarityReport = function/, 'the rarity report exists');
+  assert.match(SRC, /F\.calibration = function/, 'the calibration surface exists');
+  assert.match(SRC, /F\.tune = function/, 'the timing knobs are adjustable from the console');
+  assert.match(SRC, /byWidth: F\.widthReport\(\), byRarity: F\.rarityReport\(\)/, 'accuracy carries both reports');
 });
 
 test('newTriangle: the first press of a lock is always allowed', () => {
@@ -307,4 +387,34 @@ test('a press is rejected when the same triangle survives the grace', () => {
 test('pressOutcome has no verdict without a press or a sample', () => {
   assert.deepEqual(T.pressOutcome({}), { verdict: 'none' });
   assert.deepEqual(T.pressOutcome({ press: { t: 1, width: 85, delta: 0 } }), { verdict: 'pending' });
+});
+
+test('per-attempt wedge telemetry: accepted presses and dial outcomes are per fish and per band', () => {
+  // The rare-fish question is "how many presses landed inside the wedge", not "how many dials
+  // closed". An accepted press is the game spawning a fresh triangle; a rejected one is not.
+  const need = [
+    'F.attempt.pressAccepted = (F.attempt.pressAccepted || 0) + 1',
+    'F.attempt.pressRejected = (F.attempt.pressRejected || 0) + 1',
+    'pressAccepted: 0, pressRejected: 0, dialHits: 0, dialMisses: 0',
+    'a.pressHitRate = a.pressAccepted + a.pressRejected',
+    'wb.accepted += a.pressAccepted; wb.rejected += a.pressRejected;',
+    'pressHitRate: accepted + rejected ?',
+    'dialHitRate: dialHits + dialMisses ?',
+    'recent: (F.attempts || []).slice(-10)',
+    'dialMisses: a.dialMisses || 0',
+  ];
+  for (const snip of need) assert.ok(SRC.includes(snip), 'missing telemetry: ' + snip);
+});
+
+test('widthReport computes the per-band wedge rate from the counters', () => {
+  const a = SRC.indexOf('  F.widthReport = function () {');
+  const b = SRC.indexOf('  /**', a);
+  assert.ok(a > 0 && b > a, 'widthReport block not found');
+  const F = { widths: { narrow: { band: 'narrow', attempts: 5, caught: 4, lost: 1, presses: 29, accepted: 27, rejected: 2, dialHits: 3, dialMisses: 2 } } };
+  new Function('F', SRC.slice(a, b))(F);
+  const row = F.widthReport()[0];
+  assert.equal(row.pressHitRate, 0.931, '27 of 29 presses landed inside the wedge');
+  assert.equal(row.dialHitRate, 0.6, '3 of 5 dials ended on a hit');
+  assert.equal(row.pressesPerAttempt, 5.8);
+  assert.equal(row.catchRate, 0.8);
 });
