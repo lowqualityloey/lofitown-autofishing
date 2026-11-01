@@ -253,13 +253,43 @@ test('a locked dial resets the recovery ladder, so the next cast starts at rung 
 
 test('the cast retry sends only the keybind - there is no bubble to click', () => {
   // The ladder used to be called here and its answer dropped, so the test certified a no-op.
-  const from = CORE.indexOf('if (F.opts.castRetryMs');
+  const from = CORE.indexOf('F.opts.castRetryMs &&');
   const at = CORE.indexOf("L('cast retry'");
   assert.ok(from > 0 && at > from);
   const around = CORE.slice(from, at + 60);
   assert.match(around, /space\(F\.opts\.spaceTarget\)/);
   assert.doesNotMatch(around, /castRecovery\(/, 'the stall path has no bubble to click');
   assert.doesNotMatch(around, /tap\(/, 'the stall path has no coordinates to tap');
+});
+
+test('a merged UI canvas is adopted when the second layer is blank', () => {
+  // The game can paint everything into the renderer canvas and leave the old UI layer empty; the
+  // bot then reads a transparent surface and reports no prompt (live 2026-11-02: 965k painted
+  // pixels on canvas 0, 0 on canvas 1, 0 bubbles while CAST! was on screen).
+  const adopt = CORE.slice(CORE.indexOf('function adoptSurface'), CORE.indexOf('function dataHasInk'));
+  assert.doesNotMatch(adopt, /if \(!hasInk\(gameCanvas\)\) return false;/, 'a WebGL buffer may read blank from this callback; the empty-layer count is the evidence');
+  assert.match(adopt, /uiCanvas = gameCanvas;/, 'the renderer canvas becomes the read surface');
+  assert.match(adopt, /L\('ui layer moved'/, 'the swap is observable in the event log');
+  assert.match(adopt, /snapAt = 0;/, 'the next snapshot must re-read the adopted canvas');
+  const down = CORE.slice(CORE.indexOf('function downscale'), CORE.indexOf('function snapshotInner'));
+  assert.match(down, /if \(dataHasInk\(sdata\)\) uiBlank = 0; else uiBlank\+\+;/, 'a blank read is counted');
+  assert.match(down, /checkSurface\(\)/, 'the blank count is acted on');
+  assert.match(CORE, /for \(let i = 3; i < d\.length; i \+= 4\) if \(d\[i\] > 0\) return true;/, 'ink means a non-transparent pixel');
+});
+
+test('a seat hold suppresses cast retries, and clearing it does not fire on the first frame', () => {
+  // Paused on seat the core is deliberately alive to watch for the prompt. A retry would cast, the
+  // prompt would vanish, and only the prompt can lift the hold: 69 retries and a line out is the
+  // measured deadlock this guards against.
+  assert.match(CORE, /if \(!F\.castHold && F\.opts\.castRetryMs/);
+  const api = CORE.slice(CORE.indexOf('F.holdCasts = function'), CORE.indexOf('F.resetStats = function'));
+  assert.match(api, /F\.castHold = !!on/);
+  assert.match(api, /if \(!F\.castHold\) F\.lastCastTry = now\(\)/, 'clearing must restart the retry timer');
+  // start and stop both clear it, so a later run cannot inherit a stale hold
+  const start = CORE.slice(CORE.indexOf('F.start = function'), CORE.indexOf('F.stop = function'));
+  assert.match(start, /F\.castHold = false;/, 'start resets the hold');
+  const stop = CORE.slice(CORE.indexOf('F.stop = function'), CORE.indexOf('F.pause = function'));
+  assert.match(stop, /F\.castHold = false;/, 'stop resets the hold');
 });
 
 // Fishing in this game is seat-based: the cast prompt is emitted only by the sit-down path

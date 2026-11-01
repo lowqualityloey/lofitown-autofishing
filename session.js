@@ -36,6 +36,7 @@
       visibleSince: null,
       retryAt: null,
       retries: 0,
+      seatOverrideUntil: null,
       cooldownUntil: null,
       lastCatchAt: null,
       catchCount: 0,
@@ -98,10 +99,15 @@
     var sessionMs = s.fishingMs;
     s.todayMs = (s.todayMs || 0) + sessionMs;
     s.fishingMs = 0;
-    s.phase = 'cooldown';
-    s.cooldownUntil = at + s.cooldownMs;
+    // A schedule boundary is not a rest. The clock window and the daily cap end the run until the
+    // next window or the next day; forcing a 30-minute cooldown on top made the panel look stuck and
+    // could make a second session collide with a closed window. Only a real stop rests.
+    var rest = reason !== 'daily-cap' && reason !== 'window';
+    s.phase = rest ? 'cooldown' : 'idle';
+    s.cooldownUntil = rest ? at + s.cooldownMs : null;
     s.stopReason = reason || 'user';
     s.pauseReason = null;
+    s.seatOverrideUntil = null;
     s.retryAt = null;
     s.lastTickAt = null;
     return [
@@ -121,6 +127,7 @@
   var ERR_WINDOW_MS = 60 * 1000;
   var ERR_LIMIT = 20;
   var SEAT_STOP_MS = 30 * 60 * 1000;   // an unseated character cannot bite; give up rather than sit there forever
+  var SEAT_OVERRIDE_MS = 15 * 1000;    // a user Resume runs this long despite the seat fact, then re-checks
 
   function paused(s, at, reason) {
     s.phase = 'paused';
@@ -130,14 +137,24 @@
     if (reason === 'no-catch') s.retryAt = at + RETRY_DELAY_MS;
     // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
     // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
-    var actions = reason === 'seat' ? [] : [{ type: 'pauseCore' }];
-    if (reason === 'seat') s.seatSince = at;
+    // Keeping it alive is only safe if it cannot ACT while it waits: a cast retry puts a line in the
+    // water, which removes the prompt the pause is waiting for, so the two would wait forever
+    // (measured live 2026-11-02: 69 retries, paused on seat, line out, no prompt, no recovery).
+    var actions = [];
+    if (reason === 'seat') {
+      s.seatSince = at;
+      actions.push({ type: 'holdCasts', on: true });
+    } else {
+      actions.push({ type: 'pauseCore' });
+    }
+    s.seatOverrideUntil = null;          // any new hold invalidates an earlier grace window
     if (reason === 'hidden') actions.push({ type: 'releaseWakeLock' });
     actions.push({ type: 'persist' });
     return { state: s, actions: actions };
   }
 
   function runningAgain(s, at) {
+    var wasSeat = s.pauseReason === 'seat';
     s.phase = 'running';
     s.pauseReason = null;
     s.retryAt = null;
@@ -145,11 +162,15 @@
     s.hiddenSince = null;
     s.seatSince = null;
     s.lastTickAt = at;
-    return { state: s, actions: [{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }] };
+    var actions = wasSeat ? [{ type: 'holdCasts', on: false }] : [];
+    return { state: s, actions: actions.concat([{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }]) };
   }
 
   function tickPaused(s, at, fact) {
     if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
+    // A user pause is an explicit hold: the tab coming back, a seat appearing or a catch landing
+    // must not resume it behind the user's back. Only the Resume button (or a fresh Start) does.
+    if (s.pauseReason === 'user') return { state: s, actions: [] };
     var visible = fact.visible !== false;
     if (s.pauseReason === 'hidden') {
       if (!visible) {
@@ -230,6 +251,7 @@
       s.errWindowAt = null;
       s.errTotal = 0;
       s.pauseReason = null;
+      s.seatOverrideUntil = null;
       s.hiddenSince = null;
       s.visibleSince = null;
       s.stopReason = null;
@@ -256,12 +278,52 @@
       return { state: s, actions: stopSession(s, at, fact.reason) };
     }
 
+
+    if (fact.type === 'pause') {
+      // Pause is a hold, not a stop: the session, its length and today's budget all survive, and no
+      // cooldown is started. Time up to this instant is credited; the hold itself is not fishing.
+      if (s.phase !== 'running') return { state: s, actions: [] };
+      if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+      s.phase = 'paused';
+      s.pauseReason = 'user';
+      s.lastTickAt = null;
+      s.hiddenSince = null;
+      s.visibleSince = null;
+      s.seatSince = null;
+      s.retryAt = null;
+      return { state: s, actions: [{ type: 'pauseCore' }, { type: 'releaseWakeLock' }, { type: 'persist' }] };
+    }
+
     if (fact.type === 'resume') {
       if (s.phase !== 'paused') return { state: s, actions: [] };
+      // Do not resume straight into a boundary: the next tick would stop the session immediately and
+      // the user would see a resume that did nothing. The cap and the window are checked up front.
+      if (s.todayMs + s.fishingMs >= s.dailyCapMs) return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
+      if (s.window.on && !withinWindow(s.window, at)) return { state: s, actions: [{ type: 'refuse', reason: 'window' }] };
+      var fromSeat = s.pauseReason === 'seat';
       s.phase = 'running';
       s.pauseReason = null;
+      s.retryAt = null;
+      s.hiddenSince = null;
+      s.visibleSince = null;
+      s.seatSince = null;
+      // The seat fact comes from the core's own watchdog and can stay true while a line is already
+      // out. Pausing again on the very next tick made Resume look broken; a short grace window lets
+      // the user act (reel, or let the retry cast) before the seat hold is re-applied.
+      s.seatOverrideUntil = fromSeat ? at + SEAT_OVERRIDE_MS : null;
       s.lastTickAt = at;
-      return { state: s, actions: [{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }] };
+      var actions = fromSeat ? [{ type: 'holdCasts', on: false }] : [];
+      return { state: s, actions: actions.concat([{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }]) };
+    }
+
+    if (fact.type === 'skip-cooldown') {
+      // The cooldown is self-imposed, so it needs an escape hatch. The user still gets a confirmation
+      // in the panel; this fact only clears the wait and lets the next start be a real start.
+      if (s.phase !== 'cooldown') return { state: s, actions: [] };
+      s.phase = 'idle';
+      s.cooldownUntil = null;
+      s.stopReason = null;
+      return { state: s, actions: [{ type: 'persist' }] };
     }
 
     if (fact.type === 'tick') {
@@ -330,8 +392,13 @@
       s.hiddenSince = null;
 
       // 1b. not seated means the game will never offer a cast prompt: pause before crediting any
-      // time, so an overnight session does not spend its budget waiting for a chair.
-      if (fact.seat === true) return paused(s, at, 'seat');
+      // time, so an overnight session does not spend its budget waiting for a chair. A user Resume
+      // buys a short grace window, so the same fact cannot re-pause the very next tick.
+      if (fact.seat === true) {
+        if (!(s.seatOverrideUntil != null && at < s.seatOverrideUntil)) return paused(s, at, 'seat');
+      } else if (s.seatOverrideUntil != null) {
+        s.seatOverrideUntil = null;      // seated again: the window has nothing left to override
+      }
 
       // 1c. a stalled core is not fishing. The loop can lose its animation frames while the tab
       // still reads as visible (an occluded window), and the panel used to keep charging the budget

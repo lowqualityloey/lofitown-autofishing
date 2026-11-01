@@ -58,6 +58,92 @@ test('start during cooldown is refused, not started', () => {
   assert.deepEqual(r.actions, [{ type: 'refuse', reason: 'cooldown' }]);
 });
 
+test('pause holds the session without a cooldown and resume continues it', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 5 * 60_000));
+  const p = reduce(state, { type: 'pause', at: T0 + 8 * 60_000 });
+  assert.equal(p.state.phase, 'paused');
+  assert.equal(p.state.pauseReason, 'user');
+  assert.equal(p.state.fishingMs, 8 * 60_000, 'time up to the pause is credited');
+  assert.equal(p.state.cooldownUntil, null, 'a hold must not start the cooldown');
+  assert.deepEqual(p.actions.map(a => a.type), ['pauseCore', 'releaseWakeLock', 'persist']);
+  assert.ok(!p.actions.some(a => a.type === 'sessionRow'), 'a hold is not a finished session');
+
+  // Two hours of hold: the clock, the session length and the budget all stay put.
+  const held = tick(p.state, T0 + 120 * 60_000);
+  assert.equal(held.state.phase, 'paused');
+  assert.equal(held.state.pauseReason, 'user');
+  assert.equal(held.state.fishingMs, 8 * 60_000);
+
+  const r = reduce(held.state, { type: 'resume', at: T0 + 120 * 60_000 });
+  assert.equal(r.state.phase, 'running');
+  assert.equal(r.state.pauseReason, null);
+  assert.equal(r.state.fishingMs, 8 * 60_000);
+  assert.deepEqual(r.actions.map(a => a.type), ['resumeCore', 'wakeLock', 'persist']);
+  const after = tick(r.state, T0 + 125 * 60_000);
+  assert.equal(after.state.fishingMs, 13 * 60_000, 'the hold itself added no fishing time');
+});
+
+test('a user pause never auto-resumes on a tick', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 60_000));
+  ({ state } = reduce(state, { type: 'pause', at: T0 + 90_000 }));
+  // visible, seated, catches landing: none of it is permission to override an explicit pause
+  const r = tick(state, T0 + 300_000, { visible: true, seat: false, catches: 5 });
+  assert.equal(r.state.phase, 'paused');
+  assert.equal(r.state.pauseReason, 'user');
+  assert.deepEqual(r.actions, []);
+});
+
+test('pause is ignored outside a running session', () => {
+  const idle = reduce(createState(), { type: 'pause', at: T0 });
+  assert.equal(idle.state.phase, 'idle');
+  assert.deepEqual(idle.actions, []);
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'pause', at: T0 + 1 }));
+  const again = reduce(state, { type: 'pause', at: T0 + 2 });
+  assert.equal(again.state.phase, 'paused');
+  assert.deepEqual(again.actions, []);
+});
+
+test('stop while paused ends the session and starts the cooldown', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 5 * 60_000));
+  ({ state } = reduce(state, { type: 'pause', at: T0 + 8 * 60_000 }));
+  const r = reduce(state, { type: 'stop', at: T0 + 9 * 60_000, reason: 'user' });
+  assert.equal(r.state.phase, 'cooldown');
+  assert.equal(r.state.cooldownUntil, T0 + 9 * 60_000 + 1_800_000);
+  assert.equal(r.state.todayMs, 8 * 60_000, 'the held session folded into today once');
+  assert.equal(r.actions.find(a => a.type === 'sessionRow').minutes, 8);
+});
+
+test('resume at a spent cap is refused instead of stopping on the next tick', () => {
+  const paused = createState({ phase: 'paused', pauseReason: 'user', fishingMs: 5 * 60_000, todayMs: 5 * 60_000, dailyCapMs: 10 * 60_000, lastTickAt: null });
+  const r = reduce(paused, { type: 'resume', at: T0 });
+  assert.equal(r.state.phase, 'paused');
+  assert.deepEqual(r.actions, [{ type: 'refuse', reason: 'daily-cap' }]);
+});
+
+test('resume outside the clock window is refused, not a silent no-op', () => {
+  const at = new Date(2026, 0, 1, 23, 30).getTime();   // window is 21:00-23:00
+  const paused = createState({ phase: 'paused', pauseReason: 'user', window: { on: true, start: '21:00', stop: '23:00' }, lastTickAt: null });
+  const r = reduce(paused, { type: 'resume', at });
+  assert.equal(r.state.phase, 'paused');
+  assert.deepEqual(r.actions, [{ type: 'refuse', reason: 'window' }]);
+});
+
+test('skipping the cooldown clears the wait so a start is allowed', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'stop', at: T0 + 60_000, reason: 'user' }));
+  const skipped = reduce(state, { type: 'skip-cooldown', at: T0 + 120_000 });
+  assert.equal(skipped.state.phase, 'idle');
+  assert.equal(skipped.state.cooldownUntil, null);
+  assert.equal(skipped.state.stopReason, null);
+  assert.deepEqual(skipped.actions.map(a => a.type), ['persist']);
+  const started = reduce(skipped.state, { type: 'start', at: T0 + 120_000 });
+  assert.equal(started.state.phase, 'running');
+});
+
 test('config merges without mutating the previous state', () => {
   const before = createState();
   const { state } = reduce(before, { type: 'config', at: T0, patch: { durationMs: 300_000 } });
@@ -152,7 +238,8 @@ test('an unseated character pauses the clock instead of burning the session', ()
   assert.equal(r.state.phase, 'paused');
   assert.equal(r.state.pauseReason, 'seat');
   assert.equal(r.state.fishingMs, 60_000, 'the unseated minute was not counted');
-  assert.deepEqual(r.actions.map(a => a.type), ['persist'], 'the core keeps running: it is what spots the prompt');
+  assert.deepEqual(r.actions.map(a => a.type), ['holdCasts', 'persist'], 'the core keeps running, but its casts are held');
+  assert.deepEqual(r.actions[0], { type: 'holdCasts', on: true });
   // half an hour of waiting burns nothing
   const later = tick(r.state, T0 + 120_000 + 20 * 60_000, { seat: true });
   assert.equal(later.state.phase, 'paused');
@@ -170,6 +257,30 @@ test('sitting down again resumes the session where it left off', () => {
   assert.equal(r.state.fishingMs, 60_000, 'the pause itself added no time');
   const after = tick(r.state, T0 + 930_000, { seat: false });
   assert.equal(after.state.fishingMs, 90_000, 'time counts again once seated');
+});
+
+test('a seat pause holds the casts, and Resume overrides the seat fact for a grace window', () => {
+  // Keeping the core alive during a seat pause is only safe if it cannot cast: a retry that puts a
+  // line in the water removes the prompt the pause is waiting for, and neither side can recover.
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 60_000));
+  const held = tick(state, T0 + 90_000, { seat: true });
+  assert.deepEqual(held.actions.find(a => a.type === 'holdCasts'), { type: 'holdCasts', on: true });
+  assert.ok(!held.actions.some(a => a.type === 'pauseCore'), 'the watcher must keep running');
+
+  // Resume is a user override: the still-true seat fact must not re-pause on the next tick.
+  const back = reduce(held.state, { type: 'resume', at: T0 + 120_000 });
+  assert.deepEqual(back.actions[0], { type: 'holdCasts', on: false }, 'Resume frees the retry loop');
+  assert.deepEqual(back.actions.slice(1).map(a => a.type), ['resumeCore', 'wakeLock', 'persist']);
+  assert.equal(back.state.seatOverrideUntil, T0 + 120_000 + 15_000);
+  const soon = tick(back.state, T0 + 125_000, { seat: true });
+  assert.equal(soon.state.phase, 'running', 'the same seat fact must not re-pause inside the window');
+
+  // After the window the watchdog wins again, and the hold comes back with it.
+  const after = tick(soon.state, T0 + 136_000, { seat: true });
+  assert.equal(after.state.phase, 'paused');
+  assert.equal(after.state.pauseReason, 'seat');
+  assert.deepEqual(after.actions.find(a => a.type === 'holdCasts'), { type: 'holdCasts', on: true });
 });
 
 test('the daily cap counts fishing time, not waiting for a chair', () => {
@@ -199,7 +310,8 @@ test('a seat pause that outlives the clock window ends the session', () => {
   const inside = tick(state, T + 30 * 60_000, { seat: true });
   assert.equal(inside.state.phase, 'paused', 'still inside the window: keep waiting for a chair');
   const closed = tick(state, T + 61 * 60_000, { seat: true });   // 23:01
-  assert.equal(closed.state.phase, 'cooldown');
+  assert.equal(closed.state.phase, 'idle', 'a closed window is not a rest');
+  assert.equal(closed.state.cooldownUntil, null, 'the next window should not wait on a cooldown');
   assert.equal(closed.state.stopReason, 'window');
 });
 
@@ -208,7 +320,8 @@ test('a seat pause that runs into a spent daily cap stops instead of resuming', 
   ({ state } = tick(state, T0 + 60_000, { seat: true, todayMs: 0 }));
   assert.equal(state.pauseReason, 'seat');
   const spent = tick(state, T0 + 120_000, { seat: true, todayMs: 10 * 60_000 });
-  assert.equal(spent.state.phase, 'cooldown');
+  assert.equal(spent.state.phase, 'idle', 'a spent cap is not a rest');
+  assert.equal(spent.state.cooldownUntil, null, 'a spent cap must not add a cooldown');
   assert.equal(spent.state.stopReason, 'daily-cap');
 });
 
@@ -230,23 +343,26 @@ test('the session stops at its duration', () => {
   assert.equal(r.state.stopReason, 'duration');
 });
 
-test('the session stops when the clock window closes', () => {
+test('the session stops when the clock window closes, without a cooldown', () => {
   const win = { on: true, start: '21:00', stop: '23:00' };
   const at = new Date(2026, 9, 27, 22, 59).getTime();
   let { state } = reduce(createState({ window: win }), { type: 'start', at });
   assert.equal(state.phase, 'running');
   const r = tick(state, at + 2 * 60_000);
-  assert.equal(r.state.phase, 'cooldown');
+  assert.equal(r.state.phase, 'idle');
+  assert.equal(r.state.cooldownUntil, null);
   assert.equal(r.state.stopReason, 'window');
 });
 
-test('the daily cap stops the session', () => {
+test('the daily cap stops the session, without a cooldown', () => {
   const { DEFAULTS } = require('../session.js');
   const left = DEFAULTS.dailyCapMs - 1000;
   const { state } = reduce(createState({ todayMs: left }), { type: 'start', at: T0 });
   const r = tick(state, T0 + 5000, { todayMs: left });
-  assert.equal(r.state.phase, 'cooldown');
+  assert.equal(r.state.phase, 'idle');
+  assert.equal(r.state.cooldownUntil, null);
   assert.equal(r.state.stopReason, 'daily-cap');
+  assert.ok(r.actions.some(a => a.type === 'sessionRow'), 'the finished session is still logged');
 });
 
 test('a catch resets the no-catch clock', () => {

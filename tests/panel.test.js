@@ -107,8 +107,9 @@ test('the seat fact reaches the reducer so the clock pauses instead of burning',
   assert.ok(src.includes('catches: 0, errors: 0, todayMs: baseTodayMs, seat: false'), 'the cooldown tick passes seat: false');
   assert.ok(src.includes('clock paused'), 'the notice says the clock is paused, not that the run stopped');
   const sessionSrc = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'session.js'), 'utf8');
-  assert.ok(sessionSrc.includes("reason === 'seat' ? [] : [{ type: 'pauseCore' }]"), 'a seat pause keeps the core alive to spot the prompt');
-  assert.ok(sessionSrc.includes("if (fact.seat === true) return paused(s, at, 'seat')"), 'the runner pauses on the seat fact');
+  assert.ok(sessionSrc.includes("actions.push({ type: 'holdCasts', on: true });"), 'a seat pause keeps the core alive to spot the prompt, but holds its casts');
+  assert.ok(sessionSrc.includes("if (!(s.seatOverrideUntil != null && at < s.seatOverrideUntil)) return paused(s, at, 'seat')"), 'the runner pauses on the seat fact unless a user Resume bought a grace window');
+  assert.match(src, /holdCasts: function \(a\) \{ try \{ fish\(\)\.holdCasts\(!!a\.on\); \} catch \(e\) \{\} \}/, 'the panel executes the hold action');
 });
 
 test('a focus session is announced, because a free account cannot fish in one', () => {
@@ -167,7 +168,7 @@ test('the frame report is on the panel, because a browser may take no console at
   // The Zen tab takes no synthetic keystrokes, so __fish.perf() cannot be read there. The numbers
   // still have to be reachable: on the panel, and from a screenshot.
   assert.ok(src.includes('perfLine: perfLine'), 'the line is registered for render');
-  assert.ok(src.includes('perfBox.append(perfLine, perfMore, perfJson)'), 'the block is built in the card');
+  assert.ok(src.includes('perfBox.append(perfLine, accLine, perfMore, perfJson)'), 'the block is built in the card');
   const fn = src.slice(src.indexOf('function renderPerf('), src.indexOf('function render()'));
   assert.ok(fn.length > 0, 'renderPerf exists');
   assert.ok(fn.includes('fish().perf()'), 'the numbers are perf()\'s, not re-derived counters');
@@ -175,10 +176,14 @@ test('the frame report is on the panel, because a browser may take no console at
   assert.ok(fn.includes("'ms/s: snap '"), 'each detector prints its share of wall time');
   assert.ok(fn.includes("share('lockDial')"), 'the dial search is one of them');
   assert.ok(fn.includes('catch (e) { p = null; }'), 'a missing perf() must not take the panel down');
+  assert.ok(fn.includes('byWidth'), 'the rare-dial width report is on the panel');
+  assert.ok(fn.includes("'acc '"), 'the attempt accuracy line is shown');
+  assert.ok(fn.includes("' · hit '"), 'the acc line carries the accepted-press wedge rate');
   assert.ok(src.includes('renderPerf();'), 'render() refreshes it on the tick');
   const toggle = src.slice(src.indexOf("perfBox.addEventListener('click'"), src.indexOf('function zoneRect('));
   assert.ok(toggle.length > 0, 'the block is clickable');
-  assert.ok(toggle.includes('JSON.stringify(fish().perf()'), 'the click prints the whole report');
+  assert.ok(toggle.includes('JSON.stringify(rep'), 'the click prints the whole report');
+  assert.ok(toggle.includes('calibration:'), 'the calibration surface is part of the report');
   assert.ok(toggle.indexOf('place()') > 0, 'the card is re-measured after it grows');
 });
 
@@ -192,10 +197,52 @@ test('the budget is local: today and the cooldown survive a reload', () => {
   assert.ok(src.includes("phase: budget.cooldownUntil ? 'cooldown' : 'idle'"), 'a live cooldown is restored, not bypassed');
 });
 
+test('the panel separates all-time totals from today and lets a profile be cleared', () => {
+  // "how many today, but also total" needs both numbers on screen, and a reset control so the
+  // history is not an invisible, undeletable blob in localStorage.
+  assert.ok(src.includes('book.today'), 'the ledger summary has a today bucket');
+  assert.ok(src.includes("logToggle.textContent = logScope === 'today' ? 'today' : 'all'"), 'the strip can switch scope');
+  assert.ok(src.includes("ui.logTotal.textContent = 'all '"), 'all-time and today totals are shown together');
+  assert.ok(src.includes("today.shiny"), 'today\'s shinies are surfaced');
+  assert.ok(src.includes('profileReset: profReset'), 'the reset control is wired');
+  assert.ok(src.includes('f.logReset()'), 'reset clears the current profile ledger');
+  assert.ok(src.includes('function budgetKey'), 'the daily budget is keyed by profile');
+  assert.ok(src.includes("p === 'default' ? BUDGET_KEY : BUDGET_PREFIX + p"), 'default keeps the pre-profile budget key');
+  assert.ok(src.includes('k.indexOf(BUDGET_PREFIX) === 0'), 'a profile with only a budget stays selectable');
+  assert.ok(src.includes("profileName() !== 'default'"), 'the global server total does not leak into a second profile');
+});
+
+test('the panel has a real pause, a separate stop, and typed time fields', () => {
+  // The single Stop button made every interruption cost a cooldown. Pause holds; Stop rests.
+  assert.ok(src.includes("var secondary = el('button', 'secondary hide', 'Stop')"), 'Stop is a separate control');
+  const primary = src.slice(src.indexOf("primary.addEventListener('click'"), src.indexOf("winToggle.addEventListener('click'"));
+  assert.ok(primary.includes("type: 'pause'"), 'the primary control pauses while running');
+  assert.ok(primary.includes("type: 'resume'"), 'and resumes while paused');
+  assert.ok(primary.includes("type: 'skip-cooldown'"), 'the self-imposed cooldown has an escape hatch');
+  assert.ok(src.includes('function bindTyped'), 'the minute fields accept typed values');
+  assert.ok(src.includes('function parseMinutes'), 'typing accepts 90 and 1h 30');
+  assert.ok(src.includes("el('input', 'val')"), 'the value is an input, not a read-only div');
+  assert.ok(src.includes('function parseClockInput'), 'the clock fields accept HH:MM');
+  assert.ok(!src.includes("input.addEventListener('blur', commit)"), 'an invalid entry keeps its marker instead of being re-parsed on blur');
+});
+
+test('reload resume and catch POSTs are opt-in, and resume no longer needs a clock window', () => {
+  const live = src.slice(src.indexOf('function checkInterrupted'), src.indexOf('/* -------------------------------------------------------------- DOM'));
+  assert.ok(live.length > 0, 'checkInterrupted exists');
+  assert.ok(!live.includes('state.window.on &&'), 'resume must work without a clock window');
+  assert.ok(live.includes("live.phase === 'paused'"), 'a user hold is not turned into a running session by a reload');
+  assert.ok(live.includes("state.phase === 'cooldown'"), 'a live cooldown is respected');
+  assert.ok(live.includes('state.todayMs >= state.dailyCapMs'), 'a spent cap is respected');
+  assert.ok(src.includes('prefs.postCatches = !!p.postCatches'), 'the POST pref is read');
+  assert.ok(src.includes('postCatches: !!window.__panel.postCatches'), 'the POST pref is saved');
+  assert.ok(src.includes("var post = (window.__panel && window.__panel.postCatches && BASE) ? BASE + '/catch' : null"), 'the URL is only passed when opted in');
+  assert.ok(src.includes('logUrl: post'), 'startCore carries the opt-in URL');
+});
+
 test('a stop says what stopped it, and the hidden threshold is configurable', () => {
   assert.ok(src.includes("stopNote = 'last stop: ' + state.stopReason"), 'the reason is shown');
   assert.ok(src.includes("start after '"), 'and when the cooldown ends');
-  assert.ok(src.includes("stepperRow('Hidden stop', 'hidden', 2, 60)"), 'the hidden stop has a stepper');
+  assert.ok(src.includes("stepperRow('Hidden stop', 'hidden')"), 'the hidden stop has a stepper');
   assert.match(src, /field: 'hiddenStopMs'/, 'the stepper writes the reducer field');
   assert.ok(src.includes('chainToggle: chainToggle'), 'the chain toggle is wired');
   assert.ok(src.includes('Chain runs'), 'and labelled');

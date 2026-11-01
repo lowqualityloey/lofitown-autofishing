@@ -1,15 +1,15 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.8.11 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.8 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
-- **Target Release / Deadline**: 3.8.11 release / not tracked
-- **Current Working Branch**: `autofish-3.8.11` (this worktree); `main` is the integration branch
-- **Last Updated**: 2026-10-30
+- **Target Release / Deadline**: 3.9.8 release / not tracked
+- **Current Working Branch**: `audit/autofish-3.9` (this worktree); `main` is the integration branch
+- **Last Updated**: 2026-11-02
 - **Runtime**: Node v26.13.0, no dependencies, no bundler
 
 ---
@@ -27,7 +27,9 @@
   (latest long run 103 caught / 112 attempts, 92.0%, Wilson 95% CI 85.4-95.7%); the dial search went
   from 83 ms to ~1 ms a call; fishing was found to be seat-based, so a missing cast prompt is now
   named, the session clock pauses while unseated, and the pause honours the clock window and the
-  daily cap. 182 tests after the 2026-10-30 release work.
+  daily cap, plus the 2026-11-02 field-audit fixes; 3.9.6 holds the first press on a narrow or fast
+  dial until the spin-rate fit is stable; 3.9.7 moves detection to a post-render renderer hook; 3.9.8
+  presses containment's already-open window (`inside-now`) instead of waiting a rotation. 222 tests.
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
   (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
 - [x] **Milestone 3** — self-updating distribution: a private repository's release assets answer an
@@ -209,6 +211,15 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-10-29 | Session budget | `autofish:budget:v1` in localStorage is the authority for today's minutes and the cooldown; the server's `/sessions` is merged by `max()` and is no longer required. A stop folds the session into `todayMs`, so a restart counts it. | `AUTOFISH.md` 2026-10-29 |
 | 2026-10-29 | Catch history | The ledger key is per profile (`autofish:log:v1:<profile>`), migrating the pre-profile key to `default`. A species outside the catalogue is logged as `Unknown`, shown in a `UNK` cell and kept in an `unknown` worklist. | `AUTOFISH.md` 2026-10-29 |
 | 2026-10-30 | Distribution | The source repository stays private, so its release assets answer an anonymous update check with 404. Every release is also published to the public `lofitown-autofishing-dist` repository under the same tag, and `scripts/release.js` refuses unless the build committed at the tag, the source asset and the anonymously fetched mirror asset are byte-identical. The publish target is read from the userscript's `@updateURL`, never kept as a second constant. | `README.md` Releasing; `scripts/release.js` |
+| 2026-11-02 | Catalogue | The embedded catalogue is now regenerated from the current game bundles by reading both the literal-object table and the size-based helper rows. 232 species (51 Volcanic), so a Volcanic catch no longer falls through to `Unknown` just because the build predates the zone. | `scripts/gen-catalogue.js`; `tests/catchlog.test.js` |
+| 2026-11-02 | Pause / cooldown | Pause is a user hold: it credits the elapsed time, starts no cooldown, sends no session row and never auto-resumes. Stop ends the session and rests. The clock window and daily cap end the session without a cooldown; the self-imposed cooldown has an explicit "Start now" escape. | `session.js`; `panel.js` |
+| 2026-11-02 | Profiles and history | The daily budget/cooldown key follows the profile (`autofish:budget:v1:<profile>`; default keeps the legacy key), and profile switching is idle-only. The panel shows all-time and today, today's shiny/golden counts, the kept-day count, and a confirm-guarded reset for the current profile. | `panel.js`; `autofish.js` |
+| 2026-11-02 | Accuracy telemetry | Each fish attempt records average dial width; reports are split by width band and by caught-fish rarity. `__fish.calibration()` reports the live knobs and bands; `__fish.tune()` applies numeric timing knobs. Losses cannot be assigned a rarity because no card parses, so rarity is a caught-fish report, not a fake catch rate. Each fish also carries accepted/rejected presses and dial hits/misses; `widthReport` adds `pressHitRate`, `dialHitRate` and `pressesPerAttempt`, and `accuracy().recent` lists the last ten fish with their own denominators. | `autofish.js`; `tests/timing.test.js` |
+| 2026-11-02 | Network default | The localhost catch POST is opt-in (`POST catches` in the panel, or `__fish.start({ logUrl })`); no default URL and no failed request in a server-free install. Reload resume is opt-in and no longer requires a clock window; a user pause is not auto-resumed by a reload. | `panel.js`; `autofish.js` |
+| 2026-11-02 | Card text | A long species name is drawn as two card strings (`Yellowstripe` + `Goatfish`). `parseCard` now joins the leading pre-weight draws and keeps the longest run the catalogue knows; a tier is never joined and an unknown name keeps the single-word read. The 232-row catalogue alone did not fix the field `Unknown` rows. | `AUTOFISH.md` 3.9.1; `tests/cardtext.test.js` |
+| 2026-11-02 | First-press gate | The first press on a dial has the least evidence behind it. `fitStable` requires 6 fit points over 150 ms with RMS <= 2 deg (never a clamped rate) before the first press on a dial under 60 deg wide or 300 deg/s or faster; an unstable fit skips that crossing, and a 2500 ms release forces the press even if the fit never settles. Held/forced counts are in `accuracy().stats` and logged once per dial. Later presses are never held. | `AUTOFISH.md` 3.9.6; `tests/timing.test.js` |
+| 2026-11-02 | UI surface | The game merged the prompt layer into the WebGL renderer canvas: canvas 0 held 965,753 painted pixels, canvas 1 was empty (0). The bot still read canvas 1 and `adoptSurface()` now switches to the candidate with pixels (3.9.4/3.9.5), but inside the bot's rAF the renderer also reads blank (222/222 swaps) while a post-render frame reads ink 256/256. Detection must move to a post-render hook. | `AUTOFISH.md` 3.9.4 and 3.9.5 |
+| 2026-11-02 | Detection timing | Detection now runs after the game draws: `installPostRender()` wraps the renderer prototype's `render()` (verified, tagged, filtered to the app canvas) and `postRenderTick()` runs the step in the same task; rAF keeps only the frame clock, hook retry and stall watchdog. `status().postRender` reports the mode. Live 3.9.7: `postRender: true` at ~100 fps, 0 errors; the bot found the new character-attached REEL bubble (116x54 at 627,251), then **4 caught / 4 attempts, 0 lost, 21/21 presses accepted, 8/8 dials**, with the first-press gate active (`firstPressHeld: 7`, `forced: 3`). | `AUTOFISH.md` 3.9.7; `tests/renderhook.test.js` |
 
 ---
 
@@ -258,6 +269,11 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-10-30 | lead (DSH session) | 3.8.9: a stable update URL | Added `@downloadURL`/`@updateURL` to the built header pointing at the GitHub `releases/latest/download/autofish.user.js` path, so an installed copy can find its own updates instead of a dead loopback server. Installed to both browsers through Tampermonkey's Update path (settings preserved); Neo's diff showed the directive change. 181 tests. |
 | 2026-10-30 | lead (DSH session) | 3.8.10: public mirror + verified release script | The private repo's release asset answers an anonymous update check with 404, so the built userscript now updates from the public `lofitown-autofishing-dist` repository, which carries only the generated file. Added `scripts/release.js`: it publishes the build committed at the tag, requires the source asset to match it byte-for-byte, uploads those bytes, then fetches the mirror asset anonymously and compares hashes. `--check` verified both releases at 210,402 bytes / sha256 1fbf6b69b533 and the public latest URL; 182 tests. |
 | 2026-10-30 | lead (DSH session) | Docs refresh | README now installs from the public release URL and quotes the 3.8.8 long run (103/112, 92.0%); STATE brought to 3.8.10 with the mirror ADR and the continuity rows moved back into §8; screenshots recaptured from the 3.8.10 panel. |
+| 2026-11-02 | lead (DSH session) | 3.9.0 audit fixes | Field-report audit: regenerated the catalogue from the live bundles (232 species incl. all 51 Volcanic), fixed Unicode/punctuation card names, added a real Pause/Resume with separate Stop and a cooldown-skip escape, typed time fields, per-profile budgets and day/all-time history with reset, width/rarity accuracy reports and `__fish.calibration()`/`__fish.tune()`, opt-in reload resume and catch POST. `dist/` rebuilt; full suite 201 passing after the rebuild. |
+| 2026-11-02 | lead (DSH session) | 3.9.1: wrapped card names (field run) | A seated 30.3 min field run on 3.9.0 in Neo produced 49 attempts / 47 caught, 5/5 narrow dials (45.0-58.3 deg) and 2 losses both `cast prompt` - no dial loss. It also exposed the real `Unknown` cause: 11 of 47 catches were wrapped names (`Yellowstripe` + `Goatfish`), because `parseCard` took only the first draw. `parseCard` now joins the leading pre-weight draws against the catalogue; every multi-word name is tested at its wrap boundary. `dist/` rebuilt as 3.9.1 and installed over 3.9.0 with the ledger intact; 205 tests. |
+| 2026-11-02 | lead (DSH session) | 3.9.2: per-attempt wedge telemetry | Each fish carries accepted/rejected presses and dial hits/misses, width bands report pressHitRate, dialHitRate and pressesPerAttempt, and accuracy().recent lists the last ten fish; the panel acc line shows hit accepted/sent. 207 tests. |
+| 2026-11-02 | lead (DSH session) | 3.9.3: seat hold stops casting; Resume overrides the seat | A seat pause keeps the core alive to spot the prompt, but its cast retry could put a line in the water, remove that prompt and deadlock the pause (live: 69 retries, line out, no prompt, 0 attempts). A seat pause now emits `holdCasts` and the retry is gated on `F.castHold`; Resume emits `holdCasts:false` and buys a 15 s `seatOverrideUntil` window so the same `needsSeat` fact cannot re-pause on the next tick. `dist/` rebuilt at 3.9.3; 209 tests. |
+| 2026-11-02 | lead (DSH session) | 3.9.8: containment presses the window that is already open | `planPress` always scheduled the midpoint crossing, so a pin that had passed the midpoint while still inside the arc waited almost a full rotation - the reported "slower to react" feel. Contain (not `angle`) now returns `inside-now` and presses immediately when the pin is past centre, inside now and at judgement, and the next crossing is >60 ms away. Live in Neo, 1179x822, one seated sample: **7 caught / 7 attempts, 0 lost, 14/14 dials, 37 accepted / 0 rejected**, `firstPressHeld` 7, `firstPressForced` 1, fitted omega up to 1342 deg/s; `inside-now` appeared in `geoReasons` and `planReason`. 222 tests. |
 
 ---
 

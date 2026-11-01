@@ -89,7 +89,9 @@ test('sameDial only treats a small move as the same widget', () => {
 });
 
 test('a fresh start seeds the hint from memory or the play area, never a literal', () => {
-  const start = SRC.slice(SRC.indexOf('F.start = function'), SRC.indexOf('F.start = function') + 4200);
+  const from = SRC.indexOf('F.start = function');
+  const to = SRC.indexOf('F.stop = function', from);
+  const start = SRC.slice(from, to > from ? to : from + 6000);
   assert.match(start, /dialGeoFit\(loadDialMemory\(\)/);
   assert.match(start, /if \(!F\.lastGeo\)/);
   assert.doesNotMatch(start, /x: 861, y: 372/);

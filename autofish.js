@@ -9,10 +9,14 @@
  *
  * WHY THIS IS SHAPED THE WAY IT IS (everything below was measured live, see AUTOFISH.md):
  *
- *  - The minigame is NOT in the game's own canvas. `app.render()` produces the world only;
- *    the CAST!/REEL! bubbles and the dial are drawn on the SECOND canvas (the UI layer).
- *  - That second canvas must be read from inside a requestAnimationFrame callback: its
- *    buffer is discarded after compositing, so a read from a normal task returns nothing.
+ *  - The game used to draw the world and the UI on two canvases. It has since merged both into the
+ *    Pixi/WebGL renderer canvas: the old "UI layer" canvas is completely empty, and the prompt and
+ *    the dial are painted into the renderer. Which canvas holds pixels is discovered at runtime
+ *    (surfaces()/adoptSurface()), never assumed.
+ *  - A WebGL buffer is cleared before each render, so a sample taken from requestAnimationFrame
+ *    reads blank even when the screen is full. Detection therefore runs from a wrapper around the
+ *    renderer's `render()`, immediately after the game has drawn (installPostRender()). rAF keeps
+ *    the frame clock and the stall watchdog, and samples only when no Pixi renderer is reachable.
  *  - Scene-graph hit areas are unreliable — every node reports eventMode 'passive' with an
  *    empty _events map — yet synthetic pointer events dispatched on the canvas do reach the
  *    game. So the bubbles are located in pixels, not in the scene graph.
@@ -167,6 +171,25 @@
   }
 
   /**
+   * Is a spin-rate estimate mature enough to trust for a FIRST press?
+   *
+   * The first press is the one with the least evidence: fitOmega accepts two frames 8 ms apart, so
+   * an early fit can be a noisy angle track rather than a rotation. A wide slow dial forgives that;
+   * a narrow (<60 deg) or fast (>=300 deg/s) dial does not - the same error is most of its window.
+   * This gate waits for more points over a longer span with a tight residual before the first press.
+   */
+  function fitStable(fit, o) {
+    const cfg = o || {};
+    if (!fit || !isFinite(fit.omega)) return false;
+    if (fit.clamped) return false;
+    const minN = cfg.firstPressMinN != null ? cfg.firstPressMinN : 6;
+    const minSpan = cfg.firstPressMinSpanMs != null ? cfg.firstPressMinSpanMs : 150;
+    const maxRms = cfg.firstPressMaxRms != null ? cfg.firstPressMaxRms : 2;
+    const rms = fit.rms == null ? Infinity : fit.rms;
+    return (fit.n || 0) >= minN && (fit.span || 0) >= minSpan && rms <= maxRms;
+  }
+
+  /**
    * Decide what this frame should do about the dial.
    *
    * st: { t, delta, width, omega, armed, pendingAt }
@@ -181,9 +204,11 @@
    *   pred   where the pin will be when the game judges a press dispatched NOW
    *   win    the acceptance half-width in degrees
    *
-   * The schedule always aims at the CROSSING (pin on the midpoint) - that is the widest error
-   * tolerance in both directions. Containment only widens the window used to decide that a
-   * late press is still inside the drawn arc; trigger 'angle' keeps the old midpoint rule.
+   * The schedule aims at the CROSSING (pin on the midpoint) - that is the widest error tolerance
+   * in both directions. Containment widens the window used to decide that a late press is still
+   * inside the drawn arc, and takes an already-open window ('inside-now') once the pin is past the
+   * midpoint instead of waiting almost a full rotation for the next crossing. Trigger 'angle'
+   * keeps the pure midpoint rule.
    */
   function planPress(st, o) {
     const cfg = o || {};
@@ -218,6 +243,19 @@
     if (!st.armed) {
       out.reason = 'disarmed';
       out.cancel = true;
+      return out;
+    }
+    // Contain means the pin may be pressed anywhere inside the arc, but the schedule above aims at
+    // the MIDPOINT crossing because that is where the tolerance is widest. When the pin has already
+    // passed the midpoint and is still inside, that next crossing is most of a rotation away - the
+    // "it needs one more turn" feel. Take the open window now instead; an approaching pin still
+    // waits for the midpoint, and 'angle' keeps the midpoint rule unchanged.
+    const insideNowMs = cfg.insideNowMs != null ? cfg.insideNowMs : 60;
+    if (cfg.trigger !== 'angle' && st.armed && delta * omega > 0 && toJudge > insideNowMs &&
+        Math.abs(delta) <= win && Math.abs(pred) <= win) {
+      out.reason = 'inside-now';
+      out.cancel = true;
+      out.press = true;
       return out;
     }
     if (wait <= 0) {
@@ -283,6 +321,20 @@
     if (a < 300) return 'mid';
     if (a < 500) return 'fast';
     return 'blur';
+  }
+  /**
+   * Dial-width bands. Speed is not the only difficulty axis: a rare fish can paint a narrow arc
+   * whose acceptance window is small even at a moderate spin. Attempts are scored in these bands
+   * separately so "narrow dials are lost" is visible instead of averaged into a healthy total.
+   * Widths are degrees of the drawn arc; live dials measured 30-200 deg.
+   */
+  function widthBand(width) {
+    const w = Number(width);
+    if (!isFinite(w) || w <= 0) return 'unknown';
+    if (w < 60) return 'narrow';
+    if (w < 100) return 'mid';
+    if (w < 140) return 'wide';
+    return 'full';
   }
   /**
    * Is this solid panel the catch card, or a piece of reel UI that looks like one?
@@ -465,52 +517,64 @@
   // <catch-log>
   // <species-catalogue>
 const SPECIES = [
-  ["Anchovy","Common",0.1,0.3,5], ["Arctic Cod","Common",0.1,1,7], ["Bass","Common",1,8,8], ["Black Sea Bass","Common",1,10,7],
-  ["Bluegills","Common",0.1,2,6], ["Capelin","Common",0.1,1,7], ["Catfish","Common",2,20,12], ["Cod","Common",2,15,10],
-  ["Firefly Squid","Common",0.01,0.1,7], ["Flounder","Common",1,5,7], ["Frozen Fish","Common",1,10,7], ["Golden Shiner","Common",0.05,0.5,5],
-  ["Hatched Fish","Common",0.01,0.1,7], ["Herring","Common",0.5,2,7], ["Lantern Fish","Common",0.1,1,7], ["Largemouth Bass","Common",1,10,10],
-  ["Leech","Common",0.01,0.05,5], ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9], ["Minnow","Common",0.01,0.1,5],
-  ["Mud Crab","Common",0.1,1,7], ["Northern Shrimp","Common",0.01,0.1,7], ["Sand Lance","Common",0.01,0.1,7], ["Sardine","Common",0.2,1,6],
-  ["Sea Urchin","Common",0.5,3,8], ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11], ["Star Fish","Common",0.2,2,6],
-  ["Swamp Barb","Common",0.05,0.3,6], ["Tadpole","Common",0.01,0.05,5], ["The Deepest Rock","Common",1,10,7], ["White Sucker","Common",0.5,3,8],
-  ["Yellow Perch","Common",0.2,2,7], ["Alligator Gar","Uncommon",10,140,30], ["Arctic Char","Uncommon",1,10,20], ["Arctic Skate","Uncommon",1,10,20],
-  ["Asian Swamp Eel","Uncommon",0.5,5,18], ["Clown Fish","Uncommon",0.2,1,19], ["Crawfish","Uncommon",0.02,0.2,15], ["Eel","Uncommon",2,25,25],
-  ["European Toad","Uncommon",0.02,0.15,16], ["Greenland Halibut","Uncommon",1,10,20], ["Hagfish","Uncommon",0.1,1,20], ["Kelp Snailfish","Uncommon",0.1,1,20],
-  ["Larger Mouth Bass","Uncommon",3,25,22], ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20], ["Mudskipper","Uncommon",0.05,0.3,17],
-  ["Oyster","Uncommon",0.3,2,15], ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19], ["Salmon","Uncommon",5,30,28],
-  ["Seahorse","Uncommon",0.1,1,17], ["Snow Crab","Uncommon",1,10,20], ["Spiny Dogfish","Uncommon",1,10,20], ["Squid","Uncommon",1,15,24],
-  ["Sturgeon","Uncommon",20,350,35], ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22],
-  ["Tripod Fish","Uncommon",0.1,1,20], ["Tubenose Poacher","Uncommon",0.1,1,20], ["Tuna","Uncommon",20,400,35], ["Walleye","Uncommon",1,10,24],
-  ["Axolotl","Rare",0.05,0.3,55], ["Beaver","Rare",10,30,60], ["Blobfish","Rare",2,20,50], ["Bull Frog","Rare",0.2,0.8,48],
-  ["Coelacanth","Rare",15,180,75], ["Dragon Fish","Rare",1,10,55], ["Dumbo Octopus","Rare",0.1,1,55], ["Flying Fish","Rare",1,5,42],
-  ["Frog Fish","Rare",0.1,1,50], ["Giant Isopod","Rare",1,10,55], ["Goldfish","Rare",0.5,2,45], ["Greenland Shark","Rare",100,1000,55],
-  ["Harp Seal","Rare",100,1000,55], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Lumpsucker","Rare",0.1,1,55],
-  ["Mekong Catfish","Rare",50,300,75], ["Nautilus","Rare",0.1,1,55], ["Nurse Shark","Rare",50,150,70], ["Pancake Batfish","Rare",0.1,1,55],
-  ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65], ["Ribbon Moray","Rare",5,40,60], ["Snapping Turtle","Rare",5,35,58],
-  ["Snipe Eel","Rare",0.1,1,55], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Thats A Huge Mouth Bass","Rare",5,50,68],
-  ["American Alligator","Epic",200,1000,200], ["Anomalocaris","Epic",1,10,140], ["Arowana","Epic",3,20,110], ["Basking Shark","Epic",1000,10000,140],
-  ["Beluga Whale","Epic",1000,10000,140], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120], ["Fried Egg Jellyfish","Epic",5,35,95],
-  ["Frilled Shark","Epic",100,1000,140], ["Goliath Tigerfish","Epic",15,70,150], ["Hammer Shark","Epic",500,1200,165], ["Horseshoe Crab","Epic",2,10,100],
-  ["Lais Tembiring","Epic",5,50,120], ["Lion Fish","Epic",1,5,85], ["Manta Ray","Epic",600,5000,200], ["Marlin","Epic",100,1800,175],
+  ["Anchovy","Common",0.1,0.3,5], ["Arctic Cod","Common",0.1,1,7], ["Bartlett's Anthias","Common",0.1,1,7], ["Bass","Common",1,8,8],
+  ["Black Sea Bass","Common",1,10,7], ["Bluegills","Common",0.1,2,6], ["Boops","Common",0.01,0.1,7], ["Boxfish","Common",0.1,1,7],
+  ["Capelin","Common",0.1,1,7], ["Catfish","Common",2,20,12], ["Cod","Common",2,15,10], ["Eelpouts","Common",0.1,1,7],
+  ["Eyeless Shrimp","Common",0.01,0.1,7], ["Firefly Squid","Common",0.01,0.1,7], ["Flounder","Common",1,5,7], ["Frozen Fish","Common",1,10,7],
+  ["Golden Shiner","Common",0.05,0.5,5], ["Hatched Fish","Common",0.01,0.1,7], ["Hawaiian Gregory","Common",0.1,1,7], ["Herring","Common",0.5,2,7],
+  ["Keeltail Needlefish","Common",0.1,1,7], ["Lantern Fish","Common",0.1,1,7], ["Largemouth Bass","Common",1,10,10], ["Leech","Common",0.01,0.05,5],
+  ["Lobster","Common",0.45,5,8], ["Mackerel","Common",1,4,9], ["Minnow","Common",0.01,0.1,5], ["Mud Crab","Common",0.1,1,7],
+  ["Northern Shrimp","Common",0.01,0.1,7], ["Riftia","Common",0.1,1,7], ["Sand Lance","Common",0.01,0.1,7], ["Sardine","Common",0.2,1,6],
+  ["Sea Cucumber","Common",0.1,1,7], ["Sea Urchin","Common",0.5,3,8], ["Shrimp","Common",0.1,0.5,5], ["Snook","Common",1,15,11],
+  ["Star Fish","Common",0.2,2,6], ["Swamp Barb","Common",0.05,0.3,6], ["Tadpole","Common",0.01,0.05,5], ["The Deepest Rock","Common",1,10,7],
+  ["White Sucker","Common",0.5,3,8], ["Yellow Perch","Common",0.2,2,7], ["Yellowstripe Goatfish","Common",0.1,1,7], ["Alligator Gar","Uncommon",10,140,30],
+  ["Arctic Char","Uncommon",1,10,20], ["Arctic Skate","Uncommon",1,10,20], ["Asian Swamp Eel","Uncommon",0.5,5,18], ["Clown Fish","Uncommon",0.2,1,19],
+  ["Crawfish","Uncommon",0.02,0.2,15], ["Eel","Uncommon",2,25,25], ["European Toad","Uncommon",0.02,0.15,16], ["Flagtail Blanquillo","Uncommon",1,10,20],
+  ["Forceps Fish","Uncommon",1,10,20], ["Goby Fish","Uncommon",1,10,20], ["Greenland Halibut","Uncommon",1,10,20], ["Hagfish","Uncommon",0.1,1,20],
+  ["Hawaiian Bigeye","Uncommon",1,10,20], ["Kelp Snailfish","Uncommon",0.1,1,20], ["Larger Mouth Bass","Uncommon",3,25,22], ["Moon Jellyfish","Uncommon",1,10,20],
+  ["Moorish Idol","Uncommon",0.5,2,20], ["Mudfish","Uncommon",1,8,20], ["Mudskipper","Uncommon",0.05,0.3,17], ["Oyster","Uncommon",0.3,2,15],
+  ["Puffer Fish","Uncommon",0.5,3,18], ["Rainbow Darter","Uncommon",0.01,0.1,19], ["Rocks with Mussels","Uncommon",1,10,20], ["Roi Fish","Uncommon",1,10,20],
+  ["Salmon","Uncommon",5,30,28], ["Sea Sponge","Uncommon",1,10,20], ["Seahorse","Uncommon",0.1,1,17], ["Snailfish","Uncommon",1,10,20],
+  ["Snow Crab","Uncommon",1,10,20], ["Spiny Dogfish","Uncommon",1,10,20], ["Squid","Uncommon",1,15,24], ["Sturgeon","Uncommon",20,350,35],
+  ["Tarpon","Uncommon",15,160,28], ["Tetra","Uncommon",0.1,0.5,16], ["Trevally","Uncommon",3,25,22], ["Tripod Fish","Uncommon",0.1,1,20],
+  ["Tubenose Poacher","Uncommon",0.1,1,20], ["Tuna","Uncommon",20,400,35], ["Walleye","Uncommon",1,10,24], ["Yellow Tang","Uncommon",1,10,20],
+  ["Anemone","Rare",1,10,55], ["Axolotl","Rare",0.05,0.3,55], ["Banded Pipefish","Rare",1,10,55], ["Beaver","Rare",10,30,60],
+  ["Blobfish","Rare",2,20,50], ["Bull Frog","Rare",0.2,0.8,48], ["Coelacanth","Rare",15,180,75], ["Dragon Fish","Rare",1,10,55],
+  ["Dumbo Octopus","Rare",0.1,1,55], ["Flying Fish","Rare",1,5,42], ["Frog Fish","Rare",0.1,1,50], ["Giant Isopod","Rare",1,10,55],
+  ["Goldfish","Rare",0.5,2,45], ["Green Coral","Rare",1,10,55], ["Greenland Shark","Rare",100,1000,55], ["Harlequin Shrimp","Rare",1,10,55],
+  ["Harp Seal","Rare",100,1000,55], ["Koi Carp","Rare",2,35,55], ["Lamprey","Rare",0.5,5,52], ["Longfin Batfish","Rare",1,10,55],
+  ["Lumpsucker","Rare",0.1,1,55], ["Mekong Catfish","Rare",50,300,75], ["Nautilus","Rare",0.1,1,55], ["Nurse Shark","Rare",50,150,70],
+  ["Pancake Batfish","Rare",0.1,1,55], ["Pink Coral","Rare",1,10,55], ["Plant Fish","Rare",0.1,0.5,42], ["Platypus","Rare",1,3,65],
+  ["Pompeii Worm","Rare",1,10,55], ["Ribbon Moray","Rare",5,40,60], ["Semicircle Angelfish","Rare",1,10,55], ["Snapping Turtle","Rare",5,35,58],
+  ["Snipe Eel","Rare",0.1,1,55], ["Softshell Turtle","Rare",3,25,55], ["Stingray","Rare",10,800,65], ["Surgeon Fish","Rare",1,10,55],
+  ["Thats A Huge Mouth Bass","Rare",5,50,68], ["Unicorn Fish","Rare",1,10,55], ["Vulcanoctopus","Rare",1,10,55], ["American Alligator","Epic",200,1000,200],
+  ["Anomalocaris","Epic",1,10,140], ["Arowana","Epic",3,20,110], ["Banana Moray","Epic",1,10,140], ["Basking Shark","Epic",1000,10000,140],
+  ["Beluga Whale","Epic",1000,10000,140], ["Betta","Epic",0.01,0.05,45], ["Blue Lobster","Epic",1,9,120], ["Crown of Thorns","Epic",1,10,140],
+  ["Fried Egg Jellyfish","Epic",5,35,95], ["Frilled Shark","Epic",100,1000,140], ["Goliath Tigerfish","Epic",15,70,150], ["Great Barracuda","Epic",1,10,140],
+  ["Hammer Shark","Epic",500,1200,165], ["Hermit Crab","Epic",1,10,140], ["Horseshoe Crab","Epic",2,10,100], ["Lais Tembiring","Epic",5,50,120],
+  ["Lion Fish","Epic",1,5,85], ["Mandarinfish","Epic",1,10,140], ["Manta Ray","Epic",600,5000,200], ["Marlin","Epic",100,1800,175],
   ["Mushroom Jellyfish","Epic",10,60,95], ["Octopus","Epic",5,150,110], ["Ogre Fish","Epic",20,100,130], ["Orca","Epic",1000,10000,140],
-  ["Paddle Fish","Epic",25,200,165], ["Pike","Epic",5,55,100], ["Piranha","Epic",0.5,4,85], ["Polar Bear","Epic",100,1000,140],
-  ["Spider Crab","Epic",1,10,140], ["Stargazer Fish","Epic",1,10,140], ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180],
-  ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175], ["Tiger Shark","Epic",200,1400,180], ["Viperfish","Epic",1,10,140],
-  ["Wels Catfish","Epic",50,300,190], ["Whale Shark","Epic",15000,40000,220], ["Wolffish","Epic",1,10,140], ["A Penguin?","Legendary",1,10,800],
-  ["Akhlut","Legendary",100,1000,800], ["Amarok","Legendary",100,1000,800], ["Anaconda","Legendary",100,550,500], ["Arapaima","Legendary",100,440,600],
-  ["Berg","Legendary",1000,10000,800], ["Bowhead Whale","Legendary",1000,10000,800], ["Cthulhu","Legendary",50000,200000,1000], ["Definitely not Catfish","Legendary",50,300,750],
-  ["Dipterus","Legendary",5,40,800], ["Giant Squid","Legendary",600,1500,750], ["Golden Goldfish","Legendary",2,8,500], ["Kappa","Legendary",50,200,900],
-  ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950], ["Marlin's Boot","Legendary",50,300,20],
-  ["Megalodon","Legendary",50000,120000,900], ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800], ["Nyarlathotep","Legendary",1000,50000,1000],
+  ["Paddle Fish","Epic",25,200,165], ["Parrotfish","Epic",100,1000,140], ["Pharooh Cuddlefish","Epic",1,10,140], ["Pike","Epic",5,55,100],
+  ["Piranha","Epic",0.5,4,85], ["Polar Bear","Epic",100,1000,140], ["Spider Crab","Epic",1,10,140], ["Stargazer Fish","Epic",1,10,140],
+  ["Sun Fish","Epic",500,5000,190], ["Swamp Chimera","Epic",50,500,180], ["Swamp Pupper","Epic",5,30,90], ["The Largest Mouth Bass","Epic",10,100,175],
+  ["Tiger Shark","Epic",200,1400,180], ["Titan Triggerfish","Epic",1,10,140], ["Twinspot Lionfish","Epic",1,10,140], ["Viperfish","Epic",1,10,140],
+  ["Wels Catfish","Epic",50,300,190], ["Whale Shark","Epic",15000,40000,220], ["Wolffish","Epic",1,10,140], ["Yeti Crab","Epic",100,1000,140],
+  ["A Penguin?","Legendary",1,10,800], ["Akhlut","Legendary",100,1000,800], ["Amarok","Legendary",100,1000,800], ["Anaconda","Legendary",100,550,500],
+  ["Arapaima","Legendary",100,440,600], ["Berg","Legendary",1000,10000,800], ["Bowhead Whale","Legendary",1000,10000,800], ["Cthulhu","Legendary",50000,200000,1000],
+  ["Definitely not Catfish","Legendary",50,300,750], ["Dipterus","Legendary",5,40,800], ["Giant Clam","Legendary",1,10,800], ["Giant Squid","Legendary",600,1500,750],
+  ["Golden Goldfish","Legendary",2,8,500], ["Green Sea Turtle","Legendary",1,10,800], ["Humphead Wrasse","Legendary",1,10,800], ["Ignis Cephalopod","Legendary",1000,10000,800],
+  ["Kappa","Legendary",50,200,900], ["Kelpie","Legendary",200,1000,850], ["Lofee Bean Can","Legendary",50,300,18], ["Lush Witch","Legendary",30,150,950],
+  ["Mantis Shrimp","Legendary",1,10,800], ["Marlin's Boot","Legendary",50,300,20], ["Megalodon","Legendary",50000,120000,900], ["Menehune","Legendary",1,10,800],
+  ["Mermaid","Legendary",110,170,900], ["Mermaid?","Legendary",100,180,800], ["Moʻo","Legendary",1,10,800], ["Nyarlathotep","Legendary",1000,50000,1000],
   ["Ocean Man","Legendary",150,250,750], ["Ogre King","Legendary",500,3000,900], ["Oh Boy Thats A Big Bass","Legendary",100,500,750], ["Phantom Jellyfish","Legendary",10,100,500],
-  ["Pink Canny","Legendary",50,300,60], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800], ["Swamp Monster","Legendary",5000,50000,950],
-  ["The Bloop","Legendary",1000,10000,800], ["True Blobfish","Legendary",1,10,800], ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700],
-  ["Barreleye Fish","Secret",1,5,1500], ["Billy Bass","Secret",1,5,2500], ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000],
-  ["Ghost Shark","Secret",1,16,1750], ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Plankton","Secret",0.01,0.1,1500],
-  ["Red Handfish","Secret",0.04,0.1,1500], ["Bobbit Worm","Halloween",10,100,100], ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150],
-  ["Skeleton Fish","Halloween",1,10,60], ["The Great Angler","Halloween",500,5000,200], ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180],
-  ["Garden Eel","Christmas",2,15,100], ["Narwhal","Christmas",800,3500,250], ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75],
-  ["Walrus","Christmas",500,1500,200]
+  ["Pink Canny","Legendary",50,300,60], ["Sea Bunny","Legendary",1,10,800], ["Snapping Dragon","Legendary",200,2000,850], ["Sperm Whale","Legendary",25000,125000,800],
+  ["Swamp Monster","Legendary",5000,50000,950], ["The Bloop","Legendary",1000,10000,800], ["True Blobfish","Legendary",1,10,800], ["Volcanic Snail","Legendary",1,10,800],
+  ["White Lobster","Legendary",1,15,400], ["White Steel Eel","Legendary",10,100,700], ["Barreleye Fish","Secret",1,5,1500], ["Billy Bass","Secret",1,5,2500],
+  ["Black Seadevil Anglerfish","Secret",0.05,1,1500], ["Devil's Hole Pupfish","Secret",0.01,0.02,2000], ["Flowerhorn Cichlid","Secret",1,10,1500], ["Ghost Shark","Secret",1,16,1750],
+  ["Goblin Shark","Secret",23,210,1500], ["Gulper Eel","Secret",2,10,1500], ["Plankton","Secret",0.01,0.1,1500], ["Red Handfish","Secret",0.04,0.1,1500],
+  ["Bobbit Worm","Halloween",10,100,100], ["Nessie","Halloween",1000,10000,180], ["Siren","Halloween",100,200,150], ["Skeleton Fish","Halloween",1,10,60],
+  ["The Great Angler","Halloween",500,5000,200], ["Vampire Squid","Halloween",5,30,75], ["Fish-Deer","Christmas",50,200,180], ["Garden Eel","Christmas",2,15,100],
+  ["Narwhal","Christmas",800,3500,250], ["Ornated Jelly Fish","Christmas",5,30,150], ["Pinecone Fish","Christmas",1,5,75], ["Walrus","Christmas",500,1500,200]
 ];
   // </species-catalogue>
 
@@ -645,9 +709,12 @@ const SPECIES = [
     if (e.shiny) book.shiny = (book.shiny || 0) + 1;
     if (e.golden) book.golden = (book.golden || 0) + 1;
     const key = logDay(at);
-    const day = book.days[key] || (book.days[key] = { n: 0, rarity: {} });
+    const day = book.days[key] || (book.days[key] = { n: 0, rarity: {}, shiny: 0, golden: 0 });
     day.n += 1;
     day.rarity[e.rarity] = (day.rarity[e.rarity] || 0) + 1;
+    // Variants are per-day too: "how many shinies today" must not mean "all time".
+    if (e.shiny) day.shiny = (day.shiny || 0) + 1;
+    if (e.golden) day.golden = (day.golden || 0) + 1;
     book.last = {
       species: name, rarity: e.rarity, derived: !!e.derived, shiny: !!e.shiny,
       weight: e.weight, weightKg: typeof e.weightKg === 'number' ? e.weightKg : null,
@@ -690,8 +757,12 @@ const SPECIES = [
       unknown: book.unknown || {},
       unknownNames: Object.keys(book.unknown || {}).sort(),
       last: book.last || null,
-      today: { day: key, n: today.n || 0, byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })).concat(Object.keys(today.rarity || {}).filter((k) => TIER_ORDER.indexOf(k) < 0).map((k) => ({ rarity: k, n: today.rarity[k] }))) },
+      today: {
+        day: key, n: today.n || 0, shiny: today.shiny || 0, golden: today.golden || 0,
+        byRarity: TIER_ORDER.map((tier) => ({ rarity: tier, n: today.rarity[tier] || 0 })).concat(Object.keys(today.rarity || {}).filter((k) => TIER_ORDER.indexOf(k) < 0).map((k) => ({ rarity: k, n: today.rarity[k] }))),
+      },
       updatedAt: book.updatedAt || null,
+      since: book.createdAt || null,
       days: Object.keys(book.days || {}).length,
     };
   }
@@ -764,11 +835,75 @@ const SPECIES = [
 
   /* -------------------------------------------------------- surfaces ----- */
   let uiCanvas = null, gameCanvas = null;
+  let inkBuf = null, inkCtx = null, uiBlank = 0, uiAdopted = false, uiCheckAt = 0;
   function surfaces() {
     const cans = [...document.querySelectorAll('canvas')];
     const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
     gameCanvas = app ? app.renderer.canvas : cans[0];
     uiCanvas = cans.find((c) => c !== gameCanvas) || cans[1] || cans[0];
+  }
+
+  /** Does this canvas draw anything at all? A 16x16 downscale is enough to tell ink from empty. */
+  function hasInk(c) {
+    if (!c || !c.width || !c.isConnected) return false;
+    if (!inkBuf) {
+      inkBuf = document.createElement('canvas');
+      inkBuf.width = 16; inkBuf.height = 16;
+      inkCtx = inkBuf.getContext('2d', { willReadFrequently: true });
+    }
+    inkCtx.clearRect(0, 0, 16, 16);
+    try { inkCtx.drawImage(c, 0, 0, 16, 16); } catch (e) { return false; }
+    const d = inkCtx.getImageData(0, 0, 16, 16).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true;
+    return false;
+  }
+
+  /**
+   * The game used to paint the world on the renderer canvas and the prompts on a second 2D layer.
+   * A game update can merge both into the renderer and leave an empty second canvas on top; the bot
+   * then reads a fully transparent surface and sees no bubble at all. Measured live 2026-11-02: the
+   * renderer canvas had 965,753 painted pixels, the second canvas had 0, and the status read
+   * 0 bubbles while a CAST prompt was on screen. Adopt the candidate that actually has pixels, and
+   * give the old layer back if the game ever starts drawing on it again.
+   */
+  function adoptSurface() {
+    if (!gameCanvas || gameCanvas === uiCanvas || !gameCanvas.isConnected || !gameCanvas.width) return false;
+    // Do not require ink from inside this callback: the renderer is WebGL and its buffer can read
+    // blank depending on where this frame sits relative to the game's own render. The other canvas
+    // has been empty for four scans, so it is not a UI layer; the renderer is the only candidate.
+    const ink = hasInk(gameCanvas);
+    const old = uiCanvas;
+    uiCanvas = gameCanvas;
+    gameCanvas = old;
+    uiAdopted = true;
+    uiCheckAt = now();
+    snapAt = 0;           // the next snapshot must read the canvas just adopted
+    L('ui layer moved', { surface: 'renderer canvas', ink });
+    return true;
+  }
+
+  /** The UI canvas read blank for several scans: if the other candidate has ink, the UI moved. */
+  function checkSurface() {
+    if (uiAdopted && now() - uiCheckAt > 5000) {
+      uiCheckAt = now();
+      if (hasInk(gameCanvas)) {
+        const old = uiCanvas;
+        uiCanvas = gameCanvas;
+        gameCanvas = old;
+        uiAdopted = false;
+        snapAt = 0;
+        L('ui layer moved', { surface: 'second canvas' });
+        return true;
+      }
+    }
+    if (uiBlank > 3) { uiBlank = 0; return adoptSurface(); }
+    return false;
+  }
+
+  function dataHasInk(d) {
+    // every seventh pixel: a prompt is thousands of pixels, an empty layer is none
+    for (let i = 3; i < d.length; i += 4 * 7) if (d[i] > 0) return true;
+    return false;
   }
 
   /** The UI canvas's CSS box, so a canvas pixel can become a CSS pixel at the DOM boundary. */
@@ -944,6 +1079,8 @@ const SPECIES = [
     try { sctx.drawImage(uiCanvas, 0, 0, w * SDOWN, h * SDOWN, 0, 0, w, h); } catch (e) { return false; }
     sdata = sctx.getImageData(0, 0, w, h).data;
     sw = w; sh = h;
+    if (dataHasInk(sdata)) uiBlank = 0; else uiBlank++;
+    checkSurface();
     return true;
   }
 
@@ -1260,7 +1397,10 @@ const SPECIES = [
   // <card-text>
   const WEIGHT = /^\d+(?:\.\d+)?\s?(?:kg|g|t|lb)$/i;
   const MONEY = /^\$\s?\d[\d,]*(?:\.\d+)?$/;
-  const WORD = /^[A-Za-z][A-Za-z'.\-]*(?: [A-Za-z'.\-]+)*$/;
+  // Species names are not ASCII: the game prints `Moʻo` (U+02BB) and uses `?` in legendary
+  // names such as `A Penguin?` and `Mermaid?`. Requiring letters/marks (rather than A-Z) and the
+  // punctuation the card actually draws keeps those names from being consumed as the rarity word.
+  const WORD = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}'’ʻ&?!.:()\- ]*$/u;
 
   /** Card strings drawn after `since`, minus the bubbles and the digit-at-a-time date. */
   function textSince(buf, since) {
@@ -1268,8 +1408,12 @@ const SPECIES = [
     for (const e of buf) {
       if (!e || e.t <= since) continue;
       const s = String(e.s).trim();
-      if (!s || /!|^(cast|reel|bite)$/i.test(s)) continue;      // bubbles are not card text
-      if (s.length < 2 && !/^\$/.test(s)) continue;             // the date is drawn one digit at a time
+      // Only the exact bubble labels are not card text. Dropping every string containing `!`
+      // silently discarded any future species name with punctuation.
+      if (!s || /^(cast|reel|bite)!?$/i.test(s)) continue;
+      // The date is drawn one digit at a time. Keep a one-letter species word (`A`), but drop
+      // bare digits and punctuation fragments.
+      if (s.length < 2 && !/^\$/.test(s) && !/^\p{L}$/u.test(s)) continue;
       raw.push(s);
     }
     return raw;
@@ -1279,23 +1423,40 @@ const SPECIES = [
    * Read one card's strings. Card order is species, [rarity], weight, quality, value, then the
    * catch date drawn digit by digit. Rarity is printed only on non-common fish, so the slot is
    * resolved by position around the weight instead of by a list of tier names.
+   *
+   * `isKnown(name)` is the catalogue lookup. A long name is drawn in pieces when the card wraps it
+   * (`Yellowstripe` + `Goatfish`, `Rocks with` + `Mussels`), so the leading pieces are joined and
+   * the longest joined name the catalogue knows wins. Without a lookup the old single-word read is
+   * kept, which is what the pure tests use.
    */
-  function parseCard(raw, isTier) {
+  function parseCard(raw, isTier, isKnown) {
     if (!raw.length) return { why: 'empty' };                  // nothing drawn since the cursor: already logged
     const wI = raw.findIndex((s) => WEIGHT.test(s));
     const vI = raw.findIndex((s) => MONEY.test(s));
     if (vI < 0) return { why: 'noprice' };                     // every card prints its price
     const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? raw[wI] : '', value: raw[vI], raw };
     const words = [];
-    for (let i = 0; i < vI; i++) if (WORD.test(raw[i])) words.push([i, raw[i]]);
+    for (let i = 0; i < vI; i++) {
+      // A weight or price can also satisfy the broad word pattern; they are values, not names.
+      if (WEIGHT.test(raw[i]) || MONEY.test(raw[i])) continue;
+      if (WORD.test(raw[i])) words.push([i, raw[i]]);
+    }
     if (!words.length) return { why: 'nowords' };
+    let used = 1;
     rec.species = words[0][1];
+    if (typeof isKnown === 'function') {
+      const pre = words.filter(([i]) => wI < 0 || i < wI);
+      for (let n = pre.length; n > 1; n--) {
+        const name = pre.slice(0, n).map(([, s]) => s).join(' ');
+        if (isKnown(name)) { rec.species = name; used = n; break; }
+      }
+    }
     // The slot before the weight holds the rarity on a non-common fish and the quality on a common
     // one: 'Whale Shark | Epic | 26.6t | Impressive' versus 'Lobster | Impressive | 3.36kg'. The
     // tier list is the only thing that separates them, so the caller supplies it; without one the
     // word is treated as quality, which is what the common layout needs.
     const tier = typeof isTier === 'function' ? isTier : () => false;
-    for (let k = 1; k < words.length; k++) {
+    for (let k = used; k < words.length; k++) {
       const [i, s] = words[k];
       if (wI >= 0 && i > wI) { if (!rec.quality) rec.quality = s; }
       else if (tier(s)) { if (!rec.rarity) rec.rarity = s; }
@@ -1306,7 +1467,9 @@ const SPECIES = [
   // </card-text>
 
   F.parseCatch = function () {
-    const out = parseCard(textSince(hookText(), F.txtAt || 0), normTier);
+    const out = parseCard(textSince(hookText(), F.txtAt || 0), normTier, function (name) {
+      return speciesInfo(name).known;
+    });
     F.parseWhy = out.why;
     return out.rec || null;
   };
@@ -1348,9 +1511,11 @@ const SPECIES = [
       F.attempt.rarity = row.rarity;
       resolveAttempt('caught', now(), null);
     }
-    try {
-      fetch(F.logUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(row) }).catch(function () {});
-    } catch (e) {}
+    if (F.logUrl) {
+      try {
+        fetch(F.logUrl, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(row) }).catch(function () {});
+      } catch (e) {}
+    }
     if (typeof F.onCatch === 'function') { try { F.onCatch(row); } catch (e) {} }
     return 'logged';
   };
@@ -1810,6 +1975,12 @@ const SPECIES = [
     if (verdict !== 'accepted' && verdict !== 'rejected') return;
     if (F.pressWait) F.pressWait.verdict = verdict;
     F.stats[verdict === 'accepted' ? 'pressAccepted' : 'pressRejected']++;
+    // Per fish, so a narrow dial has a denominator. `accepted` is the game spawning a fresh
+    // triangle, i.e. the press landed inside the wedge; an unresolved press is neither.
+    if (F.attempt) {
+      if (verdict === 'accepted') F.attempt.pressAccepted = (F.attempt.pressAccepted || 0) + 1;
+      else F.attempt.pressRejected = (F.attempt.pressRejected || 0) + 1;
+    }
     const key = biasMs == null ? 0 : biasMs;
     const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, accepted: 0, rejected: 0 });
     cell.presses++;
@@ -1861,6 +2032,9 @@ const SPECIES = [
       width: s ? Math.round(s.width) : null,
       omega: s && s.omega != null ? Math.round(s.omega) : null,
       fitRms: s && s.fit ? +s.fit.rms.toFixed(1) : null,
+      fitN: s && s.fit ? s.fit.n : null,
+      fitSpan: s && s.fit ? Math.round(s.fit.span) : null,
+      lockMs: F.geoAt ? Math.round(F.lastPress - F.geoAt) : null,
       biasMs: (s && s.biasMs) || 0,
       dialPressN: F.pressesThisDial,
       gate: F.pressesThisDial === 1 ? 'first' : 'new-triangle',
@@ -1897,6 +2071,8 @@ const SPECIES = [
       : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
     F.stats.dialsClosed++;
     F.stats[verdict === 'hit' ? 'hits' : verdict === 'miss' ? 'misses' : verdict === 'ghost' ? 'ghosts' : verdict === 'skipped' ? 'skipped' : 'noPress']++;
+    if (F.attempt && verdict === 'hit') F.attempt.dialHits = (F.attempt.dialHits || 0) + 1;
+    if (F.attempt && verdict === 'miss') F.attempt.dialMisses = (F.attempt.dialMisses || 0) + 1;
     if (skipped && F.attempt) F.attempt.skipped++;
     const rec = {
       heldMs, presses, verdict, sincePress,
@@ -1997,6 +2173,13 @@ const SPECIES = [
       schedHorizonMs: 40,           // furthest ahead a press is put on a timer (2-3 frames)
       replanMs: 8,                  // re-aim the timer only when the plan moved this much
       pressGapMs: 120,
+      firstPressMinN: 6,            // first press on a hard dial: enough fit points to trust it
+      firstPressMinSpanMs: 150,     // ... spanning this long, with a residual under firstPressMaxRms
+      firstPressMaxRms: 2,
+      firstPressMaxWidthDeg: 60,    // a "hard dial" is narrower than this (deg of drawn arc)...
+      firstPressFastOmega: 300,     // ...or spinning at least this fast (deg/s)
+      firstPressMaxWaitMs: 2500,    // never hold a first press longer than this, even if the fit is noisy
+      insideNowMs: 60,              // contain: pin past centre and still inside -> press now rather than wait a turn
       relockGraceMs: 450,           // hold a dial's geometry this long after a press (the ring blinks)
       maxPressPerDial: 12,          // safety cap on presses per dial lock (one per rotation is normal)
       hitMs: 1500,                  // a press the game acts on ends the dial within this
@@ -2017,6 +2200,9 @@ const SPECIES = [
       maxMinutes: 240,
     }, opts || {});
     surfaces();
+    F._hookTryAt = 0; F._rafN = 0; F._stepFrame = -1;
+    F._postAt = now();
+    installPostRender();     // detection has to run after the game's draw, not before it
     resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
@@ -2024,9 +2210,13 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
+      firstPressHeld: 0, firstPressForced: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
-    F.geo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) || 'http://127.0.0.1:8731/catch';
+    F.bands = {}; F.widths = {}; F.rarities = {};
+    // Opt-in only. A userscript has no local server, and a hardcoded localhost POST turns every
+    // catch into a failed request. The panel passes a URL only when the user turned POST catches on.
+    F.geo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) ? String(opts.logUrl) : null;
     // A fresh start has no prompt to learn the widget from: prefer the circle the last run locked
     // (scaled if the canvas was a different size), else the middle of the play area. Never a
     // literal point measured at one viewport - dialAnywhere() is the backstop when this is wrong.
@@ -2042,7 +2232,8 @@ const SPECIES = [
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
-    F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.needsSeat = false;
+    F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
+    F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
     F.paused = false; F.lastBubble = null; F.lastCardRect = null;
@@ -2058,6 +2249,7 @@ const SPECIES = [
 
   F.stop = function () {
     F.running = false;
+    F.castHold = false;      // a stopped core must not inherit a hold from the session that held it
     perf.stoppedAt = now();   // freeze the measurement window; a later perf() must not be diluted
     cancelPend();
 
@@ -2090,6 +2282,21 @@ const SPECIES = [
     return F.status();
   };
 
+  /**
+   * Forbid cast retries without stopping the loop. A seat pause deliberately keeps the core alive
+   * to spot the returning prompt, and this is what stops that core from casting: a retry puts a
+   * line in the water, which removes the prompt the hold is waiting for. Measured live 2026-11-02:
+   * 69 retries while paused on seat, line out, no prompt, and no way back without a manual reel.
+   */
+  F.holdCasts = function (on) {
+    F.castHold = !!on;
+    // Clearing the hold must not fire a retry on the very next frame: give the passive prompt
+    // detector its usual window first, so a Resume does not start with a blind Space press.
+    if (!F.castHold) F.lastCastTry = now();
+    L('cast hold', { on: F.castHold });
+    return F.castHold;
+  };
+
   /** Fresh counters without restarting: used when a panel session begins on a live loop. */
   F.resetStats = function () {
     resetPerf();
@@ -2099,11 +2306,12 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
+      firstPressHeld: 0, firstPressForced: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bubbleMiss = 0; F.stallRetry = 0;
     F.sweep = {};
-    F.bands = {};
+    F.bands = {}; F.widths = {}; F.rarities = {};
     clearPendingWin();
     F.catches = [];
     return F.status();
@@ -2135,20 +2343,91 @@ const SPECIES = [
    */
   F.captureUI = function () { F._shot = null; F._shotWanted = true; return true; };
 
+  /**
+   * One detection step, run immediately after the game's renderer has drawn. A WebGL buffer is
+   * valid only until the next render clears it, which is why every read lives here and not in rAF.
+   * The re-entry guard matters because step() taps the canvas, and a game that rendered from inside
+   * a pointer handler would otherwise run the whole detector in the middle of itself. The frame
+   * token keeps a renderer that draws twice in one frame from stepping twice on the same pixels.
+   */
+  function postRenderTick() {
+    if (!F.running || F._inStep || F._stepFrame === F._rafN) return;
+    F._stepFrame = F._rafN;
+    F._postAt = now();
+    F._inStep = true;
+    try {
+      takeShot();
+      step();
+    } catch (e) {
+      F.stats.errors++;
+      L('error', { e: String((e && e.message) || e) });
+    } finally {
+      F._inStep = false;
+    }
+  }
+
+  /** The one place a pending diagnostic capture is consumed, on whichever surface is readable. */
+  function takeShot() {
+    if (!F._shotWanted || !uiCanvas) return;
+    F._shotWanted = false;
+    try { F._shot = uiCanvas.toDataURL('image/png'); } catch (e) { F._shot = 'ERR ' + ((e && e.message) || e); }
+  }
+
+  /** The prototype that owns render(), not a renderer instance: Pixi recreates instances on resize. */
+  function renderProto() {
+    const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
+    if (!app || !app.renderer) return null;
+    let p = Object.getPrototypeOf(app.renderer);
+    while (p && !Object.prototype.hasOwnProperty.call(p, 'render')) p = Object.getPrototypeOf(p);
+    return p && typeof p.render === 'function' ? p : null;
+  }
+
+  /**
+   * Read the prompt layer where it is actually drawn. Measured live 2026-11-02: the renderer canvas
+   * held 965,753 painted pixels and the old UI canvas held none, yet sampling the renderer from rAF
+   * still read blank (222/222 swaps) while a post-render sample read ink 256/256. Patching the
+   * prototype's render() survives Pixi replacing the renderer instance (a resize does), and the
+   * canvas check keeps an overlay renderer from feeding a hidden surface into the step.
+   */
+  function installPostRender() {
+    const proto = renderProto();
+    if (!proto) return false;
+    if (proto.render.__autofishPostRender) { F._postRender = true; return true; }
+    const orig = proto.render;
+    const wrapped = function () {
+      const out = orig.apply(this, arguments);
+      const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
+      if (this && app && (this.canvas === app.renderer.canvas || this === app.renderer)) postRenderTick();
+      return out;
+    };
+    wrapped.__autofishPostRender = true;
+    try { proto.render = wrapped; } catch (e) { return false; }
+    if (proto.render !== wrapped) return false;   // a frozen prototype must not look installed
+    F._postRender = true;
+    F._postAt = now();
+    L('post-render hook', { canvas: !!(uiCanvas && uiCanvas.width) });
+    return true;
+  }
+
   function loop() {
     if (!F.running) { F._raf = null; return; }
     F._raf = requestAnimationFrame(loop);
+    F._rafN = (F._rafN || 0) + 1;
     const frameAt = now();
     if (perf.last) {
       perf.gaps.push(frameAt - perf.last);
       if (perf.gaps.length > 600) perf.gaps.shift();   // ~10 s at 60 fps
     }
     perf.last = frameAt; perf.n++;
-    // Inside rAF, before compositing, is the only moment the UI layer's buffer is still readable.
-    if (F._shotWanted && uiCanvas) {
-      F._shotWanted = false;
-      try { F._shot = uiCanvas.toDataURL('image/png'); } catch (e) { F._shot = 'ERR ' + ((e && e.message) || e); }
+    // With the render hook live, detection belongs after the game's draw: a sample here reads the
+    // buffer the renderer has already cleared, which is the bug this replaced. rAF keeps only the
+    // frame clock and re-tries the hook when the renderer was not reachable yet.
+    if (!F._postRender && (!F._hookTryAt || frameAt - F._hookTryAt > 1000)) {
+      F._hookTryAt = frameAt;
+      installPostRender();
     }
+    if (F._postRender) return;
+    takeShot();
     try { step(); } catch (e) { F.stats.errors++; L('error', { e: String((e && e.message) || e) }); }
   }
 
@@ -2165,6 +2444,10 @@ const SPECIES = [
     // A hidden tab is not a stall: the game is frozen by design, and the panel's hidden-tab rule
     // already pauses the clock. Only a visible window owes frames.
     if (document.visibilityState !== 'visible') return;
+    // A renderer the game replaced takes the hook with it; re-wrap a replaced one. A game that is
+    // simply not drawing stays a stall - falling back to rAF would read the cleared buffer and
+    // report a live scene as empty.
+    if (F._postRender && now() - (F._postAt || 0) > 1000) installPostRender();
     const age = F.lastTickAt ? now() - F.lastTickAt : 0;
     if (age <= STALL_MS) {
       if (F.stalled) { F.stalled = false; L('loop resumed', { after: Math.round(age) }); }
@@ -2342,6 +2625,44 @@ const SPECIES = [
       } else {
         F.dialBlinks = (F.dialBlinks || 0) + 1;   // a blink after a press is how a new spawn shows
       }
+      // A first press on a narrow or fast dial is the one with the least evidence behind it. The
+      // fit becomes reliable after a few frames; until then, skip the crossing and take the next
+      // one. One skipped revolution is cheap next to a miss, which subtracts the last gain and
+      // zeroes the streak. Wide/slow dials keep pressing immediately - their window forgives it.
+      if (F.pressesThisDial === 0 &&
+          (Number(s.width) < (F.opts.firstPressMaxWidthDeg || 60) ||
+           Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
+        const heldMs = t - (F.geoAt || t);
+        const stable = fitStable(s.fit, F.opts);
+        const giveUp = heldMs >= (F.opts.firstPressMaxWaitMs || 2500);
+        if (!stable && !giveUp) {
+          if (!F.geo._firstHeld) {
+            F.geo._firstHeld = true;
+            F.stats.firstPressHeld = (F.stats.firstPressHeld || 0) + 1;
+            L('first press held', {
+              width: Math.round(Number(s.width) || 0),
+              omega: s.omega == null ? null : Math.round(s.omega),
+              fitN: s.fit ? s.fit.n : 0,
+              fitSpan: s.fit ? Math.round(s.fit.span) : 0,
+              fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
+            });
+          }
+          F.planReason = 'first-fit';
+          cancelPend();
+          return;
+        }
+        if (!stable && giveUp && !F.geo._firstForced) {
+          F.geo._firstForced = true;
+          F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
+          L('first press forced', {
+            heldMs: Math.round(heldMs),
+            width: Math.round(Number(s.width) || 0),
+            omega: s.omega == null ? null : Math.round(s.omega),
+            fitN: s.fit ? s.fit.n : 0,
+            fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
+          });
+        }
+      }
       // Re-arm once the wedge has left the window: one rotation gets one press, and a new
       // triangle on the same dial is pressed on its next rotation. The earlier 'one press per
       // dial' rule assumed a press solved the fish; it does not - a fish is many triangles, so
@@ -2378,6 +2699,13 @@ const SPECIES = [
         F.attempt.pendingLoss = null;
         F.needsSeat = false;                                    // a dial means the cast took
         L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0 });
+        const dialW = Number(g.width) || 0;
+        if (dialW > 0) {
+          F.attempt.widthSum += dialW;
+          F.attempt.widthN += 1;
+          F.attempt.maxWidth = Math.max(F.attempt.maxWidth || 0, dialW);
+          F.attempt.minWidth = F.attempt.minWidth ? Math.min(F.attempt.minWidth, dialW) : dialW;
+        }
         F.lastRung = 0;                                         // logged above: which rung did the casting
         if (!sameDial(F.lastGeo, g)) saveDialMemory(g);       // survives the next reload
         F.lastGeo = { cx: g.cx, cy: g.cy, R: g.R };              // the widget position for the next dial
@@ -2389,7 +2717,10 @@ const SPECIES = [
     // nothing at all happens and the run silently stops fishing (observed: 60+ s of no dial and no
     // press while frames kept advancing). The game's own fishing keybind casts whenever its cast
     // button is visible and is ignored while chat has focus, so it is a safe fallback.
-    if (F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
+    // ... but never while the session holds the core for a seat. The retry would cast, the prompt
+    // would vanish, and only the prompt can lift the hold - a deadlock. `lastCastTry` is refreshed
+    // when the hold clears, so the retry cannot fire on the first frame after a Resume.
+    if (!F.castHold && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
       F.lastCastTry = t;
       F.stats.castRetries = (F.stats.castRetries || 0) + 1;
       const tries = (F.stallRetry = (F.stallRetry || 0) + 1);
@@ -2431,6 +2762,8 @@ const SPECIES = [
     F.attempt = {
       n: F.stats.attempts + 1, startedAt: t, touched: t,
       presses: 0, dials: 0, skipped: 0, maxOmega: 0,
+      pressAccepted: 0, pressRejected: 0, dialHits: 0, dialMisses: 0,
+      widthSum: 0, widthN: 0, maxWidth: 0, minWidth: 0,
       arm: name, armCfg: cfg,
     };
     F.armCfg = cfg;
@@ -2450,9 +2783,31 @@ const SPECIES = [
     F.stats[key]++;
     // wins/losses stay in the stats object because the HUD and older logs read them.
     F.stats.wins = F.stats.caught; F.stats.losses = F.stats.lost;
+    a.avgWidth = a.widthN ? +(a.widthSum / a.widthN).toFixed(1) : null;
+    a.widthBand = widthBand(a.avgWidth);
+    a.pressAccepted = a.pressAccepted || 0;
+    a.pressRejected = a.pressRejected || 0;
+    a.dialHits = a.dialHits || 0;
+    a.dialMisses = a.dialMisses || 0;
+    a.pressHitRate = a.pressAccepted + a.pressRejected
+      ? +(a.pressAccepted / (a.pressAccepted + a.pressRejected)).toFixed(3) : null;
+    a.dialHitRate = a.dialHits + a.dialMisses
+      ? +(a.dialHits / (a.dialHits + a.dialMisses)).toFixed(3) : null;
     const band = omegaBand(a.maxOmega || null);
     const b = F.bands[band] || (F.bands[band] = { band, attempts: 0, caught: 0, lost: 0, presses: 0 });
     b.attempts++; b[key]++; b.presses += a.presses;
+    const wb = F.widths[a.widthBand] || (F.widths[a.widthBand] = { band: a.widthBand, attempts: 0, caught: 0, lost: 0, presses: 0, accepted: 0, rejected: 0, dialHits: 0, dialMisses: 0 });
+    wb.attempts++; wb[key]++; wb.presses += a.presses;
+    wb.accepted += a.pressAccepted; wb.rejected += a.pressRejected;
+    wb.dialHits += a.dialHits; wb.dialMisses += a.dialMisses;
+    // Rarity is only known when the card parsed. That is still enough to ask "how hard are the
+    // legendary/secret fish that DO land", which is the calibration question for the narrow bands.
+    if (verdict === 'caught' && a.rarity) {
+      const r = F.rarities[a.rarity] || (F.rarities[a.rarity] = { rarity: a.rarity, caught: 0, presses: 0, widthSum: 0, widthN: 0 });
+      r.caught++;
+      r.presses += a.presses;
+      if (a.avgWidth != null) { r.widthSum += a.avgWidth; r.widthN += 1; }
+    }
     if (a.arm) {
       const c = F.arms[a.arm] || (F.arms[a.arm] = { arm: a.arm, attempts: 0, caught: 0, lost: 0, presses: 0, dials: 0 });
       c.attempts++; c[key]++; c.presses += a.presses; c.dials += a.dials;
@@ -2461,7 +2816,8 @@ const SPECIES = [
     while (F.attempts.length > 200) F.attempts.shift();
     L(verdict === 'caught' ? 'attempt caught' : 'attempt lost', {
       n: a.n, ms: a.ms, presses: a.presses, dials: a.dials, skipped: a.skipped,
-      arm: a.arm, band, why: a.why, species: a.species || null,
+      arm: a.arm, band, width: a.avgWidth, widthBand: a.widthBand, why: a.why,
+      species: a.species || null, rarity: a.rarity || null,
     });
     return a;
   }
@@ -2477,6 +2833,7 @@ const SPECIES = [
       running: !!F.running,
       paused: !!F.paused,
       stalled: !!F.stalled,
+      postRender: !!F._postRender,
       lastTickAgoMs: F.lastTickAt ? Math.round(now() - F.lastTickAt) : null,
       catchCount: F.catches ? F.catches.length : 0,
       hidden: !!F.hidden,
@@ -2489,9 +2846,11 @@ const SPECIES = [
         attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
         presses: s.presses || 0, shapeHits: s.shapeHits || 0,
         pressAccepted: s.pressAccepted || 0, pressRejected: s.pressRejected || 0,
+        firstPressHeld: s.firstPressHeld || 0, firstPressForced: s.firstPressForced || 0,
         pressAcceptRate: s.pressAccepted + s.pressRejected
           ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
         openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses } : null,
+        byWidth: F.widthReport(),
       },
       pressesThisDial: F.pressesThisDial,
       pendingMs: F.pend ? Math.round(F.pend.at - now()) : null,
@@ -2540,6 +2899,87 @@ const SPECIES = [
     });
   };
 
+  /** Fish attempts caught/lost per dial-width band - the rare-dial signal speed bands hide. */
+  F.widthReport = function () {
+    const order = ['narrow', 'mid', 'wide', 'full', 'unknown'];
+    return order.filter((k) => F.widths && F.widths[k]).map((k) => {
+      const b = F.widths[k];
+      const accepted = b.accepted || 0;
+      const rejected = b.rejected || 0;
+      const dialHits = b.dialHits || 0;
+      const dialMisses = b.dialMisses || 0;
+      return { band: b.band, attempts: b.attempts, caught: b.caught, lost: b.lost, presses: b.presses,
+        accepted, rejected,
+        pressHitRate: accepted + rejected ? +(accepted / (accepted + rejected)).toFixed(3) : null,
+        dialHits, dialMisses,
+        dialHitRate: dialHits + dialMisses ? +(dialHits / (dialHits + dialMisses)).toFixed(3) : null,
+        pressesPerAttempt: b.attempts ? +(b.presses / b.attempts).toFixed(2) : null,
+        catchRate: b.attempts ? +(b.caught / b.attempts).toFixed(3) : null };
+    });
+  };
+
+  /**
+   * Caught fish per rarity, with the average dial width and presses it took. Losses cannot be
+   * assigned a rarity (no card parsed), so this is a "what landed" report, not a fake catch rate.
+   */
+  F.rarityReport = function () {
+    const tierRank = (r) => {
+      const i = TIER_ORDER.indexOf(r);
+      return i < 0 ? TIER_ORDER.length : i;
+    };
+    return Object.keys(F.rarities || {}).map((k) => {
+      const r = F.rarities[k];
+      return { rarity: r.rarity, caught: r.caught, presses: r.presses,
+        avgWidth: r.widthN ? +(r.widthSum / r.widthN).toFixed(1) : null,
+        pressesPerCatch: r.caught ? +(r.presses / r.caught).toFixed(2) : null };
+    }).sort((a, b) => tierRank(a.rarity) - tierRank(b.rarity) || (a.rarity < b.rarity ? -1 : 1));
+  };
+
+  /**
+   * The calibration surface: the live timing knobs plus the reports that say where fish are lost.
+   * Call with no argument to read it; F.tune({ marginDeg: 6 }) applies a knob to the live run.
+   * This is deliberately console-only: the panel's one-button flow must not silently re-time itself.
+   */
+  F.calibration = function () {
+    const opts = F.opts || {};
+    const widths = F.widthReport();
+    const narrow = widths.filter((w) => w.band === 'narrow' && w.attempts >= 5)[0] || null;
+    return {
+      opts: {
+        trigger: opts.trigger, pressWith: opts.pressWith, leadMs: opts.leadMs,
+        marginDeg: opts.marginDeg, midDeg: opts.midDeg, biasMs: opts.biasMs,
+        firstPressMinN: opts.firstPressMinN, firstPressMinSpanMs: opts.firstPressMinSpanMs,
+        firstPressMaxRms: opts.firstPressMaxRms, firstPressMaxWaitMs: opts.firstPressMaxWaitMs,
+        insideNowMs: opts.insideNowMs,
+        firstPressMaxWidthDeg: opts.firstPressMaxWidthDeg, firstPressFastOmega: opts.firstPressFastOmega,
+      },
+      press: {
+        accepted: (F.stats && F.stats.pressAccepted) || 0,
+        rejected: (F.stats && F.stats.pressRejected) || 0,
+        rate: F.accuracy ? F.accuracy().pressAcceptRate : null,
+      },
+      byWidth: widths,
+      byBand: F.bandReport(),
+      byRarity: F.rarityReport(),
+      note: narrow && narrow.catchRate != null && narrow.catchRate < 0.5
+        ? 'narrow dials are losing more than half their fish; inspect marginDeg and leadMs before the general settings'
+        : 'read byWidth/byBand after a session; a band needs five attempts before its rate means anything',
+    };
+  };
+
+  /** Apply numeric timing knobs to the live run. Returns the same report as calibration(). */
+  F.tune = function (patch) {
+    if (!patch || typeof patch !== 'object') return F.calibration();
+    if (!F.opts) F.opts = {};
+    ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs',
+      'firstPressMinN', 'firstPressMinSpanMs', 'firstPressMaxRms', 'firstPressMaxWaitMs',
+      'firstPressMaxWidthDeg', 'firstPressFastOmega', 'insideNowMs'].forEach((k) => {
+      const n = Number(patch[k]);
+      if (patch[k] != null && isFinite(n)) F.opts[k] = n;
+    });
+    return F.calibration();
+  };
+
   /**
    * The honesty layer. A "win" here means a parsed catch card, nothing else: shape hits are
    * counted separately because they were once mistaken for wins and produced a 100% hit rate
@@ -2559,7 +2999,19 @@ const SPECIES = [
         ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
       openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses, dials: F.attempt.dials, ms: Math.round(now() - F.attempt.startedAt) } : null,
       shapeHits: s.shapeHits || 0,
+      // The last ten fish, each with its own denominator: presses the game answered with a new
+      // triangle (accepted = inside the wedge), presses it did not, and dials that ended on a hit
+      // or timed out instead. A narrow band with no accepted presses is the complaint, in numbers.
+      recent: (F.attempts || []).slice(-10).map((a) => ({
+        n: a.n, verdict: a.verdict, why: a.why || null,
+        width: a.avgWidth, band: a.widthBand,
+        presses: a.presses, accepted: a.pressAccepted || 0, rejected: a.pressRejected || 0,
+        pressHitRate: a.pressHitRate == null ? null : a.pressHitRate,
+        dials: a.dials, dialHits: a.dialHits || 0, dialMisses: a.dialMisses || 0,
+        species: a.species || null, rarity: a.rarity || null,
+      })),
       byBand: F.bandReport(), byArm: F.armReport(),
+      byWidth: F.widthReport(), byRarity: F.rarityReport(),
       oracle: 'parsed catch text closes a fish attempt; a press alone is never a win or a loss',
     };
   };
@@ -2598,7 +3050,8 @@ const SPECIES = [
   F.report = function () {
     return {
       version: F.version, accuracy: F.accuracy(), stats: F.stats, opts: F.opts,
-      sweep: F.sweepReport(), bands: F.bandReport(), outcomes: F.outcomes.slice(-60),
+      sweep: F.sweepReport(), bands: F.bandReport(), widths: F.widthReport(),
+      rarities: F.rarityReport(), calibration: F.calibration(), outcomes: F.outcomes.slice(-60),
       attempts: (F.attempts || []).slice(-40),
       log: F.events.slice(-250),
       catchLog: F.log(),
@@ -2606,7 +3059,7 @@ const SPECIES = [
   };
 
   /** The timing maths, exposed so a live console can re-plan against a captured dial. */
-  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, cssPoint };
+  F.timing = { wrap180, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, cssPoint };
 
   /** The embedded species table, for a console that wants to check a rarity by hand. */
   F.catalogue = { count: SPECIES.length, tiers: TIER_ORDER.slice(), info: speciesInfo, describe: describeCatch };

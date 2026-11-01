@@ -53,27 +53,30 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 
 ## The panel
 
-- **Session / Cooldown / Daily cap / Clock window** - how long it fishes, how long it rests after, how much game time it may spend per day, and an optional time-of-day window.
-- **Hidden stop / Chain runs / Profile** - how long the page may stay hidden before the session ends, whether the next session starts itself after its rest, and which catch history this account uses.
+- **Session / Cooldown / Daily time cap / Clock window** - how long it fishes, how long it rests after, how much game time it may spend per day, and an optional time-of-day window. Every field can be typed (`90`, `1h 30`, `21:30`) as well as stepped; the cap is **fishing time**, not a fish limit, and 24 h is reachable.
+- **Pause / Resume, Stop, Start now** - Pause holds the current session (no cooldown, no lost time); Stop ends it and starts the rest. A daily-cap or clock-window stop does not start a cooldown, and **Start now** skips the self-imposed rest after a confirmation.
+- **Hidden stop / Chain runs / Resume after reload / POST catches / Profile** - page-hidden limit, automatic next session after a rest, opt-in reload resume, opt-in local CSV POST, and which catch history this account uses. The catch-history line has an **all/today** toggle and a confirm-guarded reset for the current profile.
 - **Cozier popup** - hides the in-session Cozier upsell. Cosmetic only: a free account still cannot fish in a focus session.
 - **Perf line** - fps, frame p50/p95/worst and per-detector ms/s, the same numbers as `__fish.perf()`.
 - **left / catches / presses / today** - session time remaining, catches this session, dial presses, game time spent today against the cap.
-- **Rarity strip** - catches per rarity from the local ledger (`COM UNC RAR EPI LEG SEC HAL CHR`), plus `UNK` when the card printed no tier and the species is not in the built-in catalogue.
+- **Catch history** - all-time and today totals together, lifetime shiny/golden, today's shiny/golden, and how many day buckets are kept (60 max). The strip can show all-time or **today**; **UNK** appears when the card printed no tier and the species is not in the built-in catalogue.
 - **Last catch** - species, weight, rarity (a leading `~` means the rarity came from the built-in catalogue because the card printed none), and the local time.
+- **acc / perf** - fish attempts caught vs attempts, plus the narrow-dial slice; click the block for `__fish.calibration()` and the full frame report.
 - Drag by the header to move it; **-** collapses it to a 48 px pill, click the pill to restore it.
 
 ## What it actually does
 
-- **Finds prompts in pixels.** The prompts and the reel dial are drawn on the game's UI canvas, so they are located by reading that layer inside `requestAnimationFrame` and matching shapes.
-- **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, so fast and slow spins both land inside the arc.
+- **Finds prompts in pixels.** The game merges the CAST!/REEL! prompts and the reel dial into its WebGL renderer canvas, so detection runs from a wrapper around the renderer's `render()` and reads the frame the game just painted; a `requestAnimationFrame` read sees a cleared buffer.
+- **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, and containment takes an already-open window (`inside-now`) rather than waiting almost a full rotation when the pin is past the midpoint.
+- **Holds the first press on a hard dial.** On a narrow (<60 deg) or fast (>=300 deg/s) dial, the first press waits up to 2.5 s for a stable spin fit instead of firing on a noisy estimate.
 - **Remembers the dial.** The reel widget's circle is saved per canvas size and tried before any search. If the hint is wrong, one whole-surface pass finds the green wedge and recovers the lock - a fresh run no longer needs a prompt to find its first dial.
 - **Scores fish, not clicks.** One fish is many presses (the game shows a level bar), so the unit is the *fish attempt*: it opens at the first dial lock and closes at a parsed catch or when the cast prompt returns. A win is only counted when the catch card's text parses to a species.
-- **Keeps a ledger.** `localStorage` key `autofish:log:v1:<profile>`: per-species count and best weight, per rarity and per day totals, shiny/golden variants, and the names of any species the catalogue did not recognise. One profile per account, so two accounts in one browser never share a history.
-- **Pauses honestly.** A hidden tab pauses the clock, and so does standing up; the session resumes when a prompt comes back and gives up after 30 minutes unseated.
+- **Keeps a ledger.** `localStorage` key `autofish:log:v1:<profile>`: per-species count and best weight, per rarity and per day totals (including that day's shiny/golden), 60 day buckets, and the names of any species the catalogue did not recognise. The profile owns its own daily budget (`autofish:budget:v1:<profile>`), so two accounts in one browser never share a history or a cap. A reset button clears the current profile's history after a confirmation; resetting does not delete the profile itself.
+- **Pauses honestly.** A hidden tab pauses the clock, and so does standing up; the session resumes when a prompt comes back and gives up after 30 minutes unseated. The panel's Pause is a separate hold: it does not end the session or start the cooldown.
 
 ## How well does it fish?
 
-The shipped core - 3.8.8, unchanged through 3.8.9, 3.8.10 and 3.8.11 - closed a 75-minute seated session at **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise.
+The current 3.9.8 build adds post-render detection, the stable first-press gate and containment's `inside-now` press. The broad baseline is still the 3.8.8 75-minute seated session: **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise. A short 3.9.8 field check (7 attempts) caught **7/7** with **37/37 presses accepted**, **14/14 dials closed** and 0 lost; treat it as a regression check, not a new catch-rate estimate.
 
 Per-press timing is scored by whether the game spawned a new triangle (a press it acted on), not by whether the dial closed - only the finishing press can do that. Read `__fish.status().accuracy.pressAcceptRate`.
 
@@ -116,23 +119,27 @@ In the browser console on app.lofi.town:
 ```js
 __fish.version     // which build this tab is running (stamped from package.json)
 __fish.status()    // running, dials, presses, per-band and per-arm accuracy
-__fish.log()       // the catch ledger summary
+__fish.log()       // totals, all-time and today by rarity, today's shiny/golden
 __fish.logCsv()    // the same ledger as CSV
+__fish.logReset()  // clear the current profile's ledger (confirm in the panel)
 __fish.logProfile()        // the catch history in use
 __fish.logProfiles()       // every profile this browser has
+__fish.accuracy()  // attempts, catch rate, by speed band, by dial width, by caught rarity
+__fish.calibration()       // live timing knobs + width/rarity reports + a narrow-dial hint
+__fish.tune({ marginDeg: 5 })  // apply numeric timing knobs to the live run
 __fish.perf()      // fps, p50/p95 gap, and per-detector ms/call, ms/s and share
 __fish.opts        // press timing, windows, retry ladders (live-editable)
 ```
 
 `__fish.perf()` is the measurement any tuning has to come from: `rates.<detector>.share` is the
 fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`).
-It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.8.11`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
+It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.9.8`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
 
 On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
 
 ## Optional: the server path
 
-Only needed if you want session records on disk and the `/sessions` and `/diag` endpoints.
+Only needed if you want session records on disk and the `/sessions` and `/diag` endpoints. Catches are sent to the local CSV only when **POST catches** is on (off by default; the local ledger always works), and session rows are mirrored only for the `default` profile because `sessions.csv` has no profile column.
 
 ```bash
 ./run.sh    # picks a free port, prints the install URL and the bookmarklet
@@ -143,7 +150,7 @@ Open the printed URL, then drag the bookmarklet to the bookmarks bar (or run it 
 ## Development
 
 ```bash
-node --test                # 182 tests; note: never "node --test tests/"
+node --test                # 222 tests; note: never "node --test tests/"
 node build-userscript.js   # rebuild dist/ after editing any browser file
 ```
 

@@ -61,8 +61,8 @@ test('the block exports the catalogue and the ledger helpers', () => {
   assert.equal(T.LOG_KEY, 'autofish:log:v1');
 });
 
-test('the catalogue is embedded once: 181 fish across the eight rarity tiers', () => {
-  assert.equal(T.SPECIES.length, 181);
+test('the catalogue is embedded once: 232 fish across the eight rarity tiers', () => {
+  assert.equal(T.SPECIES.length, 232);
   assert.deepEqual(T.TIER_ORDER, ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas']);
   const names = new Set();
   const perTier = {};
@@ -79,8 +79,27 @@ test('the catalogue is embedded once: 181 fish across the eight rarity tiers', (
     perTier[tier] = (perTier[tier] || 0) + 1;
   }
   assert.deepEqual(perTier, {
-    Common: 33, Uncommon: 31, Rare: 28, Epic: 35, Legendary: 33, Secret: 9, Halloween: 6, Christmas: 6
+    Common: 43, Uncommon: 41, Rare: 39, Epic: 45, Legendary: 42, Secret: 10, Halloween: 6, Christmas: 6
   });
+});
+
+test('the Volcanic zone is in the catalogue, not a pile of Unknowns', () => {
+  // The old 181-row table was exactly River + Swamp + Arctic; all 51 Volcanic species were
+  // absent, so every common Volcanic catch fell back to Unknown. These cover the zone's six
+  // tiers, including the name whose ʻokina used to break the card parser.
+  const volcanic = [
+    ['Boops', 'Common'], ['Bartlett\'s Anthias', 'Common'],
+    ['Yellow Tang', 'Uncommon'], ['Moon Jellyfish', 'Uncommon'],
+    ['Vulcanoctopus', 'Rare'], ['Pompeii Worm', 'Rare'],
+    ['Great Barracuda', 'Epic'], ['Yeti Crab', 'Epic'],
+    ['Moʻo', 'Legendary'], ['Giant Clam', 'Legendary'],
+    ['Flowerhorn Cichlid', 'Secret'],
+  ];
+  for (const [name, rarity] of volcanic) {
+    const info = T.speciesInfo(name);
+    assert.equal(info.known, true, name + ' must be in the catalogue');
+    assert.equal(info.rarity, rarity, name);
+  }
 });
 
 test('the seasonal table is part of the catalogue, not an Unknown', () => {
@@ -212,6 +231,20 @@ test('logSummary ranks the top species and fills all eight tiers', () => {
   assert.equal(s.today.n, 3);
   assert.equal(s.days, 1);
   assert.equal(s.last.species, 'Tuna');
+});
+
+test('a day bucket counts shiny and golden variants, not only species', () => {
+  const book = T.emptyLog(1000);
+  T.addToLog(book, catchOf('Shiny Blobfish', 'Rare', '2 kg'), 2000);
+  T.addToLog(book, catchOf('Golden Blobfish', 'Rare', '2 kg'), 2000);
+  T.addToLog(book, catchOf('Blobfish', 'Rare', '2 kg'), 2000);
+  const s = T.logSummary(book, 2000);
+  assert.equal(s.today.n, 3);
+  assert.equal(s.today.shiny, 1);
+  assert.equal(s.today.golden, 1);
+  assert.equal(s.shiny, 1, 'the all-time variant totals are unchanged');
+  assert.equal(s.golden, 1);
+  assert.equal(s.since, 1000, 'the profile knows when its history started');
 });
 
 test('logSummary of an empty ledger is a zeroed, still-renderable shape', () => {
