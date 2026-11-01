@@ -1,7 +1,8 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.8.11) - presses land, fish are caught, and catch cards are auto-dismissed so it
-fishes continuously.** Read [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
+Status: **WORKING (3.9.8) - post-render detection over the merged WebGL layer, the stable first-press
+gate, and containment's `inside-now` press. Live 3.9.8 sample: 7/7 caught, 37/37 presses accepted,
+14/14 dials closed, 0 lost.** Read [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
 before trusting it for real fishing.
 
 Note: **coins are not a valid success signal** — the counter does not move without the Cozy

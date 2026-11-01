@@ -66,8 +66,9 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 
 ## What it actually does
 
-- **Finds prompts in pixels.** The prompts and the reel dial are drawn on the game's UI canvas, so they are located by reading that layer inside `requestAnimationFrame` and matching shapes.
-- **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, so fast and slow spins both land inside the arc.
+- **Finds prompts in pixels.** The game merges the CAST!/REEL! prompts and the reel dial into its WebGL renderer canvas, so detection runs from a wrapper around the renderer's `render()` and reads the frame the game just painted; a `requestAnimationFrame` read sees a cleared buffer.
+- **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, and containment takes an already-open window (`inside-now`) rather than waiting almost a full rotation when the pin is past the midpoint.
+- **Holds the first press on a hard dial.** On a narrow (<60 deg) or fast (>=300 deg/s) dial, the first press waits up to 2.5 s for a stable spin fit instead of firing on a noisy estimate.
 - **Remembers the dial.** The reel widget's circle is saved per canvas size and tried before any search. If the hint is wrong, one whole-surface pass finds the green wedge and recovers the lock - a fresh run no longer needs a prompt to find its first dial.
 - **Scores fish, not clicks.** One fish is many presses (the game shows a level bar), so the unit is the *fish attempt*: it opens at the first dial lock and closes at a parsed catch or when the cast prompt returns. A win is only counted when the catch card's text parses to a species.
 - **Keeps a ledger.** `localStorage` key `autofish:log:v1:<profile>`: per-species count and best weight, per rarity and per day totals (including that day's shiny/golden), 60 day buckets, and the names of any species the catalogue did not recognise. The profile owns its own daily budget (`autofish:budget:v1:<profile>`), so two accounts in one browser never share a history or a cap. A reset button clears the current profile's history after a confirmation; resetting does not delete the profile itself.
@@ -75,7 +76,7 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 
 ## How well does it fish?
 
-The shipped core - 3.8.8, carried through 3.9.0's telemetry and UX work - closed a 75-minute seated session at **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise.
+The current 3.9.8 build adds post-render detection, the stable first-press gate and containment's `inside-now` press. The broad baseline is still the 3.8.8 75-minute seated session: **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise. A short 3.9.8 field check (7 attempts) caught **7/7** with **37/37 presses accepted**, **14/14 dials closed** and 0 lost; treat it as a regression check, not a new catch-rate estimate.
 
 Per-press timing is scored by whether the game spawned a new triangle (a press it acted on), not by whether the dial closed - only the finishing press can do that. Read `__fish.status().accuracy.pressAcceptRate`.
 
@@ -132,7 +133,7 @@ __fish.opts        // press timing, windows, retry ladders (live-editable)
 
 `__fish.perf()` is the measurement any tuning has to come from: `rates.<detector>.share` is the
 fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`).
-It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.9.0`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
+It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.9.8`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
 
 On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
 
@@ -149,7 +150,7 @@ Open the printed URL, then drag the bookmarklet to the bookmarks bar (or run it 
 ## Development
 
 ```bash
-node --test                # 201 tests; note: never "node --test tests/"
+node --test                # 222 tests; note: never "node --test tests/"
 node build-userscript.js   # rebuild dist/ after editing any browser file
 ```
 

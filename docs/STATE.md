@@ -1,13 +1,13 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.7 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.8 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
-- **Target Release / Deadline**: 3.9.7 release / not tracked
+- **Target Release / Deadline**: 3.9.8 release / not tracked
 - **Current Working Branch**: `audit/autofish-3.9` (this worktree); `main` is the integration branch
 - **Last Updated**: 2026-11-02
 - **Runtime**: Node v26.13.0, no dependencies, no bundler
@@ -28,7 +28,8 @@
   from 83 ms to ~1 ms a call; fishing was found to be seat-based, so a missing cast prompt is now
   named, the session clock pauses while unseated, and the pause honours the clock window and the
   daily cap, plus the 2026-11-02 field-audit fixes; 3.9.6 holds the first press on a narrow or fast
-  dial until the spin-rate fit is stable; 3.9.7 moves detection to a post-render renderer hook. 221 tests.
+  dial until the spin-rate fit is stable; 3.9.7 moves detection to a post-render renderer hook; 3.9.8
+  presses containment's already-open window (`inside-now`) instead of waiting a rotation. 222 tests.
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
   (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
 - [x] **Milestone 3** — self-updating distribution: a private repository's release assets answer an
