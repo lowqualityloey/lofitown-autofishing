@@ -16,6 +16,8 @@
  *   - it requires the source release's asset to be byte-identical to that file;
  *   - it uploads those verified bytes to the mirror, then downloads the mirror asset again
  *     anonymously - the way Tampermonkey does - and requires the same hash;
+ *   - every probe carries a unique query key, because GitHub caches the 404 from the pre-upload
+ *     probe and would otherwise keep answering 404 after the asset exists;
  *   - while the tag is HEAD it rebuilds in memory too, so a stale committed dist cannot ship.
  *
  * The mirror repository and asset name come from build-userscript.js's UPDATE_URL, so the place
@@ -140,9 +142,19 @@ function publishMirror(repo, tag, asset, bytes, source) {
   }
 }
 
+/**
+ * GitHub's release-download route caches a 404 for a tag that does not exist yet. This script probes
+ * before publishing, so reusing that URL after upload can keep reading the cached miss. The query
+ * key is ignored by the route but keys a fresh cache entry, so every probe sees current state.
+ */
+function cacheBusted(url) {
+  const separator = url.includes('?') ? '&' : '?';
+  return url + separator + 'cb=' + crypto.randomBytes(8).toString('hex');
+}
+
 /** Anonymous on purpose: no gh, no token - the way a Tampermonkey update check arrives. */
 async function fetchBytes(url) {
-  const res = await fetch(url, {
+  const res = await fetch(cacheBusted(url), {
     redirect: 'follow',
     headers: { 'user-agent': 'autofish-release', 'cache-control': 'no-cache' },
   });
@@ -293,4 +305,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { mirrorFromUpdateUrl };
+module.exports = { mirrorFromUpdateUrl, expectPublic };
