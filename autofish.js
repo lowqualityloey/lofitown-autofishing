@@ -573,6 +573,83 @@
   }
   // </doctor-core>
 
+  /* ---- run statistics --------------------------------------------------
+   * The numbers a long session has to produce: a catch rate with an interval, the press acceptance,
+   * and the per-band split. Pure, so tests can check them against intervals this repo has already
+   * published instead of trusting the arithmetic that quotes them.
+   */
+  // <stats-core>
+  /**
+   * Wilson score interval for k successes out of n. Returns null for an empty sample rather than a
+   * NaN that would make the exported JSON invalid.
+   */
+  function wilson(k, n, z) {
+    const kk = Number(k), nn = Number(n);
+    if (!(nn > 0) || !(kk >= 0) || kk > nn) return null;
+    const zz = z == null ? 1.96 : Number(z);
+    const p = kk / nn;
+    const denom = 1 + (zz * zz) / nn;
+    const centre = p + (zz * zz) / (2 * nn);
+    const margin = zz * Math.sqrt((p * (1 - p)) / nn + (zz * zz) / (4 * nn * nn));
+    return { p, lo: (centre - margin) / denom, hi: (centre + margin) / denom };
+  }
+
+  /**
+   * One summary of a run's attempts. The attempt is the denominator: a press is not a fish, so the
+   * rate is caught / attempts and the press numbers are reported beside it, never mixed in.
+   * attempts: [{ verdict, band, widthBand, presses, pressAccepted, pressRejected, dials,
+   *              avgWidth, ms, startAt }]
+   */
+  function runSummary(attempts, o) {
+    const list = Array.isArray(attempts) ? attempts : [];
+    const cfg = o || {};
+    const widths = {}, bands = {};
+    let n = 0, caught = 0, lost = 0, presses = 0, accepted = 0, rejected = 0, dials = 0, ms = 0;
+    let widthSum = 0, widthN = 0, firstAt = null, lastAt = null;
+    for (const a of list) {
+      if (!a) continue;
+      n++;
+      const hit = a.verdict === 'caught';
+      if (hit) caught++;
+      else if (a.verdict === 'lost') lost++;
+      presses += a.presses || 0;
+      accepted += a.pressAccepted || 0;
+      rejected += a.pressRejected || 0;
+      dials += a.dials || 0;
+      ms += a.ms || 0;
+      if (a.avgWidth != null && isFinite(a.avgWidth)) { widthSum += a.avgWidth; widthN++; }
+      if (a.startAt != null) {
+        if (firstAt == null || a.startAt < firstAt) firstAt = a.startAt;
+        if (lastAt == null || a.startAt > lastAt) lastAt = a.startAt;
+      }
+      const wb = String(a.widthBand || 'unknown');
+      const w = widths[wb] || (widths[wb] = { band: wb, attempts: 0, caught: 0, lost: 0 });
+      w.attempts++; if (hit) w.caught++; else if (a.verdict === 'lost') w.lost++;
+      const sb = String(a.band || 'unknown');
+      const b = bands[sb] || (bands[sb] = { band: sb, attempts: 0, caught: 0, lost: 0 });
+      b.attempts++; if (hit) b.caught++; else if (a.verdict === 'lost') b.lost++;
+    }
+    const pressN = accepted + rejected;
+    return {
+      attempts: n, caught, lost,
+      catchRate: n ? caught / n : null,
+      catchCi: wilson(caught, n),
+      presses, accepted, rejected,
+      pressAcceptRate: pressN ? accepted / pressN : null,
+      pressCi: wilson(accepted, pressN),
+      pressesPerAttempt: n ? +(presses / n).toFixed(2) : null,
+      pressesPerCatch: caught ? +(presses / caught).toFixed(2) : null,
+      dials,
+      meanAttemptMs: n ? Math.round(ms / n) : null,
+      meanWidth: widthN ? +(widthSum / widthN).toFixed(1) : null,
+      widths: Object.keys(widths).sort().map((k) => widths[k]),
+      bands: Object.keys(bands).sort().map((k) => bands[k]),
+      firstAt, lastAt,
+      cut: cfg.cut || null,
+    };
+  }
+  // </stats-core>
+
   /* ---- coordinate frame ------------------------------------------------
    * Everything the detectors see is in the UI canvas's backing-store pixels. Everything the DOM
    * does - elementFromPoint, PointerEvent, the panel's exclusion rect - is in CSS pixels. Those
@@ -3193,6 +3270,7 @@ const SPECIES = [
       const c = F.arms[a.arm] || (F.arms[a.arm] = { arm: a.arm, attempts: 0, caught: 0, lost: 0, presses: 0, dials: 0 });
       c.attempts++; c[key]++; c.presses += a.presses; c.dials += a.dials;
     }
+    saveRunRow(a);
     F.attempts.push(a);
     while (F.attempts.length > 200) F.attempts.shift();
     L(verdict === 'caught' ? 'attempt caught' : 'attempt lost', {
@@ -3461,6 +3539,104 @@ const SPECIES = [
   F.logReset = function () {
     saveLedger(emptyLog());
     return true;
+  };
+
+  /* ---- the run store ---------------------------------------------------
+   * Attempts used to live only in the in-memory ring, so one reload or one lost seat destroyed a
+   * long session's sample. They now persist per profile - the same convention as the ledger and the
+   * budget - and exportRun() merges the store with the live ring.
+   */
+  const RUN_KEY = 'autofish:run:v1';
+  const RUN_PREFIX = RUN_KEY + ':';
+  const RUN_CAP = 250;
+
+  function runStoreKey() { return RUN_PREFIX + logProfile; }
+
+  /** The compact row both the store and the export use; one shape, one place. */
+  function runRowOf(a) {
+    return {
+      n: a.n, v: a.verdict || null, why: a.why || null, ms: a.ms || 0,
+      p: a.presses || 0, pa: a.pressAccepted || 0, pr: a.pressRejected || 0,
+      d: a.dials || 0, w: (a.avgWidth != null && isFinite(a.avgWidth)) ? +a.avgWidth.toFixed(1) : null,
+      wb: a.widthBand || null, b: a.band || null,
+      sp: a.species || null, r: a.rarity || null,
+      t: a.startedAt != null ? Math.round(a.startedAt) : null,
+    };
+  }
+
+  function loadRunRows() {
+    try {
+      const raw = localStorage.getItem(runStoreKey());
+      if (!raw) return [];
+      const rows = JSON.parse(raw);
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) { return []; }
+  }
+
+  /**
+   * Persist one resolved attempt. Never throws: the page is mid-render inside the game's own frame,
+   * and a storage failure must not take the fishing loop down with it.
+   */
+  function saveRunRow(a) {
+    try {
+      const rows = loadRunRows();
+      rows.push(runRowOf(a));
+      while (rows.length > RUN_CAP) rows.shift();
+      localStorage.setItem(runStoreKey(), JSON.stringify(rows));
+      F.runStoreError = null;
+    } catch (e) {
+      F.runStoreError = String((e && e.message) || e);
+    }
+  }
+
+  /**
+   * One blob for a finished run: every attempt, the interval around the rate, the environment it ran
+   * in, and what the bot thought of itself at the end. Rendering it in a shell means the numbers in
+   * README/STATE are recomputed from attempts instead of transcribed by hand.
+   *
+   *   copy(__fish.exportRun())      // JSON, paste it into the notebook review
+   *   __fish.exportRun({ reset: true })   // export, then clear the stored run
+   */
+  F.exportRun = function (opts) {
+    const o = opts || {};
+    const rows = loadRunRows().concat((F.attempts || []).map(runRowOf));
+    const seen = {}, merged = [];
+    for (const r of rows) {
+      if (!r || r.n == null) continue;
+      const key = r.n + ':' + (r.t || 0);
+      if (seen[key]) continue;
+      seen[key] = 1;
+      merged.push(r);
+    }
+    merged.sort((a, b) => (a.t || 0) - (b.t || 0) || (a.n || 0) - (b.n || 0));
+    const asAttempts = merged.map((r) => ({
+      verdict: r.v, band: r.b, widthBand: r.wb, presses: r.p,
+      pressAccepted: r.pa, pressRejected: r.pr, dials: r.d,
+      avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t,
+    }));
+    const p = F.perf();
+    const out = {
+      version: F.version,
+      exportedAt: new Date().toISOString(),
+      profile: logProfile,
+      stored: loadRunRows().length,
+      storeError: F.runStoreError || null,
+      startedAt: merged.length && merged[0].t ? new Date(merged[0].t).toISOString() : null,
+      endedAt: merged.length && merged[merged.length - 1].t ? new Date(merged[merged.length - 1].t).toISOString() : null,
+      run: runSummary(asAttempts, { cut: F.cutReason || null }),
+      perf: {
+        fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,
+        longtasks: p.longtasks, snapshot: p.snapshot, readback: p.readback, rates: p.rates,
+      },
+      doctor: F.doctor ? F.doctor() : null,
+      opts: F.opts,
+      attempts: merged,
+    };
+    if (o.reset) {
+      try { localStorage.removeItem(runStoreKey()); } catch (e) {}
+      F.attempts = [];
+    }
+    return JSON.stringify(out);
   };
 
   F.report = function () {
