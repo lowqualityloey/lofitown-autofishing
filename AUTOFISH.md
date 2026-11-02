@@ -1,8 +1,10 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.8) - post-render detection over the merged WebGL layer, the stable first-press
-gate, and containment's `inside-now` press. Live 3.9.8 sample: 7/7 caught, 37/37 presses accepted,
-14/14 dials closed, 0 lost.** Read [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
+Status: **WORKING (3.9.9) - post-render detection over the merged WebGL layer, the stable first-press
+gate, containment's `inside-now` press, and an allocation-free WebGL readback. Live 3.9.9 readback
+check: 138.5 fps with 0 long tasks while running (3.9.8: 105.2 fps with five ~250 ms GC stalls),
+1/1 caught with 5/5 presses accepted.** Read
+[the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
 before trusting it for real fishing.
 
 Note: **coins are not a valid success signal** — the counter does not move without the Cozy
@@ -2123,4 +2125,42 @@ with `firstPressHeld: 7`, `firstPressForced: 1`, and fitted spin rates up to **1
 planner's reason histogram recorded `inside-now` (and `planReason: 'inside-now'` was observed while a
 dial was open), so the early press fires in the game rather than only in the unit test. `dist/`
 rebuilt at 3.9.8.
+
+### 3.9.9: the readback reuses one WebGL buffer
+
+The page was pausing for a split second about once a second while fishing. The stalls were not the
+presses: a five-second sample while the bot ran showed five long tasks of 259-264 ms while normal
+frames stayed at 7 ms, and `__fish.perf()` reported a 280 ms worst frame. Pausing the bot made them
+disappear (142 fps, 0 long tasks).
+
+The cause was garbage collection from the canvas readbacks. In 5 s the detectors made **121
+`getImageData` calls allocating 40.4 MB** (bubble 294x205, card 365x405, dial 240x240, whole-surface
+420x420). The heap climbed ~12 MB/s while running and ~4 MB/s paused, and a major collection dropped
+it from ~170 MB to ~100 MB in the same window as the ~250 ms freezes.
+
+`readUI` now reads the renderer's own WebGL buffer with `gl.readPixels` into **one reused
+`Uint8Array`** (0.67 MB at 1179x821), flips the rows from GL's bottom-left origin in place, and hands
+the same buffer to the detectors. The 2D `drawImage`/`getImageData` path remains as the fallback for
+a surface with no WebGL context or a read the GL path refuses; three consecutive failures switch the
+surface to it for the session. `__fish.perf().readback` reports calls, path, MB transferred,
+allocated MB/s and the reused buffer size.
+
+**Verification (3.9.9, BrowserOS neo, 1179x821).** Same measurement before and after:
+
+| | 3.9.8 | 3.9.9 |
+| :--- | ---: | ---: |
+| fps, bot running | 105.2 (5 s) | **138.5 (10 s)** |
+| long tasks > 50 ms | **5**, max 264.5 ms | **0** |
+| worst frame | 264.5 ms | 34.7 ms |
+| heap peak | 186.5 MB | 172.7 MB |
+| heap, GC window | 145.9 -> 186.5 -> 102.0 MB | 152.2 -> 172.7 -> 128.6 MB, no stall |
+| readback path | 2D `getImageData` | 1,771 GL reads in 21 s, 0 2D, 0.67 MB buffer |
+
+The run also caught 1/1 fish with 5/5 presses accepted and 1/1 dials closed, so the flipped WebGL
+pixels still feed the same detectors. `node --test` passes (228 tests), including a row-flip check
+and guards that keep the GL path allocation-free and the 2D fallback reachable.
+
+The shared quarter-scale snapshot still allocates a fresh `getImageData` copy each tick (~2.4 MB/s
+in this window); that is the remaining garbage source, but it no longer produced a long task in a
+10 s running sample.
 

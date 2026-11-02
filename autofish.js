@@ -54,7 +54,7 @@
    * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
    * average cost of each detector, so a change can be justified by numbers rather than a guess.
    */
-  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0 };
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0 };
   /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
    * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
@@ -73,6 +73,7 @@
     perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
     perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
     perf.card = 0; perf.cardN = 0;
+    perf.readN = 0; perf.readGL = 0; perf.read2d = 0; perf.readMB = 0; perf.allocMB = 0;
     perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   }
 
@@ -913,30 +914,123 @@ const SPECIES = [
     return { left: r.left, top: r.top, w: r.width, h: r.height, cw: uiCanvas.width, ch: uiCanvas.height };
   }
 
+  /* --------------------------------------------------------- readback ----- */
+  // <readback-core>
+  /**
+   * readPixels hands back the framebuffer bottom-up, while every detector indexes a read
+   * top-down from the x/y it asked for. Reverse the rows in place; `row` is supplied by the
+   * caller so the flip does not allocate a buffer per read.
+   */
+  function flipRows(d, w, h, row) {
+    const stride = w * 4;
+    for (let top = 0, bot = h - 1; top < bot; top++, bot--) {
+      const a = top * stride, b = bot * stride;
+      row.set(d.subarray(a, a + stride));
+      d.set(d.subarray(b, b + stride), a);
+      d.set(row.subarray(0, stride), b);
+    }
+    return d;
+  }
+  /** GL's origin is bottom-left: the top-down row `y` starts at this framebuffer row. */
+  function glRowY(bh, y, h) { return bh - (y + h); }
+  // </readback-core>
+
+  let glCanvasRef = null, glCtx = null, glBuf = null, glRow = null, glFails = 0;
+
+  /**
+   * The WebGL context that owns this canvas, or null for a 2D layer. Cached per canvas: a 2D
+   * surface must not pay a failed getContext probe on every read.
+   */
+  function webglFor(c) {
+    if (c === glCanvasRef) return glCtx;
+    glCanvasRef = c; glCtx = null; glFails = 0;
+    if (!c) return null;
+    const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
+    let g = app && app.renderer && app.renderer.gl;
+    if (!g || g.canvas !== c) {
+      // A context already created under another type answers null here. That is the 2D answer.
+      try { g = c.getContext('webgl2'); } catch (e) { g = null; }
+      if (!g) { try { g = c.getContext('webgl'); } catch (e) { g = null; } }
+    }
+    glCtx = g && g.canvas === c && typeof g.readPixels === 'function' ? g : null;
+    return glCtx;
+  }
+
   let ubuf = null, uctx = null;
-  /** Read the UI layer. Must be called from inside a rAF callback. */
-  function readUI(x, y, w, h) {
-    if (!uiCanvas || !uiCanvas.width || !uiCanvas.isConnected) surfaces();
-    // The SPA can drop its canvases for a moment (route change, soft reload). Reporting "nothing
-    // drawn" is correct there; touching a missing canvas would throw on every frame and the
-    // panel would read a burst of errors as a broken session and stop it.
-    if (!uiCanvas || !uiCanvas.width) return null;
+  /** The allocating 2D read: the only reader for a plain 2D surface and the GL path's fallback. */
+  function readUI2d(x, y, w, h) {
     if (!ubuf) {
       ubuf = document.createElement('canvas');
       ubuf.width = 520; ubuf.height = 520;
       uctx = ubuf.getContext('2d', { willReadFrequently: true });
     }
-    x = Math.max(0, Math.round(x)); y = Math.max(0, Math.round(y));
-    w = Math.min(uiCanvas.width - x, Math.round(w));
-    h = Math.min(uiCanvas.height - y, Math.round(h));
-    if (w <= 0 || h <= 0) return null;
     if (ubuf.width < w || ubuf.height < h) {
       ubuf.width = Math.max(ubuf.width, w);
       ubuf.height = Math.max(ubuf.height, h);
     }
     uctx.clearRect(0, 0, w, h);
     try { uctx.drawImage(uiCanvas, x, y, w, h, 0, 0, w, h); } catch (e) { return null; }
+    perf.readN++; perf.read2d++;
+    perf.readMB += (w * h * 4) / 1048576;
+    perf.allocMB += (w * h * 4) / 1048576;
     return { d: uctx.getImageData(0, 0, w, h).data, w, h, x, y };
+  }
+
+  /**
+   * The allocation-free read. Measured live 2026-11-02 in BrowserOS neo: 121 getImageData calls
+   * in 5 s allocated 40.4 MB, the JS heap climbed ~12 MB/s, and a major collection froze the
+   * page for ~250 ms about once a second. readPixels writes into a buffer we own, so a steady
+   * session reuses the same memory and allocates nothing per read. The buffer is cleared first:
+   * a read that fails silently must look empty, not replay the previous frame as a ghost prompt.
+   */
+  function readUIgl(gl, x, y, w, h) {
+    if ((gl.isContextLost && gl.isContextLost()) || !uiCanvas) return null;
+    const bw = gl.drawingBufferWidth, bh = gl.drawingBufferHeight;
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > bw || y + h > bh) return null;
+    const n = w * h * 4;
+    if (!glBuf || glBuf.length < n) {
+      glBuf = new Uint8Array(n);
+      perf.allocMB += n / 1048576;
+    }
+    if (!glRow || glRow.length < w * 4) glRow = new Uint8Array(w * 4);
+    const d = glBuf;
+    let prev = null, ok = false;
+    try {
+      prev = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+      if (prev) gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+      d.fill(0, 0, n);
+      gl.readPixels(x, glRowY(bh, y, h), w, h, gl.RGBA, gl.UNSIGNED_BYTE, d);
+      ok = gl.getError() === gl.NO_ERROR;
+    } catch (e) { ok = false; }
+    finally { if (prev) { try { gl.bindFramebuffer(gl.FRAMEBUFFER, prev); } catch (e) {} } }
+    if (!ok) return null;
+    flipRows(d, w, h, glRow);
+    perf.readN++; perf.readGL++;
+    perf.readMB += n / 1048576;
+    return { d, w, h, x, y };
+  }
+
+  /** Read the UI layer. Must be called from inside the render hook (or rAF without Pixi). */
+  function readUI(x, y, w, h) {
+    if (!uiCanvas || !uiCanvas.width || !uiCanvas.isConnected) surfaces();
+    // The SPA can drop its canvases for a moment (route change, soft reload). Reporting "nothing
+    // drawn" is correct there; touching a missing canvas would throw on every frame and the
+    // panel would read a burst of errors as a broken session and stop it.
+    if (!uiCanvas || !uiCanvas.width) return null;
+    x = Math.max(0, Math.round(x)); y = Math.max(0, Math.round(y));
+    w = Math.min(uiCanvas.width - x, Math.round(w));
+    h = Math.min(uiCanvas.height - y, Math.round(h));
+    if (w <= 0 || h <= 0) return null;
+    const gl = webglFor(uiCanvas);
+    if (gl) {
+      const r = readUIgl(gl, x, y, w, h);
+      if (r) return r;
+      // Three failed reads say the surface cannot be read through its context; stop paying for
+      // both paths on every detector call and let the 2D fallback carry the session.
+      if (++glFails >= 3) { glCtx = null; L('readback fallback', { surface: '2d' }); }
+    }
+    return readUI2d(x, y, w, h);
   }
 
   const PX = (r, x, y) => {
@@ -1078,6 +1172,7 @@ const SPECIES = [
     sctx.clearRect(0, 0, w, h);
     try { sctx.drawImage(uiCanvas, 0, 0, w * SDOWN, h * SDOWN, 0, 0, w, h); } catch (e) { return false; }
     sdata = sctx.getImageData(0, 0, w, h).data;
+    perf.allocMB += (w * h * 4) / 1048576;      // getImageData always hands back a fresh copy
     sw = w; sh = h;
     if (dataHasInk(sdata)) uiBlank = 0; else uiBlank++;
     checkSurface();
@@ -3169,6 +3264,19 @@ const SPECIES = [
       worst: gaps.length ? +gaps[gaps.length - 1].toFixed(1) : null,
       // share is the fraction of wall time; findBubble includes its snapshot, so they overlap.
       rates,
+      // Full-resolution reads served from the renderer. `gl` is the WebGL readPixels path and
+      // allocates only when its buffer grows; `canvas2d` is the fallback and allocates every
+      // call. `allocMB` also counts the shared quarter-scale snapshot, so it is the whole
+      // canvas-readback garbage rate, not just this path.
+      readback: {
+        calls: perf.readN,
+        gl: perf.readGL,
+        canvas2d: perf.read2d,
+        mb: +perf.readMB.toFixed(1),
+        allocMB: +perf.allocMB.toFixed(2),
+        allocMBPerSec: uptime ? +(perf.allocMB / (uptime / 1000)).toFixed(2) : null,
+        bufferMB: glBuf ? +(glBuf.byteLength / 1048576).toFixed(2) : 0,
+      },
       // Where lockDial's ms go. `pct` is that phase's share of lockDial's own total, so the parts
       // account for the call instead of being compared against guesses. `memo.hits` counts the
       // calls the remembered circle answered - a high hit rate is the fast path working.

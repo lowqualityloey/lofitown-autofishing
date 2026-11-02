@@ -67,6 +67,7 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 ## What it actually does
 
 - **Finds prompts in pixels.** The game merges the CAST!/REEL! prompts and the reel dial into its WebGL renderer canvas, so detection runs from a wrapper around the renderer's `render()` and reads the frame the game just painted; a `requestAnimationFrame` read sees a cleared buffer.
+- **Reads without allocating.** The renderer's WebGL buffer is read with `readPixels` into one reused array instead of a fresh `getImageData` copy for every box; the 2D copy remains the fallback. Live 3.9.9: **138.5 fps with zero long tasks** while running, against 105.2 fps with five ~250 ms GC stalls on 3.9.8.
 - **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, and containment takes an already-open window (`inside-now`) rather than waiting almost a full rotation when the pin is past the midpoint.
 - **Holds the first press on a hard dial.** On a narrow (<60 deg) or fast (>=300 deg/s) dial, the first press waits up to 2.5 s for a stable spin fit instead of firing on a noisy estimate.
 - **Remembers the dial.** The reel widget's circle is saved per canvas size and tried before any search. If the hint is wrong, one whole-surface pass finds the green wedge and recovers the lock - a fresh run no longer needs a prompt to find its first dial.
@@ -76,7 +77,7 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 
 ## How well does it fish?
 
-The current 3.9.8 build adds post-render detection, the stable first-press gate and containment's `inside-now` press. The broad baseline is still the 3.8.8 75-minute seated session: **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise. A short 3.9.8 field check (7 attempts) caught **7/7** with **37/37 presses accepted**, **14/14 dials closed** and 0 lost; treat it as a regression check, not a new catch-rate estimate.
+The current 3.9.9 build adds an allocation-free WebGL readback, post-render detection, the stable first-press gate and containment's `inside-now` press. The broad baseline is still the 3.8.8 75-minute seated session: **103 caught / 112 fish attempts (92.0%, Wilson 95% CI 85.4-95.7%)**: 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit, and **0 rejected presses**. Median 139.8 fps, p95 frame gap 8.05 ms. All nine losses scored "cast prompt" - the fish left before the cast landed - and none as a bad dial, so read 92% as one measured session, not a promise. A short 3.9.8 field check (7 attempts) caught **7/7** with **37/37 presses accepted**, **14/14 dials closed** and 0 lost, and a 3.9.9 spot check caught **1/1** with **5/5 presses accepted**; treat both as regression checks, not a new catch-rate estimate.
 
 Per-press timing is scored by whether the game spawned a new triangle (a press it acted on), not by whether the dial closed - only the finishing press can do that. Read `__fish.status().accuracy.pressAcceptRate`.
 
@@ -132,8 +133,11 @@ __fish.opts        // press timing, windows, retry ladders (live-editable)
 ```
 
 `__fish.perf()` is the measurement any tuning has to come from: `rates.<detector>.share` is the
-fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`).
-It only records while the bot is running, so read it mid-session. The same version is printed in the panel header (`v3.9.8`, or `dev` for the unbundled bookmarklet path), so a stale install is visible without opening the console.
+fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`),
+and `readback.allocMBPerSec` is the canvas-readback garbage rate (`gl` reads allocate nothing after
+the buffer grows; `canvas2d` is the fallback). It only records while the bot is running, so read it
+mid-session. The same version is printed in the panel header (`v3.9.9`, or `dev` for the unbundled
+bookmarklet path), so a stale install is visible without opening the console.
 
 On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
 

@@ -427,3 +427,72 @@ test('the perf probe reports frame gaps and per-detector cost', () => {
   assert.match(CORE, /uptimeMs: Math\.round\(uptime\)/, 'the report is normalised by how long it ran');
   assert.match(CORE, /perf\.stoppedAt = now\(\)/, 'the window freezes at stop, so a report read afterwards is not diluted');
 });
+
+// Measured live 2026-11-02 in BrowserOS neo: 121 getImageData calls in 5 s allocated 40.4 MB, the
+// heap climbed ~12 MB/s, and major collections froze the page for ~250 ms roughly once a second.
+// readPixels writes into memory the bot owns, so a steady session allocates nothing; the 2D copy
+// stays only for a surface with no WebGL context. These guards keep that shape.
+const READ_OPEN = '// <readback-core>';
+const READ_CLOSE = '// </readback-core>';
+const readA = CORE.indexOf(READ_OPEN);
+const readB = CORE.indexOf(READ_CLOSE);
+if (readA < 0 || readB < 0) throw new Error('readback-core sentinels are missing from autofish.js');
+const READ = new Function(CORE.slice(readA + READ_OPEN.length, readB) + '\nreturn { flipRows, glRowY };')();
+
+test('flipRows reverses readPixels rows in place', () => {
+  const w = 3, h = 4;
+  const d = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 4; c++) d[(y * w + x) * 4 + c] = y * 10 + x + c;
+    }
+  }
+  const row = new Uint8Array(w * 4);
+  assert.strictEqual(READ.flipRows(d, w, h, row), d, 'the flip must return the same buffer, not a copy');
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < 4; c++) {
+        assert.strictEqual(d[(y * w + x) * 4 + c], (h - 1 - y) * 10 + x + c, 'row ' + y + ' was not reversed');
+      }
+    }
+  }
+});
+
+test('the GL read addresses the rect from the framebuffer bottom', () => {
+  assert.equal(READ.glRowY(1031, 215, 210), 606);
+  assert.equal(READ.glRowY(1031, 0, 1031), 0);
+});
+
+test('the full-resolution read reuses one WebGL buffer instead of allocating per read', () => {
+  const fn = slice('function readUIgl(', 'function readUI(');
+  assert.match(fn, /gl\.readPixels\(/, 'the renderer buffer must be read with readPixels');
+  assert.match(fn, /if \(!glBuf \|\| glBuf\.length < n\) \{/, 'the buffer may only grow');
+  assert.match(fn, /glBuf = new Uint8Array\(n\);/, 'a read must not allocate a second copy');
+  assert.ok(!/getImageData/.test(fn), 'the GL path must not fall back to an allocating 2D read');
+  assert.match(fn, /return \{ d, w, h, x, y \};/, 'the pooled buffer is handed back directly');
+  assert.match(fn, /d\.fill\(0, 0, n\)/, 'a failed read must not replay the previous frame');
+});
+
+test('a WebGL read is flipped top-down and a failure falls back to the 2D path', () => {
+  const fn = slice('function readUIgl(', 'function readUI(');
+  assert.match(fn, /glRowY\(bh, y, h\)/, 'the read must use the framebuffer-bottom row');
+  assert.match(fn, /flipRows\(d, w, h, glRow\)/, 'the rows must be reversed for the top-down detectors');
+  assert.match(fn, /if \(!ok\) return null;/, 'a failed read must let the 2D path answer');
+  const flip = slice('function flipRows(', 'function glRowY(');
+  assert.ok(!/new (Uint8Array|Array)\(/.test(flip), 'the row flip must not allocate');
+  const read = slice('function readUI(', 'const PX =');
+  assert.match(read, /const gl = webglFor\(uiCanvas\)/, 'readUI must ask the surface for a context');
+  assert.match(read, /if \(\+\+glFails >= 3\) \{ glCtx = null;/, 'repeated GL failures must disable the GL path');
+  assert.match(read, /return readUI2d\(x, y, w, h\);/, 'the 2D path must remain the fallback');
+  const two = slice('function readUI2d(', 'function readUIgl(');
+  assert.match(two, /uctx\.getImageData\(/, 'the fallback is the old 2D read');
+});
+
+test('the perf report exposes the readback path and its allocation rate', () => {
+  const report = slice('F.perf = function ()', '\n  };');
+  assert.match(report, /readback: \{/, 'the report must expose the readback counters');
+  assert.match(report, /allocMBPerSec:/, 'the garbage rate is the number the fix targets');
+  assert.match(report, /bufferMB:/, 'the reused buffer size must be visible');
+  assert.match(CORE, /perf\.readN\+\+; perf\.readGL\+\+;/, 'a GL read must be counted');
+  assert.match(CORE, /perf\.readN\+\+; perf\.read2d\+\+;/, 'a 2D read must be counted');
+});

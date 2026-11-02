@@ -1,13 +1,13 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.8 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.9 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
-- **Target Release / Deadline**: 3.9.8 release / not tracked
+- **Target Release / Deadline**: 3.9.9 release / not tracked
 - **Current Working Branch**: `audit/autofish-3.9` (this worktree); `main` is the integration branch
 - **Last Updated**: 2026-11-02
 - **Runtime**: Node v26.13.0, no dependencies, no bundler
@@ -29,7 +29,8 @@
   named, the session clock pauses while unseated, and the pause honours the clock window and the
   daily cap, plus the 2026-11-02 field-audit fixes; 3.9.6 holds the first press on a narrow or fast
   dial until the spin-rate fit is stable; 3.9.7 moves detection to a post-render renderer hook; 3.9.8
-  presses containment's already-open window (`inside-now`) instead of waiting a rotation. 222 tests.
+  presses containment's already-open window (`inside-now`) instead of waiting a rotation; 3.9.9
+  replaces the per-read `getImageData` garbage with one reusable WebGL buffer. 228 tests.
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
   (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
 - [x] **Milestone 3** — self-updating distribution: a private repository's release assets answer an
@@ -220,6 +221,7 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-11-02 | First-press gate | The first press on a dial has the least evidence behind it. `fitStable` requires 6 fit points over 150 ms with RMS <= 2 deg (never a clamped rate) before the first press on a dial under 60 deg wide or 300 deg/s or faster; an unstable fit skips that crossing, and a 2500 ms release forces the press even if the fit never settles. Held/forced counts are in `accuracy().stats` and logged once per dial. Later presses are never held. | `AUTOFISH.md` 3.9.6; `tests/timing.test.js` |
 | 2026-11-02 | UI surface | The game merged the prompt layer into the WebGL renderer canvas: canvas 0 held 965,753 painted pixels, canvas 1 was empty (0). The bot still read canvas 1 and `adoptSurface()` now switches to the candidate with pixels (3.9.4/3.9.5), but inside the bot's rAF the renderer also reads blank (222/222 swaps) while a post-render frame reads ink 256/256. Detection must move to a post-render hook. | `AUTOFISH.md` 3.9.4 and 3.9.5 |
 | 2026-11-02 | Detection timing | Detection now runs after the game draws: `installPostRender()` wraps the renderer prototype's `render()` (verified, tagged, filtered to the app canvas) and `postRenderTick()` runs the step in the same task; rAF keeps only the frame clock, hook retry and stall watchdog. `status().postRender` reports the mode. Live 3.9.7: `postRender: true` at ~100 fps, 0 errors; the bot found the new character-attached REEL bubble (116x54 at 627,251), then **4 caught / 4 attempts, 0 lost, 21/21 presses accepted, 8/8 dials**, with the first-press gate active (`firstPressHeld: 7`, `forced: 3`). | `AUTOFISH.md` 3.9.7; `tests/renderhook.test.js` |
+| 2026-11-02 | Readback allocation | 121 `getImageData` calls in 5 s allocated 40.4 MB and major collections froze the page for ~250 ms about once a second while running. `readUI` now reads the renderer's WebGL buffer with `readPixels` into one reused `Uint8Array` (0.67 MB at 1179x821), flips the rows in place, and keeps the 2D path as the fallback; the shared quarter-scale snapshot still allocates ~2.4 MB/s. Live: **138.5 fps / 0 long tasks** running vs **105.2 fps / 5 long tasks, max 264.5 ms** on 3.9.8; 1/1 caught, 5/5 presses accepted. | `AUTOFISH.md` 3.9.9; `tests/perf.test.js` |
 
 ---
 
