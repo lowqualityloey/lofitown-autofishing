@@ -2306,4 +2306,32 @@ the real 3.9.10 state must return `snapshot-fallback`, the real 3.9.11 state `fr
 3.9.9 state `timing-held`, and the healthy 3.9.12 numbers must return `fishing` with severity ok.
 `node --test` passes (241 tests).
 
+## 2026-11-02 3.9.14: a run you can quote
+
+The headline is still 3.8.8 - 103 caught of 112 attempts, 92.0% - because every check since has been
+a handful of fish. Making the next long session count needed two things the bot could not do: hand
+over every attempt, and survive being interrupted.
+
+`F.report()` sliced the last **40** attempts, carried no interval and no environment, and attempts
+lived only in memory, capped at 200 - one reload or one lost seat and the sample was gone. The 3.8.8
+run itself was cut by a seat loss and then the 240-minute cap.
+
+**3.9.14** adds a pure `stats-core`: `wilson(k, n)` and `runSummary(attempts)`, where the attempt is
+always the denominator and press acceptance is reported beside it, never folded in. It reproduces the
+interval this repo already published - 103/112 gives 0.8543-0.9571 against the README quote of
+85.4-95.7% - so the arithmetic that writes a headline is tested against the headline that exists.
+
+`__fish.exportRun()` returns one JSON string: version, profile, start and end, the run summary with
+its interval, the perf snapshot (fps, p95, worst, longtasks, snapshot, readback, rates), what
+`doctor()` thought at the end, the live options, and every stored attempt. Attempts persist to
+`autofish:run:v1:<profile>` on each resolve, capped at 250, every write wrapped, so a reload or a
+lost seat costs one fish rather than the session.
+
+```
+copy(__fish.exportRun())
+```
+
+`node --test` passes (246 tests). The run itself is next: 90-120 minutes seated, target 120+
+attempts, then the export. Nothing in README/STATE changes until that sample exists.
+
 
