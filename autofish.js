@@ -191,6 +191,25 @@
   }
 
   /**
+   * How long the first press may wait for a mature spin fit, in ms.
+   *
+   * The fixed 2500 ms ceiling is several rotations on a fast dial: at 700 deg/s a 45 deg arc is
+   * under the pin for 64 ms, so "wait up to 2.5 s" means the bot visibly skips three or four
+   * passes of a fish the player is watching. Measured live 2026-11-02: firstPressHeld on 9 of 18
+   * dials and firstPressForced twice, on a session that was otherwise 51/51 presses accepted.
+   * The budget is therefore a fraction of ONE pass, still bounded by the old ceiling for the slow
+   * dials where a long, accurate fit is worth having.
+   */
+  function firstPressBudget(width, omega, o) {
+    const cfg = o || {};
+    const capMs = cfg.firstPressMaxWaitMs != null ? cfg.firstPressMaxWaitMs : 2500;
+    const frac = cfg.firstPressMaxTransitFrac != null ? cfg.firstPressMaxTransitFrac : 0.4;
+    const w = Number(width), om = Math.abs(Number(omega));
+    if (!(w > 0) || !(om > 0)) return capMs;
+    return Math.min(capMs, (w / om) * 1000 * frac);
+  }
+
+  /**
    * Decide what this frame should do about the dial.
    *
    * st: { t, delta, width, omega, armed, pendingAt }
@@ -1158,6 +1177,73 @@ const SPECIES = [
    */
   const SDOWN = 4;
   let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
+  let sgl = null, sglCanvas = null, sglTex = null, sglFbo = null, sbytes = null, sglOff = false, sglChecked = false;
+
+  /**
+   * The quarter-scale copy WITHOUT a fresh array every tick.
+   *
+   * getImageData always allocates, and a 242 KB array (1179x821 canvas at 1/4) lands in V8's
+   * large-object space: at the 66 ms scan tick that is ~2 MB/s, 1.4 GB across an 11-minute session,
+   * and the worst frame on the live run that prompted this was 287 ms - a major collection, not a
+   * slow detector. Uploading the 2D copy into our own framebuffer and reading it back with
+   * readPixels writes into a buffer we own, so a steady session allocates nothing after warm-up.
+   * Verified live in BrowserOS neo at 1179x821: identical bytes to getImageData on 6762 sampled
+   * pixels, no row flip needed, 1.30 ms a call against 1.65 ms, and 1.3 ms of it is the sync.
+   * A one-off pixel comparison still guards it, so a browser that uploads the copy differently
+   * falls back to getImageData instead of feeding the detectors mirrored pixels.
+   */
+  function downscaleGl(w, h) {
+    if (sglOff) return null;
+    try {
+      if (!sgl) {
+        sglCanvas = document.createElement('canvas');
+        sgl = sglCanvas.getContext('webgl2', { antialias: false, depth: false, stencil: false })
+           || sglCanvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
+        if (!sgl) { sglOff = true; L('downscale readback', { via: '2d', why: 'no webgl' }); return null; }
+        sglTex = sgl.createTexture();
+        sglFbo = sgl.createFramebuffer();
+        sgl.bindTexture(sgl.TEXTURE_2D, sglTex);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_MIN_FILTER, sgl.NEAREST);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_MAG_FILTER, sgl.NEAREST);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_WRAP_S, sgl.CLAMP_TO_EDGE);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_WRAP_T, sgl.CLAMP_TO_EDGE);
+        sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
+        sgl.framebufferTexture2D(sgl.FRAMEBUFFER, sgl.COLOR_ATTACHMENT0, sgl.TEXTURE_2D, sglTex, 0);
+        if (sgl.checkFramebufferStatus(sgl.FRAMEBUFFER) !== sgl.FRAMEBUFFER_COMPLETE) {
+          sglOff = true; L('downscale readback', { via: '2d', why: 'fbo' }); return null;
+        }
+      }
+      if (sglCanvas.width !== w || sglCanvas.height !== h) {
+        sglCanvas.width = w; sglCanvas.height = h;
+        sgl.viewport(0, 0, w, h);
+        sbytes = null;
+      }
+      const n = w * h * 4;
+      if (!sbytes || sbytes.length !== n) sbytes = new Uint8Array(n);
+      sgl.bindTexture(sgl.TEXTURE_2D, sglTex);
+      sgl.texImage2D(sgl.TEXTURE_2D, 0, sgl.RGBA, sgl.RGBA, sgl.UNSIGNED_BYTE, sbuf);
+      sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
+      sgl.readPixels(0, 0, w, h, sgl.RGBA, sgl.UNSIGNED_BYTE, sbytes);
+      if (sgl.getError() !== sgl.NO_ERROR) return null;
+      if (!sglChecked) {
+        sglChecked = true;
+        const ref = sctx.getImageData(0, 0, w, h).data;
+        let bad = 0, seen = 0;
+        for (let i = 0; i < ref.length; i += 4 * 17) { seen++; if (Math.abs(ref[i] - sbytes[i]) > 8) bad++; }
+        if (bad > seen * 0.02) {
+          sglOff = true;
+          L('downscale readback', { via: '2d', why: 'mismatch', bad, seen });
+          return null;
+        }
+        L('downscale readback', { via: 'gl', w, h });
+      }
+      return sbytes;
+    } catch (e) {
+      sglOff = true;
+      L('downscale readback', { via: '2d', why: String((e && e.message) || e) });
+      return null;
+    }
+  }
 
   function downscale() {
     if (!uiCanvas || !uiCanvas.isConnected) surfaces();
@@ -1171,8 +1257,13 @@ const SPECIES = [
     if (sbuf.width !== w || sbuf.height !== h) { sbuf.width = w; sbuf.height = h; }
     sctx.clearRect(0, 0, w, h);
     try { sctx.drawImage(uiCanvas, 0, 0, w * SDOWN, h * SDOWN, 0, 0, w, h); } catch (e) { return false; }
-    sdata = sctx.getImageData(0, 0, w, h).data;
-    perf.allocMB += (w * h * 4) / 1048576;      // getImageData always hands back a fresh copy
+    const glBytes = downscaleGl(w, h);
+    if (glBytes) {
+      sdata = glBytes;                          // reused buffer: nothing allocated per tick
+    } else {
+      sdata = sctx.getImageData(0, 0, w, h).data;
+      perf.allocMB += (w * h * 4) / 1048576;    // getImageData always hands back a fresh copy
+    }
     sw = w; sh = h;
     if (dataHasInk(sdata)) uiBlank = 0; else uiBlank++;
     checkSurface();
@@ -2274,6 +2365,7 @@ const SPECIES = [
       firstPressMaxWidthDeg: 60,    // a "hard dial" is narrower than this (deg of drawn arc)...
       firstPressFastOmega: 300,     // ...or spinning at least this fast (deg/s)
       firstPressMaxWaitMs: 2500,    // never hold a first press longer than this, even if the fit is noisy
+      firstPressMaxTransitFrac: 0.4, // ...and never past this fraction of one pass (width / omega)
       insideNowMs: 60,              // contain: pin past centre and still inside -> press now rather than wait a turn
       relockGraceMs: 450,           // hold a dial's geometry this long after a press (the ring blinks)
       maxPressPerDial: 12,          // safety cap on presses per dial lock (one per rotation is normal)
@@ -2729,7 +2821,10 @@ const SPECIES = [
            Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
         const heldMs = t - (F.geoAt || t);
         const stable = fitStable(s.fit, F.opts);
-        const giveUp = heldMs >= (F.opts.firstPressMaxWaitMs || 2500);
+        // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
+        // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
+        const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
+        const giveUp = heldMs >= budget;
         if (!stable && !giveUp) {
           if (!F.geo._firstHeld) {
             F.geo._firstHeld = true;
@@ -2751,6 +2846,7 @@ const SPECIES = [
           F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
           L('first press forced', {
             heldMs: Math.round(heldMs),
+            budget: Math.round(budget),
             width: Math.round(Number(s.width) || 0),
             omega: s.omega == null ? null : Math.round(s.omega),
             fitN: s.fit ? s.fit.n : 0,
