@@ -311,12 +311,17 @@
       return out;
     }
     // Contain means the pin may be pressed anywhere inside the arc, but the schedule above aims at
-    // the MIDPOINT crossing because that is where the tolerance is widest. When the pin has already
-    // passed the midpoint and is still inside, that next crossing is most of a rotation away - the
-    // "it needs one more turn" feel. Take the open window now instead; an approaching pin still
-    // waits for the midpoint, and 'angle' keeps the midpoint rule unchanged.
+    // the MIDPOINT crossing because that is where the tolerance is widest. When that crossing is far
+    // away and the pin is ALREADY inside, take the open window now.
+    //
+    // This used to require delta * omega > 0, i.e. only take it when the arc was rotating away from
+    // the pin. On a narrow dial that is the difference between pressing and spinning in place: the
+    // window is a handful of degrees, the scheduled crossing is most of a rotation out, and the pass
+    // through the arc happens on the other sign - so nothing ever fired. Measured live 2026-11-02:
+    // a 30 deg dial produced 279 consecutive 'wait' frames, 0 presses, then 'dial gone'.
+    // Containment does not care which side the arc is passing on: inside is inside.
     const insideNowMs = cfg.insideNowMs != null ? cfg.insideNowMs : 60;
-    if (cfg.trigger !== 'angle' && st.armed && delta * omega > 0 && toJudge > insideNowMs &&
+    if (cfg.trigger !== 'angle' && st.armed && toJudge > insideNowMs &&
         Math.abs(delta) <= win && Math.abs(pred) <= win) {
       out.reason = 'inside-now';
       out.cancel = true;

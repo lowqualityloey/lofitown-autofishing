@@ -167,6 +167,21 @@ test('planPress presses only inside the window, and schedules the crossing', () 
   assert.equal(off.armAt, null);
 });
 
+test('contain takes an open window whichever side the arc is passing on', () => {
+  // Live 2026-11-02: a 30 deg dial produced 279 consecutive 'wait' frames and no press, because the
+  // open-window branch also demanded delta * omega > 0. Inside is inside.
+  const contain = { trigger: 'contain', midDeg: 6, marginDeg: 4, leadMs: 25 };
+  const toward = T.planPress({ t: 1000, width: 30, armed: true, delta: 5, omega: -30 }, contain);
+  assert.equal(toward.reason, 'inside-now');
+  assert.equal(toward.press, true);
+  const away = T.planPress({ t: 1000, width: 30, armed: true, delta: 5, omega: 30 }, contain);
+  assert.equal(away.reason, 'inside-now');
+  // ... but never from outside the window.
+  const outside = T.planPress({ t: 1000, width: 30, armed: true, delta: 20, omega: -30 }, contain);
+  assert.notEqual(outside.reason, 'inside-now');
+  assert.equal(outside.press, false);
+});
+
 function std(delta, omega, leadMs) {
   const period = 360 / Math.abs(omega / 1000);
   let toJudge = -delta / (omega / 1000);
@@ -206,10 +221,12 @@ test('contain takes an open window after the midpoint instead of waiting a turn'
   assert.equal(past.press, true);
   assert.equal(past.reason, 'inside-now');
   assert.equal(past.cancel, true, 'an early press must drop a pending midpoint timer');
-  // Approaching the midpoint keeps the widest-tolerance schedule.
+  // Approaching the midpoint: also an open window, so it is taken. The old rule waited for the
+  // crossing on one sign only, which on a narrow dial meant waiting a whole rotation and pressing
+  // nothing (live 2026-11-02: 279 'wait' frames on a 30 deg dial).
   const coming = T.planPress({ t: 1000, width: 90, armed: true, delta: -30, omega: 300 }, contain);
-  assert.equal(coming.press, false);
-  assert.notEqual(coming.reason, 'inside-now');
+  assert.equal(coming.press, true);
+  assert.equal(coming.reason, 'inside-now');
   // Past the midpoint but outside the window: nothing to take.
   const outside = T.planPress({ t: 1000, width: 90, armed: true, delta: 60, omega: 300 }, contain);
   assert.equal(outside.press, false);
