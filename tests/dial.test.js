@@ -116,6 +116,11 @@ test('a missed surface asks the other canvas before concluding there is no promp
   assert.match(SRC, /function inkStats/, 'has-ink alone cannot tell the world from the UI layer');
   assert.match(SRC, /other\.density < 0\.5/, 'never hand the layer back to the dense world canvas');
   assert.match(SRC, /t - \(F\.altAt \|\| 0\) > 300/);
+  // One hit is not evidence: require the same spot twice, and never adopt a dense layer while this
+  // surface has ink of its own.
+  assert.match(SRC, /const same = prev && Math\.abs\(prev\.x - found\.cx\) <= 12/);
+  assert.match(SRC, /const altSparse = inkStats\(alt\)\.density < 0\.5/);
+  assert.match(SRC, /if \(!altSparse && inkStats\(cur\)\.ink\)/);
 });
 
 test('a new dial opens the press gate, and an accepted press re-arms the next rotation', () => {

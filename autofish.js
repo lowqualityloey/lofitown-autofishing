@@ -1196,15 +1196,27 @@ const SPECIES = [
     uiCanvas = alt; snapAt = 0;
     let found = null;
     try { if (snapshot() && bubbleGate()) found = bubbleInBox(); } catch (e) { found = null; }
-    if (found) {
-      gameCanvas = cur;
-      uiAdopted = true;
-      uiCheckAt = now();
-      L('ui layer moved', { surface: 'the other canvas', cx: found.cx, cy: found.cy });
-    } else {
-      uiCanvas = cur;
-    }
+    uiCanvas = cur; snapAt = 0;
+    if (!found) { F.altHit = null; return null; }
+    // Two hits at the same spot before believing it. One white blob on the wrong surface is not a
+    // prompt, and flipping on a single hit made the surface flap every few seconds (measured live
+    // 2026-11-02: 11 'ui layer moved' in a 219-event buffer).
+    const prev = F.altHit;
+    const same = prev && Math.abs(prev.x - found.cx) <= 12 && Math.abs(prev.y - found.cy) <= 12 &&
+      now() - prev.at < 2000;
+    F.altHit = { x: found.cx, y: found.cy, at: now() };
+    if (!same) return null;
+    // And never adopt a dense layer while the surface we are on has ink of its own: the world canvas
+    // is always full, and adopting it is exactly what made the bot blind for fifteen minutes.
+    const altSparse = inkStats(alt).density < 0.5;
+    if (!altSparse && inkStats(cur).ink) { F.altHit = null; return null; }
+    gameCanvas = cur;
+    uiCanvas = alt;
+    uiAdopted = true;
+    uiCheckAt = now();
     snapAt = 0;
+    F.altHit = null;
+    L('ui layer moved', { surface: 'the other canvas', cx: found.cx, cy: found.cy, sparse: altSparse });
     return found;
   }
 
