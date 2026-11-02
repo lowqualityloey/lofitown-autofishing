@@ -262,6 +262,24 @@ test('the cast retry sends only the keybind - there is no bubble to click', () =
   assert.doesNotMatch(around, /tap\(/, 'the stall path has no coordinates to tap');
 });
 
+test('the quarter-scale GL path allocates texture storage before attaching it', () => {
+  // 3.9.10 attached the texture first, so the framebuffer was INCOMPLETE (36054) and the whole path
+  // silently fell back to getImageData on every machine for a whole day - measured live: 2.6 MB/s of
+  // allocation with canvas2d reading 0, because the fallback inside downscale() does not count as a
+  // read2d. The ordering plus the counter is what makes that impossible to hide again.
+  const attach = CORE.slice(CORE.indexOf('function sglAttach'), CORE.indexOf('function downscaleGl'));
+  const storage = attach.indexOf('texImage2D(sgl.TEXTURE_2D, 0, sgl.RGBA, w, h, 0');
+  const bound = attach.indexOf('framebufferTexture2D');
+  assert.ok(storage > 0, 'storage must be allocated with an explicit size');
+  assert.ok(bound > storage, 'the texture must have storage before the framebuffer attaches it');
+  assert.match(attach, /checkFramebufferStatus\(sgl\.FRAMEBUFFER\) === sgl\.FRAMEBUFFER_COMPLETE/);
+  const down = CORE.slice(CORE.indexOf('function downscaleGl'), CORE.indexOf('function downscale()'));
+  assert.match(down, /isContextLost/, 'a lost context must fall back instead of reading blanks');
+  assert.match(CORE, /perf\.snapGL\+\+/);
+  assert.match(CORE, /perf\.snap2d\+\+/);
+  assert.match(CORE, /snapshot: \{ gl: perf\.snapGL, canvas2d: perf\.snap2d \}/);
+});
+
 test('a merged UI canvas is adopted when the second layer is blank', () => {
   // The game can paint everything into the renderer canvas and leave the old UI layer empty; the
   // bot then reads a transparent surface and reports no prompt (live 2026-11-02: 965k painted

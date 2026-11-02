@@ -54,7 +54,7 @@
    * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
    * average cost of each detector, so a change can be justified by numbers rather than a guess.
    */
-  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0 };
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0 };
   /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
    * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
@@ -74,6 +74,7 @@
     perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
     perf.card = 0; perf.cardN = 0;
     perf.readN = 0; perf.readGL = 0; perf.read2d = 0; perf.readMB = 0; perf.allocMB = 0;
+    perf.snapGL = 0; perf.snap2d = 0;
     perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   }
 
@@ -1209,6 +1210,24 @@ const SPECIES = [
    * A one-off pixel comparison still guards it, so a browser that uploads the copy differently
    * falls back to getImageData instead of feeding the detectors mirrored pixels.
    */
+  /**
+   * (Re)create the framebuffer's storage and attach it.
+   *
+   * The order matters, and getting it wrong is silent: a texture attached BEFORE it has storage
+   * leaves the framebuffer INCOMPLETE (36054), the completeness check fails, and the whole path
+   * falls back to getImageData for the life of the page. That is exactly what 3.9.10 shipped -
+   * the "allocation-free snapshot" never ran, while its own probe printed 36054 and was read as
+   * success. Allocate the storage first, then attach.
+   */
+  function sglAttach(w, h) {
+    sgl.bindTexture(sgl.TEXTURE_2D, sglTex);
+    sgl.texImage2D(sgl.TEXTURE_2D, 0, sgl.RGBA, w, h, 0, sgl.RGBA, sgl.UNSIGNED_BYTE, null);
+    sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
+    sgl.framebufferTexture2D(sgl.FRAMEBUFFER, sgl.COLOR_ATTACHMENT0, sgl.TEXTURE_2D, sglTex, 0);
+    sgl.viewport(0, 0, w, h);
+    return sgl.checkFramebufferStatus(sgl.FRAMEBUFFER) === sgl.FRAMEBUFFER_COMPLETE;
+  }
+
   function downscaleGl(w, h) {
     if (sglOff) return null;
     try {
@@ -1224,16 +1243,16 @@ const SPECIES = [
         sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_MAG_FILTER, sgl.NEAREST);
         sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_WRAP_S, sgl.CLAMP_TO_EDGE);
         sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_WRAP_T, sgl.CLAMP_TO_EDGE);
-        sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
-        sgl.framebufferTexture2D(sgl.FRAMEBUFFER, sgl.COLOR_ATTACHMENT0, sgl.TEXTURE_2D, sglTex, 0);
-        if (sgl.checkFramebufferStatus(sgl.FRAMEBUFFER) !== sgl.FRAMEBUFFER_COMPLETE) {
-          sglOff = true; L('downscale readback', { via: '2d', why: 'fbo' }); return null;
-        }
+      }
+      if (sgl.isContextLost && sgl.isContextLost()) {
+        sglOff = true; L('downscale readback', { via: '2d', why: 'context lost' }); return null;
       }
       if (sglCanvas.width !== w || sglCanvas.height !== h) {
         sglCanvas.width = w; sglCanvas.height = h;
-        sgl.viewport(0, 0, w, h);
         sbytes = null;
+        if (!sglAttach(w, h)) {
+          sglOff = true; L('downscale readback', { via: '2d', why: 'fbo' }); return null;
+        }
       }
       const n = w * h * 4;
       if (!sbytes || sbytes.length !== n) sbytes = new Uint8Array(n);
@@ -1277,8 +1296,10 @@ const SPECIES = [
     const glBytes = downscaleGl(w, h);
     if (glBytes) {
       sdata = glBytes;                          // reused buffer: nothing allocated per tick
+      perf.snapGL++;
     } else {
       sdata = sctx.getImageData(0, 0, w, h).data;
+      perf.snap2d++;
       perf.allocMB += (w * h * 4) / 1048576;    // getImageData always hands back a fresh copy
     }
     sw = w; sh = h;
@@ -2461,6 +2482,7 @@ const SPECIES = [
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
+    F.dialAnyFail = 0; F.dialAnyAt = 0;                       // recovery backoff starts fresh each run
     F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
@@ -3419,6 +3441,9 @@ const SPECIES = [
       // Where lockDial's ms go. `pct` is that phase's share of lockDial's own total, so the parts
       // account for the call instead of being compared against guesses. `memo.hits` counts the
       // calls the remembered circle answered - a high hit rate is the fast path working.
+      // Which path served the quarter-scale snapshot. 3.9.10 shipped a GL path that never engaged
+      // and left no trace; a counter is the difference between noticing in a minute and never.
+      snapshot: { gl: perf.snapGL, canvas2d: perf.snap2d },
       lockPhases: lockPhases(),
       // false means the page's CSP refused `new Function` and the in-script scan is in use.
       scanCompiled: !!scanCompiled,
