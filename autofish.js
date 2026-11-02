@@ -3279,6 +3279,7 @@ const SPECIES = [
       const c = F.arms[a.arm] || (F.arms[a.arm] = { arm: a.arm, attempts: 0, caught: 0, lost: 0, presses: 0, dials: 0 });
       c.attempts++; c[key]++; c.presses += a.presses; c.dials += a.dials;
     }
+    a.wallAt = Date.now();
     saveRunRow(a);
     F.attempts.push(a);
     while (F.attempts.length > 200) F.attempts.shift();
@@ -3569,7 +3570,10 @@ const SPECIES = [
       d: a.dials || 0, w: (a.avgWidth != null && isFinite(a.avgWidth)) ? +a.avgWidth.toFixed(1) : null,
       wb: a.widthBand || null, b: a.band || null,
       sp: a.species || null, r: a.rarity || null,
-      t: a.startedAt != null ? Math.round(a.startedAt) : null,
+      // Wall clock, captured once at resolve. performance.now() is a page-relative clock, so the
+      // first export dated the run to 1970 - and a per-call Date.now() here would give the stored
+      // row and its in-memory twin different keys and double-count the attempt.
+      t: a.wallAt != null ? a.wallAt : (a.startedAt != null ? Math.round(a.startedAt) : null),
     };
   }
 
