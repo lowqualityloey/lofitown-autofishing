@@ -271,8 +271,14 @@ Staging area for rules observed during sessions but not yet approved as invarian
    that had not loaded the vault rule and went unrecorded until it was backfilled - and the trailer is
    the only path that does not depend on an agent remembering.
 
+7. Make `adoptSurface()` require a **found prompt** instead of a blank count. It still treats four
+   blank scans as "the UI layer moved", and the overlay is legitimately blank between prompts, so it
+   flips onto the world canvas roughly once a minute and `checkSurface` hands it back 5 s later. The
+   probe already uses the right rule; the adoption path predates it.
+
 Items 1-4 are field experiments: they need a live game tab and a human at the keyboard, and no
-automated run can produce them. Items 5-6 are release rituals, not one-offs.
+automated run can produce them. Items 5-6 are release rituals, not one-offs. Item 7 is the last known
+surface defect and is cheap: same evidence rule, different call site.
 
 ---
 
