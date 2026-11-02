@@ -8,7 +8,7 @@
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
 - **Target Release / Deadline**: 3.9.9 release / not tracked
-- **Current Working Branch**: `audit/autofish-3.9` (this worktree); `main` is the integration branch
+- **Current Working Branch**: `main` (this worktree); `audit/autofish-3.9` is merged into it
 - **Last Updated**: 2026-11-02
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
