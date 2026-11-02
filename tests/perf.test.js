@@ -178,7 +178,8 @@ test('a full-resolution read is spent only on something the snapshot already saw
   const cGate = card.indexOf('cardGate()'), cBox = card.indexOf('cardInBox()');
   assert.ok(cGate > 0 && cBox > cGate, 'the card box read must sit behind the snapshot gate');
   // one definition plus one call site: nothing else may spend the readback directly
-  assert.equal((CORE.match(/bubbleInBox\(\)/g) || []).length, 2, 'a second bubble box read came back');
+  // definition + the gated box read + the throttled other-canvas probe (only on a miss, >= 300 ms)
+  assert.equal((CORE.match(/bubbleInBox\(\)/g) || []).length, 3, 'a third bubble box read came back');
   assert.equal((CORE.match(/cardInBox\(\)/g) || []).length, 2, 'a second card box read came back');
   assert.match(fnBody('function bubbleGate()'), /BUBBLE_GATE_PX/);
   assert.match(fnBody('function cardGate()'), /hit \/ n >= 0\.08/);
@@ -292,7 +293,8 @@ test('a merged UI canvas is adopted when the second layer is blank', () => {
   const down = CORE.slice(CORE.indexOf('function downscale'), CORE.indexOf('function snapshotInner'));
   assert.match(down, /if \(dataHasInk\(sdata\)\) uiBlank = 0; else uiBlank\+\+;/, 'a blank read is counted');
   assert.match(down, /checkSurface\(\)/, 'the blank count is acted on');
-  assert.match(CORE, /for \(let i = 3; i < d\.length; i \+= 4\) if \(d\[i\] > 0\) return true;/, 'ink means a non-transparent pixel');
+  assert.match(CORE, /for \(let i = 3; i < d\.length; i \+= 4\) if \(d\[i\] > 0\) n\+\+;/, 'ink means a non-transparent pixel');
+  assert.match(CORE, /return \{ ink: n > 0, density: n \/ 256 \};/, 'density is what separates the world layer from the UI layer');
 });
 
 test('a seat hold suppresses cast retries, and clearing it does not fire on the first frame', () => {

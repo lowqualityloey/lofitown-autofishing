@@ -108,6 +108,16 @@ test('the dial search can widen, and a blind run has a whole-surface recovery', 
   assert.match(step, /F\.opts\.dialFallbackMs/);
 });
 
+test('a missed surface asks the other canvas before concluding there is no prompt', () => {
+  // Live 2026-11-02: the game put the prompt layer back on its own sparse canvas while the bot read
+  // the world canvas, and it reported zero bubbles for fifteen minutes with REEL! on screen.
+  assert.match(SRC, /function probeOtherSurface/);
+  assert.match(SRC, /const alt = probeOtherSurface\(\);/);
+  assert.match(SRC, /function inkStats/, 'has-ink alone cannot tell the world from the UI layer');
+  assert.match(SRC, /other\.density < 0\.5/, 'never hand the layer back to the dense world canvas');
+  assert.match(SRC, /t - \(F\.altAt \|\| 0\) > 300/);
+});
+
 test('a new dial opens the press gate, and an accepted press re-arms the next rotation', () => {
   // Live 2026-11-02, narrow band 9/12: one lost attempt locked seven dials and pressed three times
   // with nothing rejected. The gate (F.armed) was never opened on arrival at a new spawn.

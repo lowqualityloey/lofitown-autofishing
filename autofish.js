@@ -1126,20 +1126,29 @@ const SPECIES = [
     uiCanvas = cans.find((c) => c !== gameCanvas) || cans[1] || cans[0];
   }
 
-  /** Does this canvas draw anything at all? A 16x16 downscale is enough to tell ink from empty. */
-  function hasInk(c) {
-    if (!c || !c.width || !c.isConnected) return false;
+  /**
+   * Does this canvas draw anything, and how full is it? A 16x16 downscale answers both.
+   *
+   * Density is what separates the two layers: the world canvas is essentially full (measured live
+   * 2026-11-02: 967,959 of 968,059 pixels painted) while the UI overlay is sparse (6,498, mostly
+   * the prompt bubble). "Has ink" alone cannot tell them apart, and that is how the bot ended up
+   * reading the world layer and reporting zero bubbles while a REEL! prompt was on screen.
+   */
+  function inkStats(c) {
+    if (!c || !c.width || !c.isConnected) return { ink: false, density: 0 };
     if (!inkBuf) {
       inkBuf = document.createElement('canvas');
       inkBuf.width = 16; inkBuf.height = 16;
       inkCtx = inkBuf.getContext('2d', { willReadFrequently: true });
     }
     inkCtx.clearRect(0, 0, 16, 16);
-    try { inkCtx.drawImage(c, 0, 0, 16, 16); } catch (e) { return false; }
+    try { inkCtx.drawImage(c, 0, 0, 16, 16); } catch (e) { return { ink: false, density: 0 }; }
     const d = inkCtx.getImageData(0, 0, 16, 16).data;
-    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true;
-    return false;
+    let n = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+    return { ink: n > 0, density: n / 256 };
   }
+  function hasInk(c) { return inkStats(c).ink; }
 
   /**
    * The game used to paint the world on the renderer canvas and the prompts on a second 2D layer.
@@ -1166,10 +1175,42 @@ const SPECIES = [
   }
 
   /** The UI canvas read blank for several scans: if the other candidate has ink, the UI moved. */
+  /**
+   * Look for a prompt on the canvas the bot is NOT reading, and keep it if that is where the UI is.
+   *
+   * The game has shipped the prompt layer both merged into the renderer (2026-11-02: renderer 965k
+   * painted, second canvas empty) and split onto its own sparse canvas (later the same day: world
+   * 968k, overlay 6.5k). A surface pick can be right at load and wrong an hour later, so a miss is
+   * not evidence of "no prompt" until the other canvas has been asked too.
+   */
+  function probeOtherSurface() {
+    const cans = [...document.querySelectorAll('canvas')];
+    const alt = cans.find((c) => c !== uiCanvas && c.isConnected && c.width);
+    if (!alt) return null;
+    const cur = uiCanvas;
+    uiCanvas = alt; snapAt = 0;
+    let found = null;
+    try { if (snapshot() && bubbleGate()) found = bubbleInBox(); } catch (e) { found = null; }
+    if (found) {
+      gameCanvas = cur;
+      uiAdopted = true;
+      uiCheckAt = now();
+      L('ui layer moved', { surface: 'the other canvas', cx: found.cx, cy: found.cy });
+    } else {
+      uiCanvas = cur;
+    }
+    snapAt = 0;
+    return found;
+  }
+
   function checkSurface() {
     if (uiAdopted && now() - uiCheckAt > 5000) {
       uiCheckAt = now();
-      if (hasInk(gameCanvas)) {
+      // Only hand it back to something overlay-shaped. The renderer canvas is the world and is
+      // always full, so a bare "has ink" test flipped the bot onto it five seconds after every
+      // adoption and left it blind for the rest of the session.
+      const other = inkStats(gameCanvas);
+      if (other.ink && other.density < 0.5) {
         const old = uiCanvas;
         uiCanvas = gameCanvas;
         gameCanvas = old;
@@ -1698,6 +1739,13 @@ const SPECIES = [
     if (bubbleGate()) {
       const b = bubbleInBox();
       if (b) return b;
+    }
+    // This surface missed. Ask the other canvas before concluding there is no prompt; a miss costs
+    // one boxed readback and it is throttled, while a wrong surface costs the whole session.
+    if (t - (F.altAt || 0) > 300) {
+      F.altAt = t;
+      const alt = probeOtherSurface();
+      if (alt) return alt;
     }
     return bubbleAnywhere();
   };
