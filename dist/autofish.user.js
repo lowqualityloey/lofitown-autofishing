@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.17
+// @version      3.9.19
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.17" };
+  const F = { version: "3.9.19" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -670,6 +670,64 @@ window.__autofishInstalled = true;
       cut: cfg.cut || null,
     };
   }
+
+  /**
+   * What the presses actually did, from the probe log: how often the model predicted a press inside
+   * the window, how wrong the prediction turned out to be in degrees, and how many presses were
+   * never measured (accepted by assumption rather than observed).
+   */
+  /**
+   * How well (delta, omega) predicts the next frame's delta, in degrees and in milliseconds.
+   *
+   * This is the quantity that decides a marginal narrow press, and it must be measured WITHOUT
+   * pressing: a press makes the game spawn a new triangle, so the frame after one jumps for a
+   * reason that is not model error. The first version of this measured exactly that post-press
+   * frame and reported 77 deg of "error" on a 40 deg window - an artifact of the spawn.
+   *
+   * ms is the number that matters: a +/-18.5 deg window at 300 deg/s is only 62 ms wide.
+   */
+  function predictionSummary(log) {
+    const rows = Array.isArray(log) ? log.filter(Boolean) : [];
+    const deg = rows.map((r) => Math.abs(r.err)).filter((v) => isFinite(v)).sort((a, b) => a - b);
+    const ms = rows.map((r) => (r.om ? (Math.abs(r.err) / Math.abs(r.om)) * 1000 : null))
+      .filter((v) => v != null && isFinite(v)).sort((a, b) => a - b);
+    const q = (arr, p) => (arr.length ? +arr[Math.min(arr.length - 1, Math.floor(p * arr.length))].toFixed(1) : null);
+    const mean = (arr) => (arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null);
+    return {
+      samples: rows.length,
+      meanAbsDeg: deg.length ? +mean(deg).toFixed(1) : null,
+      p50Deg: q(deg, 0.5),
+      p95Deg: q(deg, 0.95),
+      maxDeg: deg.length ? +deg[deg.length - 1].toFixed(1) : null,
+      meanAbsMs: ms.length ? +mean(ms).toFixed(1) : null,
+      p50Ms: q(ms, 0.5),
+      p95Ms: q(ms, 0.95),
+      maxMs: ms.length ? +ms[ms.length - 1].toFixed(1) : null,
+      over50ms: ms.filter((v) => v > 50).length,
+      over50msRate: ms.length ? +(ms.filter((v) => v > 50).length / ms.length).toFixed(3) : null,
+    };
+  }
+
+  /** Press acceptance, and how much of it was observed rather than assumed. */
+  function pressAcceptSummary(log) {
+    const rows = Array.isArray(log) ? log.filter(Boolean) : [];
+    const judged = rows.filter((r) => r.inside != null);
+    const assumed = rows.filter((r) => r.via === 'assumed').length;
+    const settled = rows.filter((r) => r.via === 'settled').length;
+    return {
+      presses: rows.length,
+      settled,
+      assumed,
+      assumedRate: (settled + assumed) ? +(assumed / (settled + assumed)).toFixed(3) : null,
+      insidePredicted: rows.filter((r) => r.inside === true).length,
+      judged: judged.length,
+      insideRate: judged.length ? +(rows.filter((r) => r.inside === true).length / judged.length).toFixed(3) : null,
+      meanWindowDeg: rows.filter((r) => isFinite(r.win)).length
+        ? +(rows.filter((r) => isFinite(r.win)).reduce((s, r) => s + r.win, 0) / rows.filter((r) => isFinite(r.win)).length).toFixed(1)
+        : null,
+    };
+  }
+
   // </stats-core>
 
   /* ---- coordinate frame ------------------------------------------------
@@ -2455,10 +2513,46 @@ const SPECIES = [
     if (out.verdict !== 'accepted' && out.verdict !== 'rejected') return;
     recordPressVerdict(out.verdict, w.biasMs);
     L('press verdict', { verdict: out.verdict, biasMs: w.biasMs, width: Math.round((w.press && w.press.width) || 0) });
+    if (F.pressProbe && !F.pressProbe.via) {
+      F.pressProbe.via = 'settled';
+      F.pressProbe.verdict = out.verdict;
+      pushPressProbe(F.pressProbe);
+      F.pressProbe = null;
+    }
+  }
+
+  /** Start a press probe and retire the previous one the way doPress always assumed it. */
+  function probePressStart(s) {
+    const prev = F.pressProbe;
+    if (prev && !prev.via) {
+      prev.via = 'assumed';
+      prev.verdict = 'accepted';
+      pushPressProbe(prev);
+    }
+    const p = F.planNow || {};
+    F.pressProbe = {
+      at: now(),
+      lead: F.opts.leadMs != null ? F.opts.leadMs : 25,
+      width: s && s.width != null ? Math.round(s.width) : null,
+      om: s && s.omega != null ? Math.round(s.omega) : null,
+      delta: s && s.delta != null ? +Number(s.delta).toFixed(1) : null,
+      pred: p.pred != null ? +Number(p.pred).toFixed(1) : null,
+      win: p.win != null ? +Number(p.win).toFixed(1) : null,
+      inside: (p.win != null && s && s.delta != null) ? Math.abs(Number(s.delta)) <= p.win : null,
+      via: null, verdict: null,
+      attempt: F.attempt ? F.attempt.n : null,
+      dial: F.pressesThisDial,
+    };
+  }
+
+  function pushPressProbe(rec) {
+    F.pressLog.push(rec);
+    while (F.pressLog.length > 300) F.pressLog.shift();
   }
 
   function doPress(s, how) {
     if (!F.opts.press || !F.geo) return;
+    probePressStart(s);
     const via = F.opts.pressWith === 'space' ? 'space' : 'pointer';
     if (via === 'space') space(F.opts.spaceTarget);
     else tap(F.geo.cx, F.geo.cy);
@@ -2691,6 +2785,7 @@ const SPECIES = [
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bands = {}; F.widths = {}; F.rarities = {};
+    F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
     // Opt-in only. A userscript has no local server, and a hardcoded localhost POST turns every
     // catch into a failed request. The panel passes a URL only when the user turned POST catches on.
     F.geo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) ? String(opts.logUrl) : null;
@@ -2790,6 +2885,7 @@ const SPECIES = [
     F.bubbleMiss = 0; F.stallRetry = 0;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
+    F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
     clearPendingWin();
     F.catches = [];
     return F.status();
@@ -3075,6 +3171,20 @@ const SPECIES = [
         return;
       }
       F.bad = 0;
+      // Prediction error, measured without pressing. A press between the two frames invalidates the
+      // sample: the game spawns a new triangle and the angle jumps for a reason that is not model
+      // error - which is exactly what the first version of this measured and misreported.
+      const pp = F.predProbe;
+      if (pp && s.t != null && s.delta != null) {
+        const dt = s.t - pp.t;
+        if (dt >= 2 && dt <= 40 && !(F.lastPress && F.lastPress > pp.t)) {
+          const predicted = wrap180(pp.delta + (pp.omega || 0) * dt / 1000);
+          const err = wrap180(Number(s.delta) - predicted);
+          F.predLog.push({ err: +err.toFixed(1), om: pp.omega != null ? Math.round(pp.omega) : null, w: Math.round(Number(s.width) || 0), dt: Math.round(dt) });
+          while (F.predLog.length > 400) F.predLog.shift();
+        }
+      }
+      F.predProbe = { t: s.t, delta: s.delta, omega: s.omega };
       settlePress(s, F.dialBlinks);
       // Arc travel since the lock, in degrees: one turn is one pass of the pin under the wedge.
       if (s.mid != null) {
@@ -3101,6 +3211,7 @@ const SPECIES = [
         replanMs: F.opts.replanMs,
       });
       F.planReason = plan.reason;
+      F.planNow = { pred: plan.pred, win: plan.win };   // what the press probe compares against
       if (s.omega != null && Math.abs(s.omega) > (F.dialMaxOmega || 0)) F.dialMaxOmega = Math.abs(s.omega);
       // Total travel of the wedge since the lock: a real dial sweeps degrees every frame, a
       // fading one sits still while the rate estimate decays to zero.
@@ -3704,6 +3815,9 @@ const SPECIES = [
       startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
       endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
       untimedRows: merged.length - timed.length,
+      presses: pressAcceptSummary(F.pressLog),
+      prediction: predictionSummary(F.predLog),
+      pressLog: (F.pressLog || []).slice(-60),
       run: runSummary(asAttempts, { cut: F.cutReason || null, locksDisarmed: (F.stats && F.stats.locksDisarmed) || 0 }),
       perf: {
         fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,

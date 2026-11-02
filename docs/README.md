@@ -11,6 +11,7 @@
 | [tasks/TASK-2026-11-02-autofish-doctor.md](tasks/TASK-2026-11-02-autofish-doctor.md) | Task record for `doctor()`, the verdict that names why the bot is or is not fishing. |
 | [tasks/TASK-2026-11-02-quotable-run.md](tasks/TASK-2026-11-02-quotable-run.md) | Task record for `exportRun()`, the per-run store and the interval maths a headline is quoted from. |
 | [tasks/TASK-2026-11-02-narrow-band.md](tasks/TASK-2026-11-02-narrow-band.md) | Task record for the narrow band: the press gate that arrived closed, and the per-dial telemetry that proves it. |
+| [tasks/TASK-2026-11-02-press-error.md](tasks/TASK-2026-11-02-press-error.md) | Task record for per-press timing error: how far from the window a press landed, in degrees. |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-10-27-event-card-freeze.md](reviews/2026-10-27-event-card-freeze.md) | Review of the stuck catch-card bug and its fix. |
 | [reviews/2026-10-28-performance-review.md](reviews/2026-10-28-performance-review.md) | Performance review: where the frame budget actually goes, the findings ranked, and the smallest useful fixes. |

@@ -15,7 +15,7 @@ const CLOSE = '// </stats-core>';
 const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('stats-core sentinels are missing from autofish.js');
-const S = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { wilson, runSummary };')();
+const S = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { wilson, runSummary, pressAcceptSummary, predictionSummary };')();
 
 const near = (x, y, eps) => Math.abs(x - y) <= (eps == null ? 0.001 : eps);
 
@@ -87,3 +87,55 @@ test('the run survives a reload: store, cap and a caught failure', () => {
   assert.match(SRC, /F\.exportRun = function/);
   assert.match(SRC, /F\.runStoreError/);
 });
+
+test('prediction error is reported in degrees and in milliseconds', () => {
+  // The number that decides a marginal narrow press. Measured without pressing: a press makes the
+  // game spawn a new triangle, and the frame after one jumps for a reason that is not model error.
+  const log = [
+    { err: 2, om: 300, w: 45 },
+    { err: -4, om: 200, w: 45 },
+    { err: 10, om: 100, w: 45 },
+    { err: 1, om: null, w: 45 },
+  ];
+  const s = S.predictionSummary(log);
+  assert.equal(s.samples, 4);
+  assert.equal(s.p95Deg, 10);
+  assert.equal(s.maxDeg, 10);
+  // 2 deg at 300 deg/s is 6.7 ms; 10 deg at 100 deg/s is 100 ms.
+  assert.ok(s.p50Ms > 10 && s.p50Ms < 30, 'p50 ms ' + s.p50Ms);
+  assert.equal(s.over50ms, 1);
+  assert.equal(s.over50msRate, 0.333);
+  assert.equal(S.predictionSummary([]).samples, 0);
+  assert.equal(S.predictionSummary([]).p95Ms, null);
+});
+
+test('press acceptance separates observed from assumed', () => {
+  const log = [
+    { inside: true, win: 18.5, via: 'settled' },
+    { inside: true, win: 18.5, via: 'settled' },
+    { inside: false, win: 22, via: 'assumed' },
+    { inside: true, win: 22, via: 'assumed' },
+  ];
+  const s = S.pressAcceptSummary(log);
+  assert.equal(s.presses, 4);
+  assert.equal(s.settled, 2);
+  assert.equal(s.assumed, 2);
+  assert.equal(s.assumedRate, 0.5);
+  assert.equal(s.insideRate, 0.75);
+  assert.equal(s.meanWindowDeg, 20.3);
+  assert.equal(S.pressAcceptSummary([]).assumedRate, null);
+});
+
+test('the instruments are wired into the dial path and the export', () => {
+  assert.match(SRC, /function probePressStart/);
+  assert.match(SRC, /probePressStart\(s\);/);
+  assert.match(SRC, /presses: pressAcceptSummary\(F\.pressLog\)/);
+  assert.match(SRC, /prediction: predictionSummary\(F\.predLog\)/);
+  assert.match(SRC, /F\.pressProbe\.via = 'settled'/);
+  // The prediction sample must skip any frame a press landed between.
+  assert.match(SRC, /!\(F\.lastPress && F\.lastPress > pp\.t\)/);
+  // And the spawn-poisoned measurement must be gone for good.
+  assert.doesNotMatch(SRC, /probePressSample/);
+  assert.doesNotMatch(SRC, /atJudge/);
+});
+
