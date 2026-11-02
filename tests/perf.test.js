@@ -198,25 +198,25 @@ test('the catch-card scan is throttled to about 10 Hz', () => {
 test('the bubble branch escalates instead of tapping the same blob forever', () => {
   const btn = CORE.indexOf('const b = F.findBubble();');
   assert.ok(btn > 0, 'the bubble branch is missing');
-  const branch = CORE.slice(btn, btn + 2600);
+  const branch = CORE.slice(btn, btn + 3400);
   assert.match(branch, /const rung = \(F\.bubbleMiss = \(F\.bubbleMiss \|\| 0\) \+ 1\);/);
   assert.match(branch, /castRecovery\(rung\)/);
-  assert.match(branch, /if \(rec\.tap\)/);
+  assert.match(branch, /if \(rec\.tap && clickable\)/);
   assert.match(branch, /if \(rec\.space\)/);
   // a plain unconditional tap() that ignored the ladder is what caused the first stall
   assert.doesNotMatch(branch, /\n\s{8}tap\(b\.cx, b\.cy\);/);
   // ... but the ladder must never give the click up either. Measured live 2026-10-29: rungs 14-36
   // were all `tap:false`, so the bot pressed a key the game ignored for twenty minutes while a
   // REEL! prompt sat on screen. The click is the one input that has ever started the minigame.
-  assert.match(branch, /if \(rec\.tap\) tap\(b\.cx, b\.cy\);/);
+  assert.match(branch, /if \(rec\.tap && clickable\) tap\(b\.cx, b\.cy\);/);
   assert.doesNotMatch(CORE, /return \{ tap: false, space: true/);
 });
 
 test('the dial hint follows the prompt it can see, not only the prompt it clicked', () => {
   const btn = CORE.indexOf('const b = F.findBubble();');
-  const branch = CORE.slice(btn, btn + 2600);
+  const branch = CORE.slice(btn, btn + 3400);
   const hint = branch.indexOf('F.hint = { x: b.cx, y: b.cy + 53 };');
-  const tap = branch.indexOf('if (rec.tap) tap(b.cx, b.cy);');
+  const tap = branch.indexOf('if (rec.tap && clickable) tap(b.cx, b.cy);');
   assert.ok(hint > 0, 'the bubble branch must set the dial hint');
   assert.ok(tap > hint, 'the hint belongs before the tap gate, or a rung that stops tapping freezes it');
 });

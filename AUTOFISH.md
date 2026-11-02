@@ -2306,4 +2306,66 @@ the real 3.9.10 state must return `snapshot-fallback`, the real 3.9.11 state `fr
 3.9.9 state `timing-held`, and the healthy 3.9.12 numbers must return `fishing` with severity ok.
 `node --test` passes (241 tests).
 
+## 2026-11-02 3.9.14: a run you can quote
+
+The headline is still 3.8.8 - 103 caught of 112 attempts, 92.0% - because every check since has been
+a handful of fish. Making the next long session count needed two things the bot could not do: hand
+over every attempt, and survive being interrupted.
+
+`F.report()` sliced the last **40** attempts, carried no interval and no environment, and attempts
+lived only in memory, capped at 200 - one reload or one lost seat and the sample was gone. The 3.8.8
+run itself was cut by a seat loss and then the 240-minute cap.
+
+**3.9.14** adds a pure `stats-core`: `wilson(k, n)` and `runSummary(attempts)`, where the attempt is
+always the denominator and press acceptance is reported beside it, never folded in. It reproduces the
+interval this repo already published - 103/112 gives 0.8543-0.9571 against the README quote of
+85.4-95.7% - so the arithmetic that writes a headline is tested against the headline that exists.
+
+`__fish.exportRun()` returns one JSON string: version, profile, start and end, the run summary with
+its interval, the perf snapshot (fps, p95, worst, longtasks, snapshot, readback, rates), what
+`doctor()` thought at the end, the live options, and every stored attempt. Attempts persist to
+`autofish:run:v1:<profile>` on each resolve, capped at 250, every write wrapped, so a reload or a
+lost seat costs one fish rather than the session.
+
+## 2026-11-02 the first run the bot could hand over: 126 caught of 133 attempts
+
+The headline had been 3.8.8 for four releases because every check since was a handful of fish and the
+tools could not carry a long one. 3.9.14 built the carrier - `__fish.exportRun()`, a per-profile
+attempt store and a Wilson interval tested against the repo's own published numbers - and the owner
+then fished a session on 3.9.15 that the bot could hand over attempt by attempt.
+
+| Measurement | 3.8.8 baseline | this run (3.9.15) |
+| :--- | ---: | ---: |
+| attempts | 112 | **133** |
+| caught | 103 | **126** |
+| catch rate | 92.0% | **94.7%** |
+| Wilson 95% CI | 85.4-95.7% | **89.5-97.4%** |
+| presses | 602 | 697 |
+| rejected presses | 0 | **0** |
+| presses a catch | 5.84 | 5.53 |
+| dials closed | 218 | 254 |
+| fps median / p95 frame gap | 139.8 / 8.05 ms | 139.1 / 12.5 ms |
+| losses scored as a bad dial | 0 | **0** |
+
+Every one of the seven losses scored "cast prompt": the fish left while the bot was still casting, and
+not one dial press was blamed. Split by dial width, wide and full went **52/52**, mid 65/69, and the
+narrow band **9/12** - narrow dials are where the last of the fish are lost, which is what the owner
+had guessed from play before there was a number for it.
+
+The run also paid for the tooling that measured it. Three defects came out of the export: attempt
+numbers restart with the page while the store does not (a reload made `n=1` exist three times and the
+merge keyed on it), `startedAt` read 1970 for rows written before the wall-clock fix, and `doctor()`
+warned `timing-held` for a whole session after one slow dial legitimately held 1.03 turns. All three
+are fixed in 3.9.16; the run's rows were never wrong, only their labels were.
+
+Honest scope: one session, one player, one machine, 1179x821 in BrowserOS neo. A better sample than
+3.8.8, not a promise about every window size or every dial.
+
+```
+copy(__fish.exportRun())
+```
+
+`node --test` passes (246 tests). The run itself is next: 90-120 minutes seated, target 120+
+attempts, then the export. Nothing in README/STATE changes until that sample exists.
+
 

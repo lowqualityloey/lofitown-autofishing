@@ -43,6 +43,10 @@
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
   var collapsed = false;
+  // The owner opened it. The game's zones can leave the layout no room, and that used to collapse
+  // the panel again inside the same place() call - a pill that looks clickable and does nothing.
+  // An overlapping panel the owner asked for beats a panel that refuses to open.
+  var userExpanded = false;
   var host = null;
   var root = null;
   var ui = {};
@@ -724,8 +728,8 @@
     });
     host.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
-    min.addEventListener('click', function () { setCollapsed(true); });
-    pill.addEventListener('click', function () { setCollapsed(false); });
+    min.addEventListener('click', function () { userExpanded = false; setCollapsed(true); });
+    pill.addEventListener('click', function () { userExpanded = true; setCollapsed(false); });
     perfBox.addEventListener('click', function () {
       // Expand, then read: the report is a snapshot of the last ~10 s, not a live feed.
       var hidden = perfJson.classList.toggle('hide');
@@ -1274,8 +1278,14 @@
       preferred: dragged || null
     });
     if (res === 'pill') {
-      if (!collapsed) { setCollapsed(true); return; }
-      res = { x: window.innerWidth - 60, y: 12, w: 48, h: 48 };
+      if (!collapsed) {
+        if (!userExpanded) { setCollapsed(true); return; }
+        // No room that clears the game, but the owner opened this on purpose: take the top-left
+        // corner below the HUD strip rather than bounce back to a pill.
+        res = { x: 12, y: 84, w: size.w, h: size.h };
+      } else {
+        res = { x: window.innerWidth - 60, y: 12, w: 48, h: 48 };
+      }
     }
     host.style.left = Math.round(res.x) + 'px';
     host.style.top = Math.round(res.y) + 'px';

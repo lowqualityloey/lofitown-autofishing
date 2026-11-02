@@ -552,9 +552,10 @@
       return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
         { acceptRate: st.acceptRate, accepted: st.accepted, rejected: st.rejected });
     }
-    // More than one full turn of the arc held back is a whole skipped rotation: the 3.9.9 report.
-    // 3.9.12 cannot pass 1 by construction, so this is also the regression witness.
-    if ((st.holdPassesMax || 0) > 1) {
+    // The 3.9.9 report was a wait of several turns. The bar is set well above one turn on purpose:
+    // measured live 2026-11-02, a slow dial can legitimately hold through ~1.03 turns under the
+    // 2500 ms ceiling, and flagging that marked a healthy session as broken for its whole duration.
+    if ((st.holdPassesMax || 0) > 2.5) {
       return o('timing-held', 'warn', 'the first press waits longer than one rotation',
         { holdPassesMax: st.holdPassesMax, held: st.held, forced: st.forced });
     }
@@ -572,6 +573,83 @@
       { sincePromptMs: st.sincePromptMs, sinceDialMs: st.sinceDialMs });
   }
   // </doctor-core>
+
+  /* ---- run statistics --------------------------------------------------
+   * The numbers a long session has to produce: a catch rate with an interval, the press acceptance,
+   * and the per-band split. Pure, so tests can check them against intervals this repo has already
+   * published instead of trusting the arithmetic that quotes them.
+   */
+  // <stats-core>
+  /**
+   * Wilson score interval for k successes out of n. Returns null for an empty sample rather than a
+   * NaN that would make the exported JSON invalid.
+   */
+  function wilson(k, n, z) {
+    const kk = Number(k), nn = Number(n);
+    if (!(nn > 0) || !(kk >= 0) || kk > nn) return null;
+    const zz = z == null ? 1.96 : Number(z);
+    const p = kk / nn;
+    const denom = 1 + (zz * zz) / nn;
+    const centre = p + (zz * zz) / (2 * nn);
+    const margin = zz * Math.sqrt((p * (1 - p)) / nn + (zz * zz) / (4 * nn * nn));
+    return { p, lo: (centre - margin) / denom, hi: (centre + margin) / denom };
+  }
+
+  /**
+   * One summary of a run's attempts. The attempt is the denominator: a press is not a fish, so the
+   * rate is caught / attempts and the press numbers are reported beside it, never mixed in.
+   * attempts: [{ verdict, band, widthBand, presses, pressAccepted, pressRejected, dials,
+   *              avgWidth, ms, startAt }]
+   */
+  function runSummary(attempts, o) {
+    const list = Array.isArray(attempts) ? attempts : [];
+    const cfg = o || {};
+    const widths = {}, bands = {};
+    let n = 0, caught = 0, lost = 0, presses = 0, accepted = 0, rejected = 0, dials = 0, ms = 0;
+    let widthSum = 0, widthN = 0, firstAt = null, lastAt = null;
+    for (const a of list) {
+      if (!a) continue;
+      n++;
+      const hit = a.verdict === 'caught';
+      if (hit) caught++;
+      else if (a.verdict === 'lost') lost++;
+      presses += a.presses || 0;
+      accepted += a.pressAccepted || 0;
+      rejected += a.pressRejected || 0;
+      dials += a.dials || 0;
+      ms += a.ms || 0;
+      if (a.avgWidth != null && isFinite(a.avgWidth)) { widthSum += a.avgWidth; widthN++; }
+      if (a.startAt != null) {
+        if (firstAt == null || a.startAt < firstAt) firstAt = a.startAt;
+        if (lastAt == null || a.startAt > lastAt) lastAt = a.startAt;
+      }
+      const wb = String(a.widthBand || 'unknown');
+      const w = widths[wb] || (widths[wb] = { band: wb, attempts: 0, caught: 0, lost: 0 });
+      w.attempts++; if (hit) w.caught++; else if (a.verdict === 'lost') w.lost++;
+      const sb = String(a.band || 'unknown');
+      const b = bands[sb] || (bands[sb] = { band: sb, attempts: 0, caught: 0, lost: 0 });
+      b.attempts++; if (hit) b.caught++; else if (a.verdict === 'lost') b.lost++;
+    }
+    const pressN = accepted + rejected;
+    return {
+      attempts: n, caught, lost,
+      catchRate: n ? caught / n : null,
+      catchCi: wilson(caught, n),
+      presses, accepted, rejected,
+      pressAcceptRate: pressN ? accepted / pressN : null,
+      pressCi: wilson(accepted, pressN),
+      pressesPerAttempt: n ? +(presses / n).toFixed(2) : null,
+      pressesPerCatch: caught ? +(presses / caught).toFixed(2) : null,
+      dials,
+      meanAttemptMs: n ? Math.round(ms / n) : null,
+      meanWidth: widthN ? +(widthSum / widthN).toFixed(1) : null,
+      widths: Object.keys(widths).sort().map((k) => widths[k]),
+      bands: Object.keys(bands).sort().map((k) => bands[k]),
+      firstAt, lastAt,
+      cut: cfg.cut || null,
+    };
+  }
+  // </stats-core>
 
   /* ---- coordinate frame ------------------------------------------------
    * Everything the detectors see is in the UI canvas's backing-store pixels. Everything the DOM
@@ -1258,8 +1336,13 @@ const SPECIES = [
             }
           }
           const bh = y1 - y0;                 // bubble height; h stays the buffer height
-          if (bh > 25 && bh < 95 && (!best || n > best.n)) {
-            best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n };
+          // 25 was wide enough for a player's name tag, which is the same white-with-dark-text
+          // shape one size smaller. Tapping one opened that player's profile mid-session (reported
+          // live 2026-11-02). The prompt is ~108x50 at the reference size and scales with the
+          // canvas, so 28 px at the bottom keeps it and drops a tag.
+          const fill = n / Math.max(1, bw * bh);
+          if (bh >= 28 && bh < 95 && fill >= 0.45 && (!best || n > best.n)) {
+            best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n, via: 'box' };
           }
         }
         s = -1;
@@ -1529,7 +1612,7 @@ const SPECIES = [
       if (!r) continue;
       const ink = inkMix(r);
       if (ink.white < 0.45 || ink.dark < 0.02 || ink.dark > 0.5) continue;
-      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, n: b.count * SDOWN * SDOWN };
+      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, n: b.count * SDOWN * SDOWN, via: 'anywhere' };
       if (!best || cand.n > best.n) best = cand;
     }
     if (best) L('bubble anywhere', { cx: best.cx, cy: best.cy, w: best.w, h: best.h });
@@ -2921,10 +3004,14 @@ const SPECIES = [
         // never reach a dial 100 px away.
         F.hint = { x: b.cx, y: b.cy + 53 };
         F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
-        if (rec.tap) tap(b.cx, b.cy);
+        // A blob found by the whole-surface scan is only a hint: it can be a player's name tag,
+        // and clicking one opens that player's profile. The boxed scan is the one allowed to
+        // click; the ladder's Space rung still casts when the hint was all we had.
+        const clickable = b.via !== 'anywhere';
+        if (rec.tap && clickable) tap(b.cx, b.cy);
         F.lastPress = t;
         F.stats.bubbles++;
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, tap: rec.tap, space: rec.space });
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: rec.tap && clickable, space: rec.space });
         if (rec.space) {
           F.lastSpaceTry = t;
           space(F.opts.spaceTarget);
@@ -3193,6 +3280,8 @@ const SPECIES = [
       const c = F.arms[a.arm] || (F.arms[a.arm] = { arm: a.arm, attempts: 0, caught: 0, lost: 0, presses: 0, dials: 0 });
       c.attempts++; c[key]++; c.presses += a.presses; c.dials += a.dials;
     }
+    a.wallAt = Date.now();
+    saveRunRow(a);
     F.attempts.push(a);
     while (F.attempts.length > 200) F.attempts.shift();
     L(verdict === 'caught' ? 'attempt caught' : 'attempt lost', {
@@ -3461,6 +3550,123 @@ const SPECIES = [
   F.logReset = function () {
     saveLedger(emptyLog());
     return true;
+  };
+
+  /* ---- the run store ---------------------------------------------------
+   * Attempts used to live only in the in-memory ring, so one reload or one lost seat destroyed a
+   * long session's sample. They now persist per profile - the same convention as the ledger and the
+   * budget - and exportRun() merges the store with the live ring.
+   */
+  const RUN_KEY = 'autofish:run:v1';
+  const RUN_PREFIX = RUN_KEY + ':';
+  const RUN_CAP = 250;
+
+  function runStoreKey() { return RUN_PREFIX + logProfile; }
+
+  /** The compact row both the store and the export use; one shape, one place. */
+  function runRowOf(a) {
+    const wall = a.wallAt != null ? a.wallAt : null;
+    return {
+      // The counter restarts with the page while the store does not, so n alone repeats after a
+      // reload (measured live: n=1 three times in one run). The id pairs the wall clock with n and
+      // is what the merge dedupes on.
+      id: wall != null ? wall + '-' + (a.n || 0) : 'x-' + (a.n || 0),
+      n: a.n, v: a.verdict || null, why: a.why || null, ms: a.ms || 0,
+      p: a.presses || 0, pa: a.pressAccepted || 0, pr: a.pressRejected || 0,
+      d: a.dials || 0, w: (a.avgWidth != null && isFinite(a.avgWidth)) ? +a.avgWidth.toFixed(1) : null,
+      wb: a.widthBand || null, b: a.band || null,
+      sp: a.species || null, r: a.rarity || null,
+      // Wall clock, captured once at resolve. performance.now() is a page-relative clock, so the
+      // first export dated the run to 1970 - and a per-call Date.now() here would give the stored
+      // row and its in-memory twin different keys and double-count the attempt.
+      t: a.wallAt != null ? a.wallAt : (a.startedAt != null ? Math.round(a.startedAt) : null),
+    };
+  }
+
+  function loadRunRows() {
+    try {
+      const raw = localStorage.getItem(runStoreKey());
+      if (!raw) return [];
+      const rows = JSON.parse(raw);
+      return Array.isArray(rows) ? rows : [];
+    } catch (e) { return []; }
+  }
+
+  /**
+   * Persist one resolved attempt. Never throws: the page is mid-render inside the game's own frame,
+   * and a storage failure must not take the fishing loop down with it.
+   */
+  function saveRunRow(a) {
+    try {
+      const rows = loadRunRows();
+      rows.push(runRowOf(a));
+      while (rows.length > RUN_CAP) rows.shift();
+      localStorage.setItem(runStoreKey(), JSON.stringify(rows));
+      F.runStoreError = null;
+    } catch (e) {
+      F.runStoreError = String((e && e.message) || e);
+    }
+  }
+
+  /**
+   * One blob for a finished run: every attempt, the interval around the rate, the environment it ran
+   * in, and what the bot thought of itself at the end. Rendering it in a shell means the numbers in
+   * README/STATE are recomputed from attempts instead of transcribed by hand.
+   *
+   *   copy(__fish.exportRun())      // JSON, paste it into the notebook review
+   *   __fish.exportRun({ reset: true })   // export, then clear the stored run
+   */
+  F.exportRun = function (opts) {
+    const o = opts || {};
+    const rows = loadRunRows().concat((F.attempts || []).map(runRowOf));
+    const seen = {}, merged = [];
+    for (const r of rows) {
+      if (!r || r.n == null) continue;
+      const key = r.id || (r.n + ':' + (r.t || 0));
+      if (seen[key]) continue;
+      seen[key] = 1;
+      merged.push(r);
+    }
+    // Rows from different pages have unrelated clocks: sort the timed ones by wall clock and keep
+    // the rest in resolution order rather than pretending one clock covers both.
+    const timed = merged.filter((r) => r.t != null && r.t > 1e12).map((r) => r.t).sort((a, b) => a - b);
+    merged.sort((a, b) => {
+      const at = a.t != null && a.t > 1e12, bt = b.t != null && b.t > 1e12;
+      if (at && bt) return a.t - b.t || (a.n || 0) - (b.n || 0);
+      if (at !== bt) return at ? 1 : -1;
+      return (a.n || 0) - (b.n || 0);
+    });
+    const asAttempts = merged.map((r) => ({
+      verdict: r.v, band: r.b, widthBand: r.wb, presses: r.p,
+      pressAccepted: r.pa, pressRejected: r.pr, dials: r.d,
+      avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t,
+    }));
+    const p = F.perf();
+    const out = {
+      version: F.version,
+      exportedAt: new Date().toISOString(),
+      profile: logProfile,
+      stored: loadRunRows().length,
+      storeError: F.runStoreError || null,
+      // A run that started before 3.9.15 carries page-clock timestamps for part of its rows; a
+      // fabricated 1970 date is worse than an honest null.
+      startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
+      endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
+      untimedRows: merged.length - timed.length,
+      run: runSummary(asAttempts, { cut: F.cutReason || null }),
+      perf: {
+        fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,
+        longtasks: p.longtasks, snapshot: p.snapshot, readback: p.readback, rates: p.rates,
+      },
+      doctor: F.doctor ? F.doctor() : null,
+      opts: F.opts,
+      attempts: merged,
+    };
+    if (o.reset) {
+      try { localStorage.removeItem(runStoreKey()); } catch (e) {}
+      F.attempts = [];
+    }
+    return JSON.stringify(out);
   };
 
   F.report = function () {
