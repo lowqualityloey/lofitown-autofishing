@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.19
+// @version      3.9.23
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.19" };
+  const F = { version: "3.9.23" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -329,12 +329,17 @@ window.__autofishInstalled = true;
       return out;
     }
     // Contain means the pin may be pressed anywhere inside the arc, but the schedule above aims at
-    // the MIDPOINT crossing because that is where the tolerance is widest. When the pin has already
-    // passed the midpoint and is still inside, that next crossing is most of a rotation away - the
-    // "it needs one more turn" feel. Take the open window now instead; an approaching pin still
-    // waits for the midpoint, and 'angle' keeps the midpoint rule unchanged.
+    // the MIDPOINT crossing because that is where the tolerance is widest. When that crossing is far
+    // away and the pin is ALREADY inside, take the open window now.
+    //
+    // This used to require delta * omega > 0, i.e. only take it when the arc was rotating away from
+    // the pin. On a narrow dial that is the difference between pressing and spinning in place: the
+    // window is a handful of degrees, the scheduled crossing is most of a rotation out, and the pass
+    // through the arc happens on the other sign - so nothing ever fired. Measured live 2026-11-02:
+    // a 30 deg dial produced 279 consecutive 'wait' frames, 0 presses, then 'dial gone'.
+    // Containment does not care which side the arc is passing on: inside is inside.
     const insideNowMs = cfg.insideNowMs != null ? cfg.insideNowMs : 60;
-    if (cfg.trigger !== 'angle' && st.armed && delta * omega > 0 && toJudge > insideNowMs &&
+    if (cfg.trigger !== 'angle' && st.armed && toJudge > insideNowMs &&
         Math.abs(delta) <= win && Math.abs(pred) <= win) {
       out.reason = 'inside-now';
       out.cancel = true;
@@ -1144,20 +1149,29 @@ const SPECIES = [
     uiCanvas = cans.find((c) => c !== gameCanvas) || cans[1] || cans[0];
   }
 
-  /** Does this canvas draw anything at all? A 16x16 downscale is enough to tell ink from empty. */
-  function hasInk(c) {
-    if (!c || !c.width || !c.isConnected) return false;
+  /**
+   * Does this canvas draw anything, and how full is it? A 16x16 downscale answers both.
+   *
+   * Density is what separates the two layers: the world canvas is essentially full (measured live
+   * 2026-11-02: 967,959 of 968,059 pixels painted) while the UI overlay is sparse (6,498, mostly
+   * the prompt bubble). "Has ink" alone cannot tell them apart, and that is how the bot ended up
+   * reading the world layer and reporting zero bubbles while a REEL! prompt was on screen.
+   */
+  function inkStats(c) {
+    if (!c || !c.width || !c.isConnected) return { ink: false, density: 0 };
     if (!inkBuf) {
       inkBuf = document.createElement('canvas');
       inkBuf.width = 16; inkBuf.height = 16;
       inkCtx = inkBuf.getContext('2d', { willReadFrequently: true });
     }
     inkCtx.clearRect(0, 0, 16, 16);
-    try { inkCtx.drawImage(c, 0, 0, 16, 16); } catch (e) { return false; }
+    try { inkCtx.drawImage(c, 0, 0, 16, 16); } catch (e) { return { ink: false, density: 0 }; }
     const d = inkCtx.getImageData(0, 0, 16, 16).data;
-    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) return true;
-    return false;
+    let n = 0;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+    return { ink: n > 0, density: n / 256 };
   }
+  function hasInk(c) { return inkStats(c).ink; }
 
   /**
    * The game used to paint the world on the renderer canvas and the prompts on a second 2D layer.
@@ -1184,10 +1198,56 @@ const SPECIES = [
   }
 
   /** The UI canvas read blank for several scans: if the other candidate has ink, the UI moved. */
+  /**
+   * Look for a prompt on the canvas the bot is NOT reading, and keep it if that is where the UI is.
+   *
+   * The game has shipped the prompt layer both merged into the renderer (2026-11-02: renderer 965k
+   * painted, second canvas empty) and split onto its own sparse canvas (later the same day: world
+   * 968k, overlay 6.5k). A surface pick can be right at load and wrong an hour later, so a miss is
+   * not evidence of "no prompt" until the other canvas has been asked too.
+   */
+  function probeOtherSurface() {
+    const cans = [...document.querySelectorAll('canvas')];
+    const alt = cans.find((c) => c !== uiCanvas && c.isConnected && c.width);
+    if (!alt) return null;
+    const cur = uiCanvas;
+    uiCanvas = alt; snapAt = 0;
+    let found = null;
+    try { if (snapshot() && bubbleGate()) found = bubbleInBox(); } catch (e) { found = null; }
+    uiCanvas = cur; snapAt = 0;
+    if (!found) { F.altHit = null; return null; }
+    // Two hits at the same spot before believing it. One white blob on the wrong surface is not a
+    // prompt, and flipping on a single hit made the surface flap every few seconds (measured live
+    // 2026-11-02: 11 'ui layer moved' in a 219-event buffer).
+    const prev = F.altHit;
+    const same = prev && Math.abs(prev.x - found.cx) <= 12 && Math.abs(prev.y - found.cy) <= 12 &&
+      now() - prev.at < 2000;
+    F.altHit = { x: found.cx, y: found.cy, at: now() };
+    if (!same) return null;
+    // Never adopt a dense layer through this path. The world canvas is always full, and adopting it
+    // is what made the bot blind for fifteen minutes. The merged layout (renderer holds everything,
+    // second canvas empty) is handled by adoptSurface()'s blank counter, which does not come through
+    // here - so requiring a sparse alternate unconditionally loses nothing and removes the last flap,
+    // where a blank overlay between prompts looked like the merged case.
+    if (inkStats(alt).density >= 0.5) { F.altHit = null; return null; }
+    gameCanvas = cur;
+    uiCanvas = alt;
+    uiAdopted = true;
+    uiCheckAt = now();
+    snapAt = 0;
+    F.altHit = null;
+    L('ui layer moved', { surface: 'the other canvas', cx: found.cx, cy: found.cy });
+    return found;
+  }
+
   function checkSurface() {
     if (uiAdopted && now() - uiCheckAt > 5000) {
       uiCheckAt = now();
-      if (hasInk(gameCanvas)) {
+      // Only hand it back to something overlay-shaped. The renderer canvas is the world and is
+      // always full, so a bare "has ink" test flipped the bot onto it five seconds after every
+      // adoption and left it blind for the rest of the session.
+      const other = inkStats(gameCanvas);
+      if (other.ink && other.density < 0.5) {
         const old = uiCanvas;
         uiCanvas = gameCanvas;
         gameCanvas = old;
@@ -1716,6 +1776,13 @@ const SPECIES = [
     if (bubbleGate()) {
       const b = bubbleInBox();
       if (b) return b;
+    }
+    // This surface missed. Ask the other canvas before concluding there is no prompt; a miss costs
+    // one boxed readback and it is throttled, while a wrong surface costs the whole session.
+    if (t - (F.altAt || 0) > 300) {
+      F.altAt = t;
+      const alt = probeOtherSurface();
+      if (alt) return alt;
     }
     return bubbleAnywhere();
   };

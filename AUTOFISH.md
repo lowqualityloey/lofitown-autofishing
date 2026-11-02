@@ -2465,6 +2465,73 @@ inferred. The bot is not lying; the sentence that quoted it was too confident.
 The remaining gap is now the mid band (33/37) rather than narrow, and the open work is to make press
 verdicts observable instead of assumed. Neither is urgent.
 
+## 2026-11-02 3.9.20: the game split the layers again, and the bot kept reading the world
+
+Reported live: the session starts, fishes, and after a few minutes stops with a `REEL!` prompt on
+screen and the panel paused for a seat. The bot reported **0 bubbles in 15 minutes** while a prompt
+was visible, so the diagnosis is detection, not the seat.
+
+Enumerating the canvases from inside the game's own render call settled it:
+
+| canvas | painted pixels | white pixels |
+| :--- | ---: | ---: |
+| `app.renderer.canvas` (the world) | 967,959 | 2,424 |
+| the second canvas (**the UI layer**) | 6,498 | **3,384** |
+
+The prompt layer was back on its own sparse canvas. Earlier the same day the game had merged
+everything into the renderer (965k painted, second canvas empty), and `adoptSurface()` was written
+for that case: it hands the layer back "if the other canvas has ink". A world canvas always has ink,
+so five seconds after every adoption the bot flipped onto the world and stayed there, reading a
+canvas that can never show a prompt. That is "fishes for a few minutes, then nothing".
+
+**3.9.20** stops guessing. When the box scan on the current surface misses, the bot asks the **other**
+canvas - one boxed readback, throttled to 300 ms - and keeps it when the prompt is there. Verified
+live before shipping: the same box scan on the second canvas returns a 108x50 candidate at fill 0.63,
+the REEL bubble, against none on the world canvas. `checkSurface()` also refuses to hand the layer
+back to a canvas more than half painted, because "has ink" cannot tell a world from an overlay;
+`inkStats()` reports density for exactly that.
+
+The lesson is the one this project keeps relearning: an assumption about which surface holds the UI
+is a bug waiting for a game update. The fallback makes the surface a runtime fact for the prompt as
+well as for the dial.
+
+## 2026-11-02 3.9.21: inside is inside - the open window was gated on rotation direction
+
+Reported live: during the dial the bot spins and never presses. The page said why without any code
+change - a **30 deg** dial, `geoReasons: { wait: 279, "first-fit": 14, none: 1 }`, `pressesThisDial: 0`,
+then `dial gone`. Not one `inside-now` in the whole sample.
+
+`planPress` schedules at the midpoint crossing, and takes an already-open window as `inside-now` - but
+the condition also demanded `delta * omega > 0`, i.e. only when the arc was rotating one particular
+way. On a 30 deg dial `win` is 11 deg, so the open window is the *only* chance; the pass through the
+arc happens on the other sign, the scheduled crossing is most of a rotation away, and nothing fires.
+On a 90 deg dial (`win` 41) the pin sits inside long enough for the sign-gated path to catch it, which
+is why this hid behind the wide band.
+
+**3.9.21** removes the direction gate: containment takes an open window whichever side the arc is
+passing on, still requiring the prediction to be inside at the judgement instant. `angle` keeps the
+pure midpoint rule.
+
+The old test asserted the opposite ("approaching the midpoint keeps the widest-tolerance schedule"),
+so it was updated with the measurement in the comment - a test that encodes the bug is not a guard.
+
+## 2026-11-02 3.9.22: one hit is not evidence
+
+The 3.9.20 fallback worked - it found the prompt on the overlay canvas and kept fishing - but it
+flipped on a **single** white blob, and the world canvas has HUD whites of its own. Measured live:
+**11 `ui layer moved` events in a 219-event buffer**, roughly one every few seconds, each one resetting
+the snapshot and briefly reading a canvas that cannot show a prompt. It also meant a false blob could
+become a click target on the world layer, which is the name-tag class of bug again.
+
+**3.9.22** requires two things before a surface is adopted: the prompt must be found at the **same
+spot twice** (within 12 px, within 2 s), and the alternate must be **sparse** - unless the surface
+being read has no ink at all, which is the merged-layer case where the renderer legitimately holds
+everything.
+
+That keeps the recovery (a genuine move is adopted on the second hit, about 300-600 ms later) and
+removes the flap, because a persistent world-canvas HUD blob can no longer win against a surface that
+is already drawing ink of its own.
+
 It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
 count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
 (208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
