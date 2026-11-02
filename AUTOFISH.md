@@ -2438,6 +2438,33 @@ zero-rejected-press figure this project quotes rests on an inference, and that i
 
 `node --test` passes (253).
 
+## 2026-11-02 the prediction answer: the narrow band was never timing
+
+A 30-minute session on 3.9.19, 86 attempts: **82 caught, 4 lost**. Bands: wide 34/34, full 10/10,
+**narrow 5/5**, mid 33/37. Every narrow fish landed, with 5-7 accepted presses each.
+
+The prediction instrument - measured without pressing, so the spawn cannot poison it - read:
+
+| | degrees | milliseconds |
+| :--- | ---: | ---: |
+| p50 | 1.9 | 9.6 |
+| p95 | 6.1 | 31.3 |
+| max | 23.8 | 140 |
+| over 50 ms | - | 1% |
+
+A narrow window at 300 deg/s is about 62 ms wide. A p95 of 31 ms sits well inside it, and 99% of
+predictions are within 50 ms. **There is no timing deficit to fix**, so neither `marginDeg` nor the
+first-press budget was the narrow band's problem, and tuning either would have been a guess dressed
+as an experiment. The 9/12 and 6/10 that started this hunt were the closed press gate.
+
+What the same probe did expose is a reporting overstatement. Of 300 presses, **192 were `settled`**
+by an observed frame and **108 were `assumed`** - marked accepted because a second press was only
+possible after a spawn. So "zero rejected presses" is about two-thirds measured and one-third
+inferred. The bot is not lying; the sentence that quoted it was too confident.
+
+The remaining gap is now the mid band (33/37) rather than narrow, and the open work is to make press
+verdicts observable instead of assumed. Neither is urgent.
+
 It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
 count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
 (208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
