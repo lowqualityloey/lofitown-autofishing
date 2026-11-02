@@ -1206,17 +1206,19 @@ const SPECIES = [
       now() - prev.at < 2000;
     F.altHit = { x: found.cx, y: found.cy, at: now() };
     if (!same) return null;
-    // And never adopt a dense layer while the surface we are on has ink of its own: the world canvas
-    // is always full, and adopting it is exactly what made the bot blind for fifteen minutes.
-    const altSparse = inkStats(alt).density < 0.5;
-    if (!altSparse && inkStats(cur).ink) { F.altHit = null; return null; }
+    // Never adopt a dense layer through this path. The world canvas is always full, and adopting it
+    // is what made the bot blind for fifteen minutes. The merged layout (renderer holds everything,
+    // second canvas empty) is handled by adoptSurface()'s blank counter, which does not come through
+    // here - so requiring a sparse alternate unconditionally loses nothing and removes the last flap,
+    // where a blank overlay between prompts looked like the merged case.
+    if (inkStats(alt).density >= 0.5) { F.altHit = null; return null; }
     gameCanvas = cur;
     uiCanvas = alt;
     uiAdopted = true;
     uiCheckAt = now();
     snapAt = 0;
     F.altHit = null;
-    L('ui layer moved', { surface: 'the other canvas', cx: found.cx, cy: found.cy, sparse: altSparse });
+    L('ui layer moved', { surface: 'the other canvas', cx: found.cx, cy: found.cy });
     return found;
   }
 
