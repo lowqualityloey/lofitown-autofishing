@@ -10,7 +10,7 @@
 - **Target Release / Deadline**: 3.9.9 release / not tracked
 - **Current Working Branch**: `audit/autofish-3.9` (this worktree); `main` is the integration branch
 - **Last Updated**: 2026-11-02
-- **Runtime**: Node v26.13.0, no dependencies, no bundler
+- **Runtime**: Node v24.22.1, no dependencies, no bundler
 
 ---
 
@@ -57,7 +57,7 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-10-28-catch-log.md` (the panel spec itself was never committed; its decisions are the ADR log in §6)
+- **Active RFC / Spec**: `docs/specs/2026-10-28-catch-log.md` (the panel design spec is [docs/specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md); its decisions are also the ADR log in §6)
 - **Active Task Spec**: `docs/tasks/autofish-panel.md`
 - **Key Source Files in Flight**: `autofish.js`, `panel.js`, `session.js`, `layout.js`, `build-userscript.js`, `scripts/release.js`, `dist/autofish.user.js`, `tests/*.test.js`
 - **Verification Commands (Scoped)**:
@@ -236,6 +236,9 @@ Staging area for rules observed during sessions but not yet approved as invarian
    scan throttle; a Gecko readback is not a Chromium one.
 5. Run `node scripts/release.js --check` after every tag: it is the only check that proves the public
    asset matches the tagged build.
+
+Items 1-4 are field experiments: they need a live game tab and a human at the keyboard, and no
+automated run can produce them. Item 5 is a release ritual, not a one-off.
 
 ---
 
