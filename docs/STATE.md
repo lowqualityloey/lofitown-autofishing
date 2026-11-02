@@ -39,7 +39,9 @@
   Wilson interval and the attempts survive a reload; the first run to use it - 3.9.15, one seated
   session - caught **126 of 133 attempts (94.7%, CI 89.5-97.4%)** with 697/697 presses accepted and
   no dial loss, replacing the 3.8.8 headline as the accuracy baseline; 3.9.17 opens the press gate
-  on every new dial and re-arms on an accepted press, which is the narrow band's defect. 250 tests.
+  on every new dial and re-arms on an accepted press - measured on the next run: dials are no longer
+  passed untouched (presses per dial 0.4 to 5.6, zero rejected), but the narrow catch rate did not
+  move (6/10), so the remaining loss is press quality or count, not access. 250 tests.
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
   (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
 - [x] **Milestone 3** — self-updating distribution: a private repository's release assets answer an
@@ -303,6 +305,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-02 | lead (DSH session) | 3.9.14: a run you can quote | Attempts lived only in the in-memory ring (cap 200) and `F.report()` showed the last 40, so a long session could not be quoted or even survive a reload. Added a pure stats core (`wilson`, `runSummary`), a per-profile attempt store (cap 250, writes wrapped, failure surfaced as `runStoreError`), and `__fish.exportRun()` returning one JSON blob with the interval, the perf snapshot and the doctor verdict. The interval reproduces the repo's own published 85.4-95.7% for 103/112. 246 tests; the run itself followed. |
 | 2026-11-02 | lead (DSH session) | The first quotable run, and 3.9.16 | The owner fished a 3.9.15 session to **133 attempts: 126 caught (94.7%, Wilson 89.5-97.4%)**, 697/697 presses accepted, 254 dials, all seven losses scored `cast prompt` - no dial loss. Wide/full 52/52, mid 65/69, narrow 9/12. The export exposed three tooling defects, fixed in 3.9.16: attempt numbers restart with the page (the merge keyed on `n`, so a reload looked like double counting), `startedAt` read 1970 for pre-fix rows, and `doctor()` warned `timing-held` for a whole session after one legitimate 1.03-turn hold. 249 tests. |
 | 2026-11-02 | lead (DSH session) | 3.9.17: the narrow band | The run's own rows showed the defect before any code changed: a lost narrow attempt locked 7 dials and pressed 3 times, nothing rejected. `F.armed` was never opened when a new dial locked, so a disarmed dial disarmed the next; on narrow dials (`win` 19.5 deg) the geometric re-arm needs 31.5 deg and often never comes. The gate now opens at every lock, an accepted press re-arms the next rotation on its own, and each dial logs width/rate/presses/held/arrival state with `locksDisarmed` counting arrivals shut. 250 tests; validated by the next run. |
+| 2026-11-02 | lead (DSH session) | 3.9.17 result: the gate was the door, not the fish | 60 minutes on 3.9.17: 95 fresh attempts, **90 caught / 5 lost**, 498 presses, **0 rejected**; full 11/11, wide 26/26, mid 47/48, **narrow 6/10**. The gate fix worked - presses per dial 0.4 to 5.6, 13 of 15 narrow dials closed `hit`, none passed untouched - but the narrow rate did not move: lost and caught narrow attempts show the same 5-7 accepted presses, same spin rates, same durations. The remaining loss is press quality or press count inside the fish timer, not access. `locksDisarmed` counted *arrivals* (174/177, normal) and now counts only dials that arrive shut and die unpressed. Next instrument: per-press timing error in degrees. |
 
 ---
 

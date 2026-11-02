@@ -114,7 +114,8 @@ test('a new dial opens the press gate, and an accepted press re-arms the next ro
   assert.match(SRC, /g\._armed0 = !!F\.armed;\s+F\.armed = true;/, 'a new spawn must open the gate');
   assert.match(SRC, /const spawnProven = newTriangle\(F\.pressStamp, s, F\.dialBlinks, F\.opts\) \|\|/);
   assert.match(SRC, /F\.acceptedAt != null && t - F\.acceptedAt <=/, 'an accepted press is proof of a spawn');
-  assert.match(SRC, /locksDisarmed/, 'a gate that arrives shut must be countable');
+  assert.match(SRC, /locksDisarmed = \(F\.stats\.locksDisarmed \|\| 0\) \+ 1/, 'a dial that dies unpressed must be countable');
+  assert.match(SRC, /!F\.geo\._armed0 && presses === 0/, 'and only that case: arriving shut is normal now');
   assert.match(SRC, /F\.attempt\.dialLog\.push/, 'a dial that passed untouched must be visible per attempt');
 });
 

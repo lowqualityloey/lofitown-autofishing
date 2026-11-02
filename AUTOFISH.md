@@ -2384,6 +2384,31 @@ The second shape in that table is not a bug and is not patched: one dial pressed
 accepted, and the fish still left at 12.4 s. That is a throughput limit - one press per rotation -
 and shortening the press gap to beat it would trade accepted presses for rejected ones.
 
+## 2026-11-02 3.9.17 result: the gate was the door, not the fish
+
+A 60-minute session on 3.9.17 produced 95 new attempts (rows carrying a per-dial log): **90 caught,
+5 lost**, 498 presses, **0 rejected**. Bands: full 11/11, wide 26/26, mid 47/48, **narrow 6/10**.
+
+The gate fix did exactly what it claimed. Narrow dials were previously passed untouched (one lost
+attempt locked 7 dials and pressed 3 times); now every narrow attempt presses 5-7 times, and of the
+15 narrow dials logged, 13 closed as `hit`, 1 `no-press` and 1 `skipped`. Presses per dial went from
+0.4 on the old lost attempts to 5.6.
+
+It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
+count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
+(208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
+fish still leaves: the remaining loss is press *quality* inside a small window, or a press count the
+fish timer does not allow - not access.
+
+`locksDisarmed` was also measuring the wrong thing: it counted dials that *arrived* with the gate
+shut, which is now normal (174 of 177 - every dial after a press), and looked like the fix had
+failed. It now counts only a dial that arrived shut **and died unpressed**, which is the case worth
+alerting on.
+
+The next instrument is per-press timing error: record, for each scheduled press, the predicted
+pin-to-midpoint angle and the angle measured on the next frame, so a narrow miss can be read as
+degrees of error instead of inferred from a lost fish. Another gate fix would be guesswork.
+
 The run also paid for the tooling that measured it. Three defects came out of the export: attempt
 numbers restart with the page while the store does not (a reload made `n=1` exist three times and the
 merge keyed on it), `startedAt` read 1970 for rows written before the wall-clock fix, and `doctor()`

@@ -2548,7 +2548,10 @@ const SPECIES = [
     // before, and a narrow dial is exactly where that costs a fish.
     if (F.attempt) {
       if (!F.attempt.dialLog) F.attempt.dialLog = [];
-      if (F.geo && !F.geo._armed0) F.stats.locksDisarmed = (F.stats.locksDisarmed || 0) + 1;
+      // Only the expensive case: it arrived shut AND the dial died unpressed. Arriving shut is
+      // normal after a press now that the gate is opened at every lock (measured 2026-11-02: 174 of
+      // 177 dials arrive shut, and almost all of them get pressed).
+      if (F.geo && !F.geo._armed0 && presses === 0) F.stats.locksDisarmed = (F.stats.locksDisarmed || 0) + 1;
       F.attempt.dialLog.push({
         w: rec.width, om: rec.omega, p: presses, held: heldMs, armed0: !!(F.geo && F.geo._armed0), v: verdict,
       });
