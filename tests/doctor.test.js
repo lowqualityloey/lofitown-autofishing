@@ -52,10 +52,18 @@ test('it names the 3.9.11 stall of one 250 ms block every second', () => {
 });
 
 test('it names the 3.9.9 first press that waited four rotations', () => {
-  // 2500 ms ceiling against a 64 ms pass: two or more whole turns, not 0.4.
-  const r = D.doctor(Object.assign({}, healthy, { holdPassesMax: 2.1, held: 9, forced: 2 }));
+  // 2500 ms ceiling against a 64 ms pass: several whole turns, not 0.4.
+  const r = D.doctor(Object.assign({}, healthy, { holdPassesMax: 3.5, held: 9, forced: 2 }));
   assert.equal(r.verdict, 'timing-held');
-  assert.equal(r.evidence.holdPassesMax, 2.1);
+  assert.equal(r.evidence.holdPassesMax, 3.5);
+});
+
+test('one slow dial is not a finding: the alert is for the pattern, not a single pass', () => {
+  // Live 2026-11-02: a healthy 3.9.15 session read 1.03 turns on one slow dial and doctor() then
+  // warned for the rest of the run, because the counter is a maximum over the session.
+  const r = D.doctor(Object.assign({}, healthy, { holdPassesMax: 1.03 }));
+  assert.equal(r.severity, 'ok', r.verdict);
+  assert.equal(r.verdict, 'fishing');
 });
 
 test('it names every state that stops a run, in priority order', () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.15
+// @version      3.9.16
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.15" };
+  const F = { version: "3.9.16" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -570,9 +570,10 @@ window.__autofishInstalled = true;
       return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
         { acceptRate: st.acceptRate, accepted: st.accepted, rejected: st.rejected });
     }
-    // More than one full turn of the arc held back is a whole skipped rotation: the 3.9.9 report.
-    // 3.9.12 cannot pass 1 by construction, so this is also the regression witness.
-    if ((st.holdPassesMax || 0) > 1) {
+    // The 3.9.9 report was a wait of several turns. The bar is set well above one turn on purpose:
+    // measured live 2026-11-02, a slow dial can legitimately hold through ~1.03 turns under the
+    // 2500 ms ceiling, and flagging that marked a healthy session as broken for its whole duration.
+    if ((st.holdPassesMax || 0) > 2.5) {
       return o('timing-held', 'warn', 'the first press waits longer than one rotation',
         { holdPassesMax: st.holdPassesMax, held: st.held, forced: st.forced });
     }
@@ -3582,7 +3583,12 @@ const SPECIES = [
 
   /** The compact row both the store and the export use; one shape, one place. */
   function runRowOf(a) {
+    const wall = a.wallAt != null ? a.wallAt : null;
     return {
+      // The counter restarts with the page while the store does not, so n alone repeats after a
+      // reload (measured live: n=1 three times in one run). The id pairs the wall clock with n and
+      // is what the merge dedupes on.
+      id: wall != null ? wall + '-' + (a.n || 0) : 'x-' + (a.n || 0),
       n: a.n, v: a.verdict || null, why: a.why || null, ms: a.ms || 0,
       p: a.presses || 0, pa: a.pressAccepted || 0, pr: a.pressRejected || 0,
       d: a.dials || 0, w: (a.avgWidth != null && isFinite(a.avgWidth)) ? +a.avgWidth.toFixed(1) : null,
@@ -3634,12 +3640,20 @@ const SPECIES = [
     const seen = {}, merged = [];
     for (const r of rows) {
       if (!r || r.n == null) continue;
-      const key = r.n + ':' + (r.t || 0);
+      const key = r.id || (r.n + ':' + (r.t || 0));
       if (seen[key]) continue;
       seen[key] = 1;
       merged.push(r);
     }
-    merged.sort((a, b) => (a.t || 0) - (b.t || 0) || (a.n || 0) - (b.n || 0));
+    // Rows from different pages have unrelated clocks: sort the timed ones by wall clock and keep
+    // the rest in resolution order rather than pretending one clock covers both.
+    const timed = merged.filter((r) => r.t != null && r.t > 1e12).map((r) => r.t).sort((a, b) => a - b);
+    merged.sort((a, b) => {
+      const at = a.t != null && a.t > 1e12, bt = b.t != null && b.t > 1e12;
+      if (at && bt) return a.t - b.t || (a.n || 0) - (b.n || 0);
+      if (at !== bt) return at ? 1 : -1;
+      return (a.n || 0) - (b.n || 0);
+    });
     const asAttempts = merged.map((r) => ({
       verdict: r.v, band: r.b, widthBand: r.wb, presses: r.p,
       pressAccepted: r.pa, pressRejected: r.pr, dials: r.d,
@@ -3652,8 +3666,11 @@ const SPECIES = [
       profile: logProfile,
       stored: loadRunRows().length,
       storeError: F.runStoreError || null,
-      startedAt: merged.length && merged[0].t ? new Date(merged[0].t).toISOString() : null,
-      endedAt: merged.length && merged[merged.length - 1].t ? new Date(merged[merged.length - 1].t).toISOString() : null,
+      // A run that started before 3.9.15 carries page-clock timestamps for part of its rows; a
+      // fabricated 1970 date is worse than an honest null.
+      startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
+      endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
+      untimedRows: merged.length - timed.length,
       run: runSummary(asAttempts, { cut: F.cutReason || null }),
       perf: {
         fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,
