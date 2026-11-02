@@ -652,6 +652,34 @@
       cut: cfg.cut || null,
     };
   }
+
+  /**
+   * What the presses actually did, from the probe log: how often the model predicted a press inside
+   * the window, how wrong the prediction turned out to be in degrees, and how many presses were
+   * never measured (accepted by assumption rather than observed).
+   */
+  function pressErrorSummary(log) {
+    const rows = Array.isArray(log) ? log.filter(Boolean) : [];
+    const withRes = rows.filter((r) => r.res != null && isFinite(r.res));
+    const abs = withRes.map((r) => Math.abs(r.res)).sort((a, b) => a - b);
+    const q = (p) => (abs.length ? abs[Math.min(abs.length - 1, Math.floor(p * abs.length))] : null);
+    const judged = rows.filter((r) => r.inside != null);
+    const wins = rows.filter((r) => r.win != null && isFinite(r.win)).map((r) => r.win);
+    return {
+      presses: rows.length,
+      settled: rows.filter((r) => r.via === 'settled').length,
+      assumed: rows.filter((r) => r.via === 'assumed').length,
+      measured: withRes.length,
+      meanAbsResidual: abs.length ? +(abs.reduce((s, v) => s + v, 0) / abs.length).toFixed(1) : null,
+      p50AbsResidual: q(0.5),
+      p95AbsResidual: q(0.95),
+      maxAbsResidual: abs.length ? abs[abs.length - 1] : null,
+      insidePredicted: rows.filter((r) => r.inside === true).length,
+      judged: judged.length,
+      insideRate: judged.length ? +(rows.filter((r) => r.inside === true).length / judged.length).toFixed(3) : null,
+      meanWindowDeg: wins.length ? +(wins.reduce((s, v) => s + v, 0) / wins.length).toFixed(1) : null,
+    };
+  }
   // </stats-core>
 
   /* ---- coordinate frame ------------------------------------------------
@@ -2437,10 +2465,65 @@ const SPECIES = [
     if (out.verdict !== 'accepted' && out.verdict !== 'rejected') return;
     recordPressVerdict(out.verdict, w.biasMs);
     L('press verdict', { verdict: out.verdict, biasMs: w.biasMs, width: Math.round((w.press && w.press.width) || 0) });
+    if (F.pressProbe && !F.pressProbe.via) {
+      F.pressProbe.via = 'settled';
+      F.pressProbe.verdict = out.verdict;
+      pushPressProbe(F.pressProbe);
+      F.pressProbe = null;
+    }
+  }
+
+  /** Start a press probe and retire the previous one the way doPress always assumed it. */
+  function probePressStart(s) {
+    const prev = F.pressProbe;
+    if (prev && !prev.via) {
+      prev.via = 'assumed';
+      prev.verdict = 'accepted';
+      pushPressProbe(prev);
+    }
+    const p = F.planNow || {};
+    F.pressProbe = {
+      at: now(),
+      lead: F.opts.leadMs != null ? F.opts.leadMs : 25,
+      width: s && s.width != null ? Math.round(s.width) : null,
+      om: s && s.omega != null ? Math.round(s.omega) : null,
+      delta: s && s.delta != null ? +Number(s.delta).toFixed(1) : null,
+      pred: p.pred != null ? +Number(p.pred).toFixed(1) : null,
+      win: p.win != null ? +Number(p.win).toFixed(1) : null,
+      inside: (p.win != null && s && s.delta != null) ? Math.abs(Number(s.delta)) <= p.win : null,
+      res: null, dtMs: null, via: null, verdict: null,
+      attempt: F.attempt ? F.attempt.n : null,
+      dial: F.pressesThisDial,
+    };
+  }
+
+  function pushPressProbe(rec) {
+    F.pressLog.push(rec);
+    while (F.pressLog.length > 300) F.pressLog.shift();
+  }
+
+  /**
+   * Measure the model's error at the instant the game judged the press. The probe stores the delta
+   * the plan predicted for that instant; this back-extrapolates the first frame that arrives after
+   * the press to the same instant and reports the difference in DEGREES. A press that misses a
+   * narrow window then reads as "14 deg outside a +/-18.5 deg window" instead of as a lost fish.
+   */
+  function probePressSample(s) {
+    const p = F.pressProbe;
+    if (!p || p.res != null || !s || s.delta == null || p.at == null) return;
+    const tNow = s.t != null ? s.t : now();
+    const dt = tNow - p.at;
+    if (dt < 0 || dt > 150) return;
+    const om = p.om != null ? p.om : (s.omega || 0);
+    const judgeAt = p.at + (p.lead || 0);
+    const atJudge = wrap180(Number(s.delta) - om * (tNow - judgeAt) / 1000);
+    p.res = p.pred != null ? +wrap180(atJudge - p.pred).toFixed(1) : null;
+    p.dtMs = Math.round(dt);
   }
 
   function doPress(s, how) {
     if (!F.opts.press || !F.geo) return;
+    probePressStart(s);
     const via = F.opts.pressWith === 'space' ? 'space' : 'pointer';
     if (via === 'space') space(F.opts.spaceTarget);
     else tap(F.geo.cx, F.geo.cy);
@@ -2673,6 +2756,7 @@ const SPECIES = [
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bands = {}; F.widths = {}; F.rarities = {};
+    F.pressLog = []; F.pressProbe = null;
     // Opt-in only. A userscript has no local server, and a hardcoded localhost POST turns every
     // catch into a failed request. The panel passes a URL only when the user turned POST catches on.
     F.geo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) ? String(opts.logUrl) : null;
@@ -2772,6 +2856,7 @@ const SPECIES = [
     F.bubbleMiss = 0; F.stallRetry = 0;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
+    F.pressLog = []; F.pressProbe = null;
     clearPendingWin();
     F.catches = [];
     return F.status();
@@ -3057,6 +3142,7 @@ const SPECIES = [
         return;
       }
       F.bad = 0;
+      probePressSample(s);
       settlePress(s, F.dialBlinks);
       // Arc travel since the lock, in degrees: one turn is one pass of the pin under the wedge.
       if (s.mid != null) {
@@ -3083,6 +3169,7 @@ const SPECIES = [
         replanMs: F.opts.replanMs,
       });
       F.planReason = plan.reason;
+      F.planNow = { pred: plan.pred, win: plan.win };   // what the press probe compares against
       if (s.omega != null && Math.abs(s.omega) > (F.dialMaxOmega || 0)) F.dialMaxOmega = Math.abs(s.omega);
       // Total travel of the wedge since the lock: a real dial sweeps degrees every frame, a
       // fading one sits still while the rate estimate decays to zero.
@@ -3686,6 +3773,8 @@ const SPECIES = [
       startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
       endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
       untimedRows: merged.length - timed.length,
+      presses: pressErrorSummary(F.pressLog),
+      pressLog: (F.pressLog || []).slice(-80),
       run: runSummary(asAttempts, { cut: F.cutReason || null, locksDisarmed: (F.stats && F.stats.locksDisarmed) || 0 }),
       perf: {
         fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,

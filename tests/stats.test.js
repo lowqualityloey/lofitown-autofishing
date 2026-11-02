@@ -15,7 +15,7 @@ const CLOSE = '// </stats-core>';
 const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('stats-core sentinels are missing from autofish.js');
-const S = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { wilson, runSummary };')();
+const S = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { wilson, runSummary, pressErrorSummary };')();
 
 const near = (x, y, eps) => Math.abs(x - y) <= (eps == null ? 0.001 : eps);
 
@@ -87,3 +87,38 @@ test('the run survives a reload: store, cap and a caught failure', () => {
   assert.match(SRC, /F\.exportRun = function/);
   assert.match(SRC, /F\.runStoreError/);
 });
+
+test('the press probe reports where a press landed, in degrees', () => {
+  // The narrow band's remaining loss is press quality, so the export has to say how far outside
+  // the window a press landed - not just that the fish got away.
+  const log = [
+    { inside: true, win: 18.5, res: 3.2, via: 'settled' },
+    { inside: true, win: 18.5, res: -6.1, via: 'settled' },
+    { inside: false, win: 18.5, res: 21.4, via: 'assumed' },
+    { inside: true, win: 22, res: null, via: 'settled' },
+  ];
+  const s = S.pressErrorSummary(log);
+  assert.equal(s.presses, 4);
+  assert.equal(s.settled, 3);
+  assert.equal(s.assumed, 1);
+  assert.equal(s.measured, 3);
+  assert.equal(s.insidePredicted, 3);
+  assert.equal(s.judged, 4);
+  assert.equal(s.insideRate, 0.75);
+  assert.equal(s.maxAbsResidual, 21.4);
+  assert.ok(s.meanAbsResidual > 9 && s.meanAbsResidual < 11, 'mean ' + s.meanAbsResidual);
+  assert.ok(s.meanWindowDeg > 19 && s.meanWindowDeg < 21, 'window ' + s.meanWindowDeg);
+  assert.equal(S.pressErrorSummary([]).presses, 0);
+  assert.equal(S.pressErrorSummary([]).insideRate, null);
+  assert.equal(S.pressErrorSummary([]).meanAbsResidual, null);
+});
+
+test('the probe is wired into the press path and the export', () => {
+  assert.match(SRC, /function probePressStart/);
+  assert.match(SRC, /probePressStart\(s\);/);
+  assert.match(SRC, /probePressSample\(s\);/);
+  assert.match(SRC, /presses: pressErrorSummary\(F\.pressLog\)/);
+  assert.match(SRC, /F\.pressProbe\.via = 'settled'/);
+  assert.match(SRC, /atJudge = wrap180\(Number\(s\.delta\) - om \* \(tNow - judgeAt\) \/ 1000\)/);
+});
+
