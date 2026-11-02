@@ -658,28 +658,58 @@
    * the window, how wrong the prediction turned out to be in degrees, and how many presses were
    * never measured (accepted by assumption rather than observed).
    */
-  function pressErrorSummary(log) {
+  /**
+   * How well (delta, omega) predicts the next frame's delta, in degrees and in milliseconds.
+   *
+   * This is the quantity that decides a marginal narrow press, and it must be measured WITHOUT
+   * pressing: a press makes the game spawn a new triangle, so the frame after one jumps for a
+   * reason that is not model error. The first version of this measured exactly that post-press
+   * frame and reported 77 deg of "error" on a 40 deg window - an artifact of the spawn.
+   *
+   * ms is the number that matters: a +/-18.5 deg window at 300 deg/s is only 62 ms wide.
+   */
+  function predictionSummary(log) {
     const rows = Array.isArray(log) ? log.filter(Boolean) : [];
-    const withRes = rows.filter((r) => r.res != null && isFinite(r.res));
-    const abs = withRes.map((r) => Math.abs(r.res)).sort((a, b) => a - b);
-    const q = (p) => (abs.length ? abs[Math.min(abs.length - 1, Math.floor(p * abs.length))] : null);
+    const deg = rows.map((r) => Math.abs(r.err)).filter((v) => isFinite(v)).sort((a, b) => a - b);
+    const ms = rows.map((r) => (r.om ? (Math.abs(r.err) / Math.abs(r.om)) * 1000 : null))
+      .filter((v) => v != null && isFinite(v)).sort((a, b) => a - b);
+    const q = (arr, p) => (arr.length ? +arr[Math.min(arr.length - 1, Math.floor(p * arr.length))].toFixed(1) : null);
+    const mean = (arr) => (arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null);
+    return {
+      samples: rows.length,
+      meanAbsDeg: deg.length ? +mean(deg).toFixed(1) : null,
+      p50Deg: q(deg, 0.5),
+      p95Deg: q(deg, 0.95),
+      maxDeg: deg.length ? +deg[deg.length - 1].toFixed(1) : null,
+      meanAbsMs: ms.length ? +mean(ms).toFixed(1) : null,
+      p50Ms: q(ms, 0.5),
+      p95Ms: q(ms, 0.95),
+      maxMs: ms.length ? +ms[ms.length - 1].toFixed(1) : null,
+      over50ms: ms.filter((v) => v > 50).length,
+      over50msRate: ms.length ? +(ms.filter((v) => v > 50).length / ms.length).toFixed(3) : null,
+    };
+  }
+
+  /** Press acceptance, and how much of it was observed rather than assumed. */
+  function pressAcceptSummary(log) {
+    const rows = Array.isArray(log) ? log.filter(Boolean) : [];
     const judged = rows.filter((r) => r.inside != null);
-    const wins = rows.filter((r) => r.win != null && isFinite(r.win)).map((r) => r.win);
+    const assumed = rows.filter((r) => r.via === 'assumed').length;
+    const settled = rows.filter((r) => r.via === 'settled').length;
     return {
       presses: rows.length,
-      settled: rows.filter((r) => r.via === 'settled').length,
-      assumed: rows.filter((r) => r.via === 'assumed').length,
-      measured: withRes.length,
-      meanAbsResidual: abs.length ? +(abs.reduce((s, v) => s + v, 0) / abs.length).toFixed(1) : null,
-      p50AbsResidual: q(0.5),
-      p95AbsResidual: q(0.95),
-      maxAbsResidual: abs.length ? abs[abs.length - 1] : null,
+      settled,
+      assumed,
+      assumedRate: (settled + assumed) ? +(assumed / (settled + assumed)).toFixed(3) : null,
       insidePredicted: rows.filter((r) => r.inside === true).length,
       judged: judged.length,
       insideRate: judged.length ? +(rows.filter((r) => r.inside === true).length / judged.length).toFixed(3) : null,
-      meanWindowDeg: wins.length ? +(wins.reduce((s, v) => s + v, 0) / wins.length).toFixed(1) : null,
+      meanWindowDeg: rows.filter((r) => isFinite(r.win)).length
+        ? +(rows.filter((r) => isFinite(r.win)).reduce((s, r) => s + r.win, 0) / rows.filter((r) => isFinite(r.win)).length).toFixed(1)
+        : null,
     };
   }
+
   // </stats-core>
 
   /* ---- coordinate frame ------------------------------------------------
@@ -2491,7 +2521,7 @@ const SPECIES = [
       pred: p.pred != null ? +Number(p.pred).toFixed(1) : null,
       win: p.win != null ? +Number(p.win).toFixed(1) : null,
       inside: (p.win != null && s && s.delta != null) ? Math.abs(Number(s.delta)) <= p.win : null,
-      res: null, dtMs: null, via: null, verdict: null,
+      via: null, verdict: null,
       attempt: F.attempt ? F.attempt.n : null,
       dial: F.pressesThisDial,
     };
@@ -2500,25 +2530,6 @@ const SPECIES = [
   function pushPressProbe(rec) {
     F.pressLog.push(rec);
     while (F.pressLog.length > 300) F.pressLog.shift();
-  }
-
-  /**
-   * Measure the model's error at the instant the game judged the press. The probe stores the delta
-   * the plan predicted for that instant; this back-extrapolates the first frame that arrives after
-   * the press to the same instant and reports the difference in DEGREES. A press that misses a
-   * narrow window then reads as "14 deg outside a +/-18.5 deg window" instead of as a lost fish.
-   */
-  function probePressSample(s) {
-    const p = F.pressProbe;
-    if (!p || p.res != null || !s || s.delta == null || p.at == null) return;
-    const tNow = s.t != null ? s.t : now();
-    const dt = tNow - p.at;
-    if (dt < 0 || dt > 150) return;
-    const om = p.om != null ? p.om : (s.omega || 0);
-    const judgeAt = p.at + (p.lead || 0);
-    const atJudge = wrap180(Number(s.delta) - om * (tNow - judgeAt) / 1000);
-    p.res = p.pred != null ? +wrap180(atJudge - p.pred).toFixed(1) : null;
-    p.dtMs = Math.round(dt);
   }
 
   function doPress(s, how) {
@@ -2756,7 +2767,7 @@ const SPECIES = [
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bands = {}; F.widths = {}; F.rarities = {};
-    F.pressLog = []; F.pressProbe = null;
+    F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
     // Opt-in only. A userscript has no local server, and a hardcoded localhost POST turns every
     // catch into a failed request. The panel passes a URL only when the user turned POST catches on.
     F.geo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) ? String(opts.logUrl) : null;
@@ -2856,7 +2867,7 @@ const SPECIES = [
     F.bubbleMiss = 0; F.stallRetry = 0;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
-    F.pressLog = []; F.pressProbe = null;
+    F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
     clearPendingWin();
     F.catches = [];
     return F.status();
@@ -3142,7 +3153,20 @@ const SPECIES = [
         return;
       }
       F.bad = 0;
-      probePressSample(s);
+      // Prediction error, measured without pressing. A press between the two frames invalidates the
+      // sample: the game spawns a new triangle and the angle jumps for a reason that is not model
+      // error - which is exactly what the first version of this measured and misreported.
+      const pp = F.predProbe;
+      if (pp && s.t != null && s.delta != null) {
+        const dt = s.t - pp.t;
+        if (dt >= 2 && dt <= 40 && !(F.lastPress && F.lastPress > pp.t)) {
+          const predicted = wrap180(pp.delta + (pp.omega || 0) * dt / 1000);
+          const err = wrap180(Number(s.delta) - predicted);
+          F.predLog.push({ err: +err.toFixed(1), om: pp.omega != null ? Math.round(pp.omega) : null, w: Math.round(Number(s.width) || 0), dt: Math.round(dt) });
+          while (F.predLog.length > 400) F.predLog.shift();
+        }
+      }
+      F.predProbe = { t: s.t, delta: s.delta, omega: s.omega };
       settlePress(s, F.dialBlinks);
       // Arc travel since the lock, in degrees: one turn is one pass of the pin under the wedge.
       if (s.mid != null) {
@@ -3773,8 +3797,9 @@ const SPECIES = [
       startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
       endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
       untimedRows: merged.length - timed.length,
-      presses: pressErrorSummary(F.pressLog),
-      pressLog: (F.pressLog || []).slice(-80),
+      presses: pressAcceptSummary(F.pressLog),
+      prediction: predictionSummary(F.predLog),
+      pressLog: (F.pressLog || []).slice(-60),
       run: runSummary(asAttempts, { cut: F.cutReason || null, locksDisarmed: (F.stats && F.stats.locksDisarmed) || 0 }),
       perf: {
         fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,
