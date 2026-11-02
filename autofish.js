@@ -505,7 +505,7 @@
    *      snapshot: { gl, canvas2d }, readback: { canvas2d, allocMBPerSec },
    *      longtasks: { inLast10s, maxMs }, worstFrameMs,
    *      needsSeat, sincePromptMs, sinceDialMs,
-   *      accepted, rejected, acceptRate, dials, held, forced, holdOverTransitMax }
+   *      accepted, rejected, acceptRate, dials, held, forced, holdPassesMax }
    * -> { verdict, severity: 'ok'|'warn'|'high', action, evidence }
    */
   function doctor(s) {
@@ -552,11 +552,11 @@
       return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
         { acceptRate: st.acceptRate, accepted: st.accepted, rejected: st.rejected });
     }
-    // > 1 means the first press waited longer than the arc stays under the pin - whole rotations.
-    // 3.9.12 cannot exceed 0.4 by construction, so this one is a regression witness.
-    if ((st.holdOverTransitMax || 0) > 1.5) {
-      return o('timing-held', 'warn', 'the first press waits longer than one pass',
-        { holdOverTransitMax: st.holdOverTransitMax, held: st.held, forced: st.forced });
+    // More than one full turn of the arc held back is a whole skipped rotation: the 3.9.9 report.
+    // 3.9.12 cannot pass 1 by construction, so this is also the regression witness.
+    if ((st.holdPassesMax || 0) > 1) {
+      return o('timing-held', 'warn', 'the first press waits longer than one rotation',
+        { holdPassesMax: st.holdPassesMax, held: st.held, forced: st.forced });
     }
     if (st.sinceDialMs != null && st.sinceDialMs <= 5000) {
       return o('fishing', 'ok', 'none', { sinceDialMs: st.sinceDialMs });
@@ -2566,7 +2566,7 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0, holdOverTransitMax: 0,
+      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bands = {}; F.widths = {}; F.rarities = {};
@@ -2663,7 +2663,7 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0, holdOverTransitMax: 0,
+      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bubbleMiss = 0; F.stallRetry = 0;
@@ -2951,6 +2951,14 @@ const SPECIES = [
       }
       F.bad = 0;
       settlePress(s, F.dialBlinks);
+      // Arc travel since the lock, in degrees: one turn is one pass of the pin under the wedge.
+      if (s.mid != null) {
+        if (F.geo._pm != null) {
+          const dm = Math.abs(wrap180(Number(s.mid) - F.geo._pm));
+          if (dm < 180) F.geo._travel = (F.geo._travel || 0) + dm;
+        }
+        F.geo._pm = Number(s.mid);
+      }
       s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
       if (F.geoReasons) F.geoReasons[F.planReason || 'none'] = (F.geoReasons[F.planReason || 'none'] || 0) + 1;
       const plan = planPress({
@@ -2995,12 +3003,12 @@ const SPECIES = [
         // How long the hold has lasted against one pass of the arc. Above 1 it skipped whole
         // rotations - the 3.9.9 "it did a round turn" report. 3.9.12 cannot exceed 0.4 by
         // construction, so this number is also the regression witness doctor() reads.
-        const transitMs = (Number(s.width) > 0 && Math.abs(Number(s.omega) || 0) > 0)
-          ? (Number(s.width) / Math.abs(Number(s.omega))) * 1000 : null;
-        if (transitMs) {
-          const frac = heldMs / transitMs;
-          if (!(F.stats.holdOverTransitMax >= frac)) F.stats.holdOverTransitMax = frac;
-        }
+        // Full turns of the arc waited through so far. This is the user-visible quantity - the
+        // owner reported "it does a round turn or more" - and unlike a ratio against the
+        // instantaneous width/omega it does not swing when the spin estimate spikes. 3.9.12 cannot
+        // pass 1 by construction; 3.9.9's fixed 2500 ms ceiling passed 2 or more on a fast dial.
+        const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
+        if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
         // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
         // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
         const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
@@ -3059,6 +3067,7 @@ const SPECIES = [
       }
       if (g) {
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
+        g._travel = 0; g._pm = null;                            // arc travel for this lock
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
@@ -3262,7 +3271,7 @@ const SPECIES = [
       dials: s.dials || 0,
       held: s.firstPressHeld || 0,
       forced: s.firstPressForced || 0,
-      holdOverTransitMax: s.holdOverTransitMax || 0,
+      holdPassesMax: s.holdPassesMax || 0,
     });
   };
 

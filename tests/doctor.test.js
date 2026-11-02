@@ -25,7 +25,7 @@ const healthy = {
   longtasks: { inLast10s: 1, maxMs: 91 },
   worstFrameMs: 96, needsSeat: false,
   sincePromptMs: 3000, sinceDialMs: 4000,
-  accepted: 43, rejected: 0, acceptRate: 1, dials: 18, held: 10, forced: 6, holdOverTransitMax: 0.4,
+  accepted: 43, rejected: 0, acceptRate: 1, dials: 18, held: 10, forced: 6, holdPassesMax: 0.4,
 };
 
 test('a healthy run reports fishing or waiting, never a finding', () => {
@@ -52,10 +52,10 @@ test('it names the 3.9.11 stall of one 250 ms block every second', () => {
 });
 
 test('it names the 3.9.9 first press that waited four rotations', () => {
-  // 2500 ms ceiling against a 64 ms pass: holdOverTransitMax was ~39, not 0.4.
-  const r = D.doctor(Object.assign({}, healthy, { holdOverTransitMax: 39, held: 9, forced: 2 }));
+  // 2500 ms ceiling against a 64 ms pass: two or more whole turns, not 0.4.
+  const r = D.doctor(Object.assign({}, healthy, { holdPassesMax: 2.1, held: 9, forced: 2 }));
   assert.equal(r.verdict, 'timing-held');
-  assert.equal(r.evidence.holdOverTransitMax, 39);
+  assert.equal(r.evidence.holdPassesMax, 2.1);
 });
 
 test('it names every state that stops a run, in priority order', () => {
@@ -83,6 +83,7 @@ test('the bot exposes the verdict and the counters it reads', () => {
   assert.match(SRC, /F\.doctor = function/);
   assert.match(SRC, /new PerformanceObserver/);
   assert.match(SRC, /longtasks: longTaskReport\(\)/);
-  assert.match(SRC, /holdOverTransitMax/);
+  assert.match(SRC, /holdPassesMax/);
+  assert.match(SRC, /F\.geo\._travel/);
   assert.match(SRC, /watchLongTasks\(\);/);
 });
