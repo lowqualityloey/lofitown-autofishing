@@ -633,6 +633,9 @@
     const pressN = accepted + rejected;
     return {
       attempts: n, caught, lost,
+      // How many dials arrived with the press gate shut. Above zero after the arming fix means the
+      // gate is being closed mid-dial and never reopened, which is a different bug.
+      locksDisarmed: cfg.locksDisarmed != null ? cfg.locksDisarmed : null,
       catchRate: n ? caught / n : null,
       catchCi: wilson(caught, n),
       presses, accepted, rejected,
@@ -2410,6 +2413,10 @@ const SPECIES = [
     if (verdict !== 'accepted' && verdict !== 'rejected') return;
     if (F.pressWait) F.pressWait.verdict = verdict;
     F.stats[verdict === 'accepted' ? 'pressAccepted' : 'pressRejected']++;
+    // The game spawning a new triangle is the proof newTriangle() tries to read from geometry;
+    // when an accepted press cannot be seen that way on a narrow dial, this timestamp is what
+    // lets the next rotation be pressed instead of skipped.
+    if (verdict === 'accepted') F.acceptedAt = now();
     // Per fish, so a narrow dial has a denominator. `accepted` is the game spawning a fresh
     // triangle, i.e. the press landed inside the wedge; an unresolved press is neither.
     if (F.attempt) {
@@ -2519,6 +2526,16 @@ const SPECIES = [
       trace: F.geoReasons && !(verdict === 'hit') ? F.geoTrace.slice() : null,
     };
     if (last && last.omega != null) rec.omega = Math.round(last.omega);
+    // Per-dial detail on the attempt: "dial locked, never pressed" was visible only as a total
+    // before, and a narrow dial is exactly where that costs a fish.
+    if (F.attempt) {
+      if (!F.attempt.dialLog) F.attempt.dialLog = [];
+      if (F.geo && !F.geo._armed0) F.stats.locksDisarmed = (F.stats.locksDisarmed || 0) + 1;
+      F.attempt.dialLog.push({
+        w: rec.width, om: rec.omega, p: presses, held: heldMs, armed0: !!(F.geo && F.geo._armed0), v: verdict,
+      });
+      if (F.attempt.dialLog.length > 12) F.attempt.dialLog.shift();
+    }
     F.outcomes.push(rec);
     while (F.outcomes.length > 400) F.outcomes.shift();
     // A press is NOT a fish. The game grows its level bar to 100 over several triangles, so a press
@@ -2649,7 +2666,7 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0,
+      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bands = {}; F.widths = {}; F.rarities = {};
@@ -2746,7 +2763,7 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0,
+      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bubbleMiss = 0; F.stallRetry = 0;
@@ -3134,9 +3151,15 @@ const SPECIES = [
       // dial' rule assumed a press solved the fish; it does not - a fish is many triangles, so
       // that rule forced a full dial close plus re-lock for every single press and starved slow
       // dials. The cap only guards against a runaway if the game stops accepting input.
+      // Re-arm for the next rotation. newTriangle() reads geometry (a blink, a width jump, a jump
+      // against the prediction); an accepted press is stronger evidence than any of them and it is
+      // already recorded, so a narrow dial is not skipped just because its new triangle looks like
+      // the old one.
+      const spawnProven = newTriangle(F.pressStamp, s, F.dialBlinks, F.opts) ||
+        (F.acceptedAt != null && t - F.acceptedAt <= (F.opts.rearmAcceptedMs || 600));
       if (F.pressesThisDial < (F.opts.maxPressPerDial || 12) &&
           Math.abs(plan.delta) > plan.win + 12 &&
-          newTriangle(F.pressStamp, s, F.dialBlinks, F.opts)) F.armed = true;
+          spawnProven) F.armed = true;
       if (plan.cancel) cancelPend();
       if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
       if (plan.press) doPress(s, 'frame');
@@ -3154,7 +3177,13 @@ const SPECIES = [
       }
       if (g) {
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
-        g._travel = 0; g._pm = null;                            // arc travel for this lock
+        g._travel = 0; g._pm = null;
+        // A new spawn IS a new triangle, so the press gate must be open on arrival. It used to be
+        // left closed from the previous dial, and on a narrow dial the re-arm test (pin more than
+        // win+12 away) may never come true - measured live 2026-11-02: a lost narrow attempt locked
+        // seven dials and pressed three times, with nothing rejected.
+        g._armed0 = !!F.armed;
+        F.armed = true;                            // arc travel for this lock
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
@@ -3575,6 +3604,7 @@ const SPECIES = [
       p: a.presses || 0, pa: a.pressAccepted || 0, pr: a.pressRejected || 0,
       d: a.dials || 0, w: (a.avgWidth != null && isFinite(a.avgWidth)) ? +a.avgWidth.toFixed(1) : null,
       wb: a.widthBand || null, b: a.band || null,
+      dl: Array.isArray(a.dialLog) && a.dialLog.length ? a.dialLog : null,
       sp: a.species || null, r: a.rarity || null,
       // Wall clock, captured once at resolve. performance.now() is a page-relative clock, so the
       // first export dated the run to 1970 - and a per-call Date.now() here would give the stored
@@ -3639,7 +3669,7 @@ const SPECIES = [
     const asAttempts = merged.map((r) => ({
       verdict: r.v, band: r.b, widthBand: r.wb, presses: r.p,
       pressAccepted: r.pa, pressRejected: r.pr, dials: r.d,
-      avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t,
+      avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t, dials: r.d, dialLog: r.dl,
     }));
     const p = F.perf();
     const out = {
@@ -3653,7 +3683,7 @@ const SPECIES = [
       startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
       endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
       untimedRows: merged.length - timed.length,
-      run: runSummary(asAttempts, { cut: F.cutReason || null }),
+      run: runSummary(asAttempts, { cut: F.cutReason || null, locksDisarmed: (F.stats && F.stats.locksDisarmed) || 0 }),
       perf: {
         fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,
         longtasks: p.longtasks, snapshot: p.snapshot, readback: p.readback, rates: p.rates,

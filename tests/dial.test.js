@@ -108,6 +108,16 @@ test('the dial search can widen, and a blind run has a whole-surface recovery', 
   assert.match(step, /F\.opts\.dialFallbackMs/);
 });
 
+test('a new dial opens the press gate, and an accepted press re-arms the next rotation', () => {
+  // Live 2026-11-02, narrow band 9/12: one lost attempt locked seven dials and pressed three times
+  // with nothing rejected. The gate (F.armed) was never opened on arrival at a new spawn.
+  assert.match(SRC, /g\._armed0 = !!F\.armed;\s+F\.armed = true;/, 'a new spawn must open the gate');
+  assert.match(SRC, /const spawnProven = newTriangle\(F\.pressStamp, s, F\.dialBlinks, F\.opts\) \|\|/);
+  assert.match(SRC, /F\.acceptedAt != null && t - F\.acceptedAt <=/, 'an accepted press is proof of a spawn');
+  assert.match(SRC, /locksDisarmed/, 'a gate that arrives shut must be countable');
+  assert.match(SRC, /F\.attempt\.dialLog\.push/, 'a dial that passed untouched must be visible per attempt');
+});
+
 test('a prompt found anywhere is a hint, never a click target', () => {
   // Live 2026-11-02: the whole-surface scan matched players' name tags - the same white blob, text
   // included - and tapping one opened that player's profile in the middle of a session.
