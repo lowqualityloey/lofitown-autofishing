@@ -210,6 +210,23 @@
   }
 
   /**
+   * How long to wait before the next whole-surface dial recovery pass, in ms.
+   *
+   * Measured live 2026-11-02 (3.9.10): one recovery pass is a ~257k-test annulus sweep costing
+   * 250-300 ms, and it ran every 900 ms whenever nothing was locked - i.e. every second while the
+   * character simply waited for a bite. Pausing the core made the stalls disappear entirely
+   * (143.8 fps, 0 long tasks), which is how it was attributed. A wrong hint is a per-CAST problem,
+   * not a per-second one: the cadence doubles after each fruitless pass and a cast resets it.
+   */
+  function dialFallbackWait(fail, o) {
+    const cfg = o || {};
+    const base = cfg.dialFallbackThrottleMs != null ? cfg.dialFallbackThrottleMs : 900;
+    const cap = cfg.dialFallbackMaxMs != null ? cfg.dialFallbackMaxMs : 6000;
+    const n = Math.max(0, Math.min(8, Number(fail) || 0));
+    return Math.min(cap, base * Math.pow(2, n));
+  }
+
+  /**
    * Decide what this frame should do about the dial.
    *
    * st: { t, delta, width, omega, armed, pendingAt }
@@ -1771,9 +1788,19 @@ const SPECIES = [
     const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
     return r0 > 185 && g0 > 85 && g0 < 165 && b0 < 135 && r0 - g0 > 55;
   }
-  /** One pass per read: 1 where a rim pixel sits, indexed y * w + x. */
+  /**
+   * One pass per read: 1 where a rim pixel sits, indexed y * w + x.
+   *
+   * The buffer is reused. A fresh 420x420 Uint8Array per recovery blob measured 2.04 MB/s of
+   * allocation on its own - the same large-object pressure that made the whole page hitch.
+   * Only one mask is live at a time (every caller finishes with it before the next read).
+   */
+  let rimMaskBuf = null;
   function rimMask(r) {
-    const d = r.d, n = r.w * r.h, m = new Uint8Array(n);
+    const d = r.d, n = r.w * r.h;
+    if (!rimMaskBuf || rimMaskBuf.length < n) rimMaskBuf = new Uint8Array(n);
+    const m = rimMaskBuf;
+    m.fill(0, 0, n);
     for (let p = 0, i = 0; p < n; p++, i += 4) if (isRim(d, i)) m[p] = 1;
     return m;
   }
@@ -1947,10 +1974,17 @@ const SPECIES = [
    */
   function dialAnywhere() {
     const t = now();
-    if (t - (F.dialAnyAt || 0) < 900) return null;            // recovery: one pass a second at most
+    // Backed off, not a fixed 900 ms: see dialFallbackWait. The pass itself is unchanged, so the
+    // recovery still works whenever a dial really is somewhere off the hint.
+    if (t - (F.dialAnyAt || 0) < dialFallbackWait(F.dialAnyFail, F.opts)) return null;
     F.dialAnyAt = t;
+    const greens = greenBlobs();
+    if (!greens.length) {
+      F.dialAnyFail = (F.dialAnyFail || 0) + 1;
+      return null;
+    }
     const S = 420, hw = S / 2;
-    for (const b of greenBlobs()) {
+    for (const b of greens) {
       const gx = Math.round((b.x0 + b.x1 + 1) * SDOWN / 2);
       const gy = Math.round((b.y0 + b.y1 + 1) * SDOWN / 2);
       const r = readUI(gx - hw, gy - hw, S, S);
@@ -1977,8 +2011,13 @@ const SPECIES = [
         }
       }
       const geo = finishLock(r, mask, fine);
-      if (geo) { L('dial found anywhere', { cx: geo.cx, cy: geo.cy, R: geo.R, width: Math.round(geo.width) }); return geo; }
+      if (geo) {
+        F.dialAnyFail = 0;
+        L('dial found anywhere', { cx: geo.cx, cy: geo.cy, R: geo.R, width: Math.round(geo.width) });
+        return geo;
+      }
     }
+    F.dialAnyFail = (F.dialAnyFail || 0) + 1;
     return null;
   }
 
@@ -2381,6 +2420,8 @@ const SPECIES = [
       lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
       dialFallbackMs: 2500,         // no dial this long -> one whole-surface search (0 disables)
+      dialFallbackThrottleMs: 900,  // first recovery pass this soon after a cast...
+      dialFallbackMaxMs: 6000,      // ...then doubling per fruitless pass, up to this
       pressGraceMs: 250,            // a press with no new triangle this long was not acted on
       cardCheckMs: 100,
       scanTickMs: 66,               // the shared quarter-scale grab is refreshed at most this often (~15 Hz)
@@ -2750,6 +2791,7 @@ const SPECIES = [
         // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
         // never reach a dial 100 px away.
         F.hint = { x: b.cx, y: b.cy + 53 };
+        F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
         if (rec.tap) tap(b.cx, b.cy);
         F.lastPress = t;
         F.stats.bubbles++;
@@ -2881,6 +2923,7 @@ const SPECIES = [
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
+        F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
         // dialect by dial would put both arms inside one attempt and the A/B would compare nothing.

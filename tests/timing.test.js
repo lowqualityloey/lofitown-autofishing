@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget']) {
+  for (const k of ['wrap180', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -114,6 +114,22 @@ test('the first-press hold is a fraction of one pass, not a fixed ceiling', () =
   // the step() gate has to use the budget, not the raw ceiling
   assert.match(SRC, /firstPressBudget\(Number\(s\.width\)/);
   assert.match(SRC, /firstPressMaxTransitFrac/);
+});
+
+test('the recovery scan backs off instead of running every second', () => {
+  // One whole-surface pass is a ~257k-test annulus sweep (250-300 ms measured); at a fixed 900 ms
+  // cadence that was a stall every second while the character waited for a bite.
+  assert.equal(T.dialFallbackWait(0, {}), 900);
+  assert.equal(T.dialFallbackWait(1, {}), 1800);
+  assert.equal(T.dialFallbackWait(2, {}), 3600);
+  assert.equal(T.dialFallbackWait(3, {}), 6000, 'capped');
+  assert.equal(T.dialFallbackWait(9, {}), 6000, 'never unbounded');
+  assert.equal(T.dialFallbackWait(null, {}), 900, 'a fresh run starts prompt');
+  assert.equal(T.dialFallbackWait(-1, {}), 900);
+  assert.equal(T.dialFallbackWait(4, { dialFallbackMaxMs: 1200 }), 1200);
+  // the scan must use the backoff, and a cast must reset it
+  assert.match(SRC, /dialFallbackWait\(F\.dialAnyFail, F\.opts\)/);
+  assert.match(SRC, /F\.dialAnyFail = 0; F\.dialAnyAt = 0/);
 });
 
 test('the first press on a narrow or fast dial waits for a mature fit, and the hold is bounded', () => {
