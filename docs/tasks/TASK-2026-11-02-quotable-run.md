@@ -1,6 +1,6 @@
 # Task: a run you can quote (3.9.14)
 
-Level: 2 (Controlled) · Owner: lead · Started: 2026-11-02 · Status: in review
+Level: 2 (Controlled) · Owner: lead · Started: 2026-11-02 · Status: complete
 
 ## Objective
 
@@ -35,6 +35,13 @@ recomputed from attempts instead of transcribed by hand.
 4. An empty run serialises with nulls and no `NaN`.
 5. Live: `__fish.exportRun()` parses, contains every attempt, and its interval matches an
    independent recomputation.
+
+## Result
+
+A 3.9.15 seated session: **133 attempts, 126 caught (94.7%, Wilson 89.5-97.4%)**, 697/697 presses
+accepted, 254 dials, 7 losses all scored `cast prompt`. Wide/full 52/52, mid 65/69, narrow 9/12.
+The run also exposed three tooling defects, all fixed in 3.9.16: per-page attempt numbering colliding
+in the merge, page-clock timestamps reaching the export, and a `timing-held` false positive.
 
 ## Verify
 
