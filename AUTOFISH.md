@@ -2495,6 +2495,26 @@ The lesson is the one this project keeps relearning: an assumption about which s
 is a bug waiting for a game update. The fallback makes the surface a runtime fact for the prompt as
 well as for the dial.
 
+## 2026-11-02 3.9.21: inside is inside - the open window was gated on rotation direction
+
+Reported live: during the dial the bot spins and never presses. The page said why without any code
+change - a **30 deg** dial, `geoReasons: { wait: 279, "first-fit": 14, none: 1 }`, `pressesThisDial: 0`,
+then `dial gone`. Not one `inside-now` in the whole sample.
+
+`planPress` schedules at the midpoint crossing, and takes an already-open window as `inside-now` - but
+the condition also demanded `delta * omega > 0`, i.e. only when the arc was rotating one particular
+way. On a 30 deg dial `win` is 11 deg, so the open window is the *only* chance; the pass through the
+arc happens on the other sign, the scheduled crossing is most of a rotation away, and nothing fires.
+On a 90 deg dial (`win` 41) the pin sits inside long enough for the sign-gated path to catch it, which
+is why this hid behind the wide band.
+
+**3.9.21** removes the direction gate: containment takes an open window whichever side the arc is
+passing on, still requiring the prediction to be inside at the judgement instant. `angle` keeps the
+pure midpoint rule.
+
+The old test asserted the opposite ("approaching the midpoint keeps the widest-tolerance schedule"),
+so it was updated with the measurement in the comment - a test that encodes the bug is not a guard.
+
 It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
 count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
 (208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
