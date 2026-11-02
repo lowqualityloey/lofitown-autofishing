@@ -2291,9 +2291,11 @@ that produced it. No readback, no timer, no retry: it reports, it never acts.
 
 Two things had to be added first. `perf().longtasks` counts long tasks from **outside** the loop -
 a 250 ms block the bot caused and one it did not look identical from inside, and only this counter
-separates them. `stats.holdOverTransitMax` records how long the first press waited against one pass
-of the arc: above 1 it skipped whole rotations, which is the 3.9.9 report, and 3.9.12 cannot exceed
-0.4 by construction, so the number doubles as a regression witness.
+separates them. `stats.holdPassesMax` records how many turns of the arc the first press waited
+through: above 1 it skipped a whole rotation, which is the 3.9.9 report, and 3.9.12 cannot pass 1 by
+construction, so the number doubles as a regression witness. The first version of this metric was a
+ratio against the instantaneous width/omega and it read 3.6 on a healthy build - the spin estimate
+spikes - which is exactly the false positive a diagnostic must not have.
 
 The panel shows a high-severity verdict in the phase chip (`detector-blind` instead of `running`),
 because a phase that says "running" while the bot has silently stopped working is the exact failure

@@ -34,7 +34,7 @@ Three of the four incidents this month were invisible from outside:
 
 1. 3.9.10 state (`snapshot.gl: 0`, `canvas2d: 320`) -> `snapshot-fallback`, severity high.
 2. 3.9.11 state (`longtasks.inLast10s: 10`, `maxMs: 285`) -> `frame-stalls`.
-3. 3.9.9 state (`holdOverTransitMax: 39`) -> `timing-held`.
+3. 3.9.9 state (`holdPassesMax: 2.1`, two whole turns) -> `timing-held`.
 4. Healthy 3.9.12 state -> `fishing` / `waiting-bite`, severity ok, no false positive.
 5. A 12 s silence -> `waiting-bite`; a 90 s silence -> `detector-blind`.
 6. Three rejected presses are not a finding; 18 of 24 is.
