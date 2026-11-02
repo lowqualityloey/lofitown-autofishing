@@ -114,7 +114,8 @@ test('the recovery pass reuses the shared grab and the same validation', () => {
   assert.match(fn, /snapshot\(\)/);
   assert.match(fn, /finishLock\(r, mask, fine\)/, 'the recovery must prove its circle with the same validator');
   assert.ok(fn.indexOf('downscale()') < 0, 'no second copy of the layer');
-  assert.match(fn, /if \(t - \(F\.dialAnyAt \|\| 0\) < 900\) return null;/, 'the recovery is throttled');
+  assert.match(fn, /dialFallbackWait\(F\.dialAnyFail, F\.opts\)/, 'the recovery is throttled and backs off');
+  assert.match(fn, /F\.dialAnyFail = \(F\.dialAnyFail \|\| 0\) \+ 1/, 'a fruitless pass must raise the wait');
 });
 
 test('a lock is written back only when the widget actually moved', () => {

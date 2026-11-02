@@ -2164,3 +2164,110 @@ The shared quarter-scale snapshot still allocates a fresh `getImageData` copy ea
 in this window); that is the remaining garbage source, but it no longer produced a long task in a
 10 s running sample.
 
+## 2026-11-02 3.9.10: the freeze was an allocation, the held press was a ceiling
+
+The owner reported two things from one session: the page "starts lagging, like freezing in few
+moments" after Start, and the dial is sometimes pressed a rotation or more late - suspected to be
+worse on high-tier fish. Both were measured in the live tab before any code changed.
+
+**The capture** (BrowserOS neo, 1179x821, 3.9.9, 678 s uptime, bot running):
+
+| Measurement | Value |
+| :--- | ---: |
+| fps / p50 / p95 / worst frame | 106.8 / 7 / 12.2 / **286.8 ms** |
+| readback path | 27,906 GL reads, **0** 2D |
+| allocation | **1,384 MB over 678 s = 2.04 MB/s** |
+| detector cost | findBubble 55.3, sample 29.7, snapshot 28.8, findCatch 25.1, lockDial 21.9 ms/s |
+| dials / first press held / forced | 18 / **9** / **2** |
+| presses accepted | 51 / 51, 9 caught of 10 attempts |
+
+The GL readback from 3.9.9 was working - `canvas2d` was zero - so the freeze was not a slow
+readback. It was the 2.04 MB/s: `downscale()` still called `getImageData` every scan tick, and a
+242 KB array lands in V8 large-object space. A 12.2 ms p95 with a 287 ms worst frame is the shape
+of a major collection, not of a slow detector.
+
+**The probe.** In the same tab, the same quarter-scale copy read both ways:
+
+| | `getImageData` | upload + `readPixels` |
+| :--- | ---: | ---: |
+| per call | 1.65 ms | **1.30 ms** |
+| allocation | 242 KB every call | none after warm-up |
+| pixels compared | 6,762 | **0 mismatches, no row flip** |
+
+**3.9.10** therefore reads the snapshot through our own framebuffer into one reused `Uint8Array`,
+with a one-off pixel comparison against `getImageData` (2% tolerance) and the 2D path as the
+fallback, logged once as `downscale readback`.
+
+**The late press** was not the planner. `planPress` extracted from the source and simulated against
+a rotating dial at 10-140 fps pressed **inside the window 100% of the time**; no trigger, margin or
+angle changed. What the capture showed is the first-press gate: `firstPressHeld` on half the dials,
+because the hold ceiling was a fixed `firstPressMaxWaitMs` = 2500 ms. At 700 deg/s a 45 deg arc is
+under the pin for 64 ms, so that ceiling is **about four passes** - and the dials it hits are
+exactly the fast, narrow, high-tier ones. The hold is now a budget:
+
+```
+firstPressBudget = min(2500 ms, 0.4 x width / |omega| x 1000)
+```
+
+which is 26 ms on that dial and 550 ms on a 165 deg / 120 deg/s one, so a slow wide dial keeps the
+long accurate fit it was designed for. The budget is in the timing core next to `fitStable`, with
+its own test and a source guard that `step()` uses it rather than the raw ceiling.
+
+`node --test` passes (231 tests). The remaining live check is the one this section cannot supply:
+install 3.9.10 and read `perf().readback.allocMBPerSec` (expect < 0.1) and `accuracy().firstPress*`
+in a seated session.
+
+## 2026-11-02 3.9.11: the once-a-second stall was the recovery scan
+
+Reported right after 3.9.10 was installed: dial play is smooth now, but the page **pauses every
+second** while the character waits to reel. Measured in the same live tab (1179x821):
+
+| Condition | Long tasks | fps | worst frame |
+| :--- | ---: | ---: | ---: |
+| bot running, no dial | 6 in 6 s, each 250-285 ms | 105.6 | 285 ms |
+| **core paused** (`__fish.pause()`) | **0** | **143.8** | **12 ms** |
+| resumed | 4 in 4 s | 104.4 | 275 ms |
+| `dialFallbackMs` set to 0 | **0** | **143.1** | **18 ms** |
+
+The one-second period is the throttle on `dialAnywhere()`: 900 ms. It is a brute-force annulus
+sweep - ~1,430 offsets x 9 radii x 20 rim samples = **~257k pixel tests**, 250-300 ms - and it
+fires whenever nothing has been locked for 2.5 s, which is *exactly* the wait-for-a-bite state.
+A dial only exists during the minigame, so in that state every pass is wasted. The same pass also
+allocated a fresh 420x420 rim mask per blob: 705 KB, and the 2.0 MB/s `perf().allocMB` still
+reporting after 3.9.10 was this, not the snapshot.
+
+**3.9.11** treats a wrong hint as a per-cast problem rather than a per-second one: the cadence
+doubles after each fruitless pass (900 ms, 1.8 s, 3.6 s, then 6 s) and resets on a cast, on a
+normal lock and on a recovery hit. The rim mask buffer is reused. The sweep itself is unchanged,
+so recovery still finds the dial when it really is off the hint.
+
+Residual: at worst one ~250 ms pass every 6 s while a fruitless search is in progress. If that is
+still visible, the next step is a coarse-to-fine sweep (every other ring and half the angles, then
+refine the best two candidates), which is a behaviour change that needs a live dial to validate.
+
+## 2026-11-02 3.9.12: the snapshot "fix" never ran - the texture was attached before it had storage
+
+Found in the review of this branch, not by a new symptom. On the installed 3.9.11,
+`perf().readback.allocMBPerSec` still read **2.6 MB/s**, and freezing the snapshot
+(`scanTickMs = 1000000` for six seconds) dropped the allocation to **0.00 MB** - so the
+quarter-scale read was still `getImageData`, and the "allocation-free snapshot" never ran once.
+
+The cause is an ordering bug that is silent by construction: `framebufferTexture2D` ran before
+`texImage2D`, so the framebuffer had no storage to attach and `checkFramebufferStatus` returned
+**36054 = FRAMEBUFFER_INCOMPLETE_ATTACHMENT**. The code then set `sglOff` and used the 2D fallback
+for the life of the page. The probe that "validated" the approach printed that same 36054 and it
+was read as success: the number was on screen and the label was assumed. `canvas2d: 0` looked like
+proof it was working, but the fallback inside `downscale()` never counted as a `read2d` - only as
+`allocMB`.
+
+**3.9.12** allocates storage with an explicit size first and attaches second, retries the
+attachment after a canvas resize, falls back on a lost context, and reports
+`perf().snapshot = { gl, canvas2d }`. Verified in the same tab: the storage-first sequence returns
+**36053 (COMPLETE)** where the old order returned 36054.
+
+The 3.9.10 section above stands on *why* the allocation mattered - 1.4 GB of large-object garbage
+in eleven minutes was real - but its claim that the snapshot became allocation-free was false in
+the field until this fix. The stall the owner reported after 3.9.10 was removed by the 3.9.11
+recovery backoff, not by the snapshot.
+
+

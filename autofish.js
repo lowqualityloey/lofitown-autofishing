@@ -54,7 +54,7 @@
    * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
    * average cost of each detector, so a change can be justified by numbers rather than a guess.
    */
-  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0 };
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0 };
   /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
    * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
@@ -74,6 +74,7 @@
     perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
     perf.card = 0; perf.cardN = 0;
     perf.readN = 0; perf.readGL = 0; perf.read2d = 0; perf.readMB = 0; perf.allocMB = 0;
+    perf.snapGL = 0; perf.snap2d = 0;
     perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   }
 
@@ -188,6 +189,42 @@
     const maxRms = cfg.firstPressMaxRms != null ? cfg.firstPressMaxRms : 2;
     const rms = fit.rms == null ? Infinity : fit.rms;
     return (fit.n || 0) >= minN && (fit.span || 0) >= minSpan && rms <= maxRms;
+  }
+
+  /**
+   * How long the first press may wait for a mature spin fit, in ms.
+   *
+   * The fixed 2500 ms ceiling is several rotations on a fast dial: at 700 deg/s a 45 deg arc is
+   * under the pin for 64 ms, so "wait up to 2.5 s" means the bot visibly skips three or four
+   * passes of a fish the player is watching. Measured live 2026-11-02: firstPressHeld on 9 of 18
+   * dials and firstPressForced twice, on a session that was otherwise 51/51 presses accepted.
+   * The budget is therefore a fraction of ONE pass, still bounded by the old ceiling for the slow
+   * dials where a long, accurate fit is worth having.
+   */
+  function firstPressBudget(width, omega, o) {
+    const cfg = o || {};
+    const capMs = cfg.firstPressMaxWaitMs != null ? cfg.firstPressMaxWaitMs : 2500;
+    const frac = cfg.firstPressMaxTransitFrac != null ? cfg.firstPressMaxTransitFrac : 0.4;
+    const w = Number(width), om = Math.abs(Number(omega));
+    if (!(w > 0) || !(om > 0)) return capMs;
+    return Math.min(capMs, (w / om) * 1000 * frac);
+  }
+
+  /**
+   * How long to wait before the next whole-surface dial recovery pass, in ms.
+   *
+   * Measured live 2026-11-02 (3.9.10): one recovery pass is a ~257k-test annulus sweep costing
+   * 250-300 ms, and it ran every 900 ms whenever nothing was locked - i.e. every second while the
+   * character simply waited for a bite. Pausing the core made the stalls disappear entirely
+   * (143.8 fps, 0 long tasks), which is how it was attributed. A wrong hint is a per-CAST problem,
+   * not a per-second one: the cadence doubles after each fruitless pass and a cast resets it.
+   */
+  function dialFallbackWait(fail, o) {
+    const cfg = o || {};
+    const base = cfg.dialFallbackThrottleMs != null ? cfg.dialFallbackThrottleMs : 900;
+    const cap = cfg.dialFallbackMaxMs != null ? cfg.dialFallbackMaxMs : 6000;
+    const n = Math.max(0, Math.min(8, Number(fail) || 0));
+    return Math.min(cap, base * Math.pow(2, n));
   }
 
   /**
@@ -1158,6 +1195,91 @@ const SPECIES = [
    */
   const SDOWN = 4;
   let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
+  let sgl = null, sglCanvas = null, sglTex = null, sglFbo = null, sbytes = null, sglOff = false, sglChecked = false;
+
+  /**
+   * The quarter-scale copy WITHOUT a fresh array every tick.
+   *
+   * getImageData always allocates, and a 242 KB array (1179x821 canvas at 1/4) lands in V8's
+   * large-object space: at the 66 ms scan tick that is ~2 MB/s, 1.4 GB across an 11-minute session,
+   * and the worst frame on the live run that prompted this was 287 ms - a major collection, not a
+   * slow detector. Uploading the 2D copy into our own framebuffer and reading it back with
+   * readPixels writes into a buffer we own, so a steady session allocates nothing after warm-up.
+   * Verified live in BrowserOS neo at 1179x821: identical bytes to getImageData on 6762 sampled
+   * pixels, no row flip needed, 1.30 ms a call against 1.65 ms, and 1.3 ms of it is the sync.
+   * A one-off pixel comparison still guards it, so a browser that uploads the copy differently
+   * falls back to getImageData instead of feeding the detectors mirrored pixels.
+   */
+  /**
+   * (Re)create the framebuffer's storage and attach it.
+   *
+   * The order matters, and getting it wrong is silent: a texture attached BEFORE it has storage
+   * leaves the framebuffer INCOMPLETE (36054), the completeness check fails, and the whole path
+   * falls back to getImageData for the life of the page. That is exactly what 3.9.10 shipped -
+   * the "allocation-free snapshot" never ran, while its own probe printed 36054 and was read as
+   * success. Allocate the storage first, then attach.
+   */
+  function sglAttach(w, h) {
+    sgl.bindTexture(sgl.TEXTURE_2D, sglTex);
+    sgl.texImage2D(sgl.TEXTURE_2D, 0, sgl.RGBA, w, h, 0, sgl.RGBA, sgl.UNSIGNED_BYTE, null);
+    sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
+    sgl.framebufferTexture2D(sgl.FRAMEBUFFER, sgl.COLOR_ATTACHMENT0, sgl.TEXTURE_2D, sglTex, 0);
+    sgl.viewport(0, 0, w, h);
+    return sgl.checkFramebufferStatus(sgl.FRAMEBUFFER) === sgl.FRAMEBUFFER_COMPLETE;
+  }
+
+  function downscaleGl(w, h) {
+    if (sglOff) return null;
+    try {
+      if (!sgl) {
+        sglCanvas = document.createElement('canvas');
+        sgl = sglCanvas.getContext('webgl2', { antialias: false, depth: false, stencil: false })
+           || sglCanvas.getContext('webgl', { antialias: false, depth: false, stencil: false });
+        if (!sgl) { sglOff = true; L('downscale readback', { via: '2d', why: 'no webgl' }); return null; }
+        sglTex = sgl.createTexture();
+        sglFbo = sgl.createFramebuffer();
+        sgl.bindTexture(sgl.TEXTURE_2D, sglTex);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_MIN_FILTER, sgl.NEAREST);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_MAG_FILTER, sgl.NEAREST);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_WRAP_S, sgl.CLAMP_TO_EDGE);
+        sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_WRAP_T, sgl.CLAMP_TO_EDGE);
+      }
+      if (sgl.isContextLost && sgl.isContextLost()) {
+        sglOff = true; L('downscale readback', { via: '2d', why: 'context lost' }); return null;
+      }
+      if (sglCanvas.width !== w || sglCanvas.height !== h) {
+        sglCanvas.width = w; sglCanvas.height = h;
+        sbytes = null;
+        if (!sglAttach(w, h)) {
+          sglOff = true; L('downscale readback', { via: '2d', why: 'fbo' }); return null;
+        }
+      }
+      const n = w * h * 4;
+      if (!sbytes || sbytes.length !== n) sbytes = new Uint8Array(n);
+      sgl.bindTexture(sgl.TEXTURE_2D, sglTex);
+      sgl.texImage2D(sgl.TEXTURE_2D, 0, sgl.RGBA, sgl.RGBA, sgl.UNSIGNED_BYTE, sbuf);
+      sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
+      sgl.readPixels(0, 0, w, h, sgl.RGBA, sgl.UNSIGNED_BYTE, sbytes);
+      if (sgl.getError() !== sgl.NO_ERROR) return null;
+      if (!sglChecked) {
+        sglChecked = true;
+        const ref = sctx.getImageData(0, 0, w, h).data;
+        let bad = 0, seen = 0;
+        for (let i = 0; i < ref.length; i += 4 * 17) { seen++; if (Math.abs(ref[i] - sbytes[i]) > 8) bad++; }
+        if (bad > seen * 0.02) {
+          sglOff = true;
+          L('downscale readback', { via: '2d', why: 'mismatch', bad, seen });
+          return null;
+        }
+        L('downscale readback', { via: 'gl', w, h });
+      }
+      return sbytes;
+    } catch (e) {
+      sglOff = true;
+      L('downscale readback', { via: '2d', why: String((e && e.message) || e) });
+      return null;
+    }
+  }
 
   function downscale() {
     if (!uiCanvas || !uiCanvas.isConnected) surfaces();
@@ -1171,8 +1293,15 @@ const SPECIES = [
     if (sbuf.width !== w || sbuf.height !== h) { sbuf.width = w; sbuf.height = h; }
     sctx.clearRect(0, 0, w, h);
     try { sctx.drawImage(uiCanvas, 0, 0, w * SDOWN, h * SDOWN, 0, 0, w, h); } catch (e) { return false; }
-    sdata = sctx.getImageData(0, 0, w, h).data;
-    perf.allocMB += (w * h * 4) / 1048576;      // getImageData always hands back a fresh copy
+    const glBytes = downscaleGl(w, h);
+    if (glBytes) {
+      sdata = glBytes;                          // reused buffer: nothing allocated per tick
+      perf.snapGL++;
+    } else {
+      sdata = sctx.getImageData(0, 0, w, h).data;
+      perf.snap2d++;
+      perf.allocMB += (w * h * 4) / 1048576;    // getImageData always hands back a fresh copy
+    }
     sw = w; sh = h;
     if (dataHasInk(sdata)) uiBlank = 0; else uiBlank++;
     checkSurface();
@@ -1680,9 +1809,19 @@ const SPECIES = [
     const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2];
     return r0 > 185 && g0 > 85 && g0 < 165 && b0 < 135 && r0 - g0 > 55;
   }
-  /** One pass per read: 1 where a rim pixel sits, indexed y * w + x. */
+  /**
+   * One pass per read: 1 where a rim pixel sits, indexed y * w + x.
+   *
+   * The buffer is reused. A fresh 420x420 Uint8Array per recovery blob measured 2.04 MB/s of
+   * allocation on its own - the same large-object pressure that made the whole page hitch.
+   * Only one mask is live at a time (every caller finishes with it before the next read).
+   */
+  let rimMaskBuf = null;
   function rimMask(r) {
-    const d = r.d, n = r.w * r.h, m = new Uint8Array(n);
+    const d = r.d, n = r.w * r.h;
+    if (!rimMaskBuf || rimMaskBuf.length < n) rimMaskBuf = new Uint8Array(n);
+    const m = rimMaskBuf;
+    m.fill(0, 0, n);
     for (let p = 0, i = 0; p < n; p++, i += 4) if (isRim(d, i)) m[p] = 1;
     return m;
   }
@@ -1856,10 +1995,17 @@ const SPECIES = [
    */
   function dialAnywhere() {
     const t = now();
-    if (t - (F.dialAnyAt || 0) < 900) return null;            // recovery: one pass a second at most
+    // Backed off, not a fixed 900 ms: see dialFallbackWait. The pass itself is unchanged, so the
+    // recovery still works whenever a dial really is somewhere off the hint.
+    if (t - (F.dialAnyAt || 0) < dialFallbackWait(F.dialAnyFail, F.opts)) return null;
     F.dialAnyAt = t;
+    const greens = greenBlobs();
+    if (!greens.length) {
+      F.dialAnyFail = (F.dialAnyFail || 0) + 1;
+      return null;
+    }
     const S = 420, hw = S / 2;
-    for (const b of greenBlobs()) {
+    for (const b of greens) {
       const gx = Math.round((b.x0 + b.x1 + 1) * SDOWN / 2);
       const gy = Math.round((b.y0 + b.y1 + 1) * SDOWN / 2);
       const r = readUI(gx - hw, gy - hw, S, S);
@@ -1886,8 +2032,13 @@ const SPECIES = [
         }
       }
       const geo = finishLock(r, mask, fine);
-      if (geo) { L('dial found anywhere', { cx: geo.cx, cy: geo.cy, R: geo.R, width: Math.round(geo.width) }); return geo; }
+      if (geo) {
+        F.dialAnyFail = 0;
+        L('dial found anywhere', { cx: geo.cx, cy: geo.cy, R: geo.R, width: Math.round(geo.width) });
+        return geo;
+      }
     }
+    F.dialAnyFail = (F.dialAnyFail || 0) + 1;
     return null;
   }
 
@@ -2274,6 +2425,7 @@ const SPECIES = [
       firstPressMaxWidthDeg: 60,    // a "hard dial" is narrower than this (deg of drawn arc)...
       firstPressFastOmega: 300,     // ...or spinning at least this fast (deg/s)
       firstPressMaxWaitMs: 2500,    // never hold a first press longer than this, even if the fit is noisy
+      firstPressMaxTransitFrac: 0.4, // ...and never past this fraction of one pass (width / omega)
       insideNowMs: 60,              // contain: pin past centre and still inside -> press now rather than wait a turn
       relockGraceMs: 450,           // hold a dial's geometry this long after a press (the ring blinks)
       maxPressPerDial: 12,          // safety cap on presses per dial lock (one per rotation is normal)
@@ -2289,6 +2441,8 @@ const SPECIES = [
       lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
       dialFallbackMs: 2500,         // no dial this long -> one whole-surface search (0 disables)
+      dialFallbackThrottleMs: 900,  // first recovery pass this soon after a cast...
+      dialFallbackMaxMs: 6000,      // ...then doubling per fruitless pass, up to this
       pressGraceMs: 250,            // a press with no new triangle this long was not acted on
       cardCheckMs: 100,
       scanTickMs: 66,               // the shared quarter-scale grab is refreshed at most this often (~15 Hz)
@@ -2328,6 +2482,7 @@ const SPECIES = [
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
+    F.dialAnyFail = 0; F.dialAnyAt = 0;                       // recovery backoff starts fresh each run
     F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
@@ -2658,6 +2813,7 @@ const SPECIES = [
         // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
         // never reach a dial 100 px away.
         F.hint = { x: b.cx, y: b.cy + 53 };
+        F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
         if (rec.tap) tap(b.cx, b.cy);
         F.lastPress = t;
         F.stats.bubbles++;
@@ -2729,7 +2885,10 @@ const SPECIES = [
            Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
         const heldMs = t - (F.geoAt || t);
         const stable = fitStable(s.fit, F.opts);
-        const giveUp = heldMs >= (F.opts.firstPressMaxWaitMs || 2500);
+        // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
+        // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
+        const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
+        const giveUp = heldMs >= budget;
         if (!stable && !giveUp) {
           if (!F.geo._firstHeld) {
             F.geo._firstHeld = true;
@@ -2751,6 +2910,7 @@ const SPECIES = [
           F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
           L('first press forced', {
             heldMs: Math.round(heldMs),
+            budget: Math.round(budget),
             width: Math.round(Number(s.width) || 0),
             omega: s.omega == null ? null : Math.round(s.omega),
             fitN: s.fit ? s.fit.n : 0,
@@ -2785,6 +2945,7 @@ const SPECIES = [
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
+        F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
         // dialect by dial would put both arms inside one attempt and the A/B would compare nothing.
@@ -3280,6 +3441,9 @@ const SPECIES = [
       // Where lockDial's ms go. `pct` is that phase's share of lockDial's own total, so the parts
       // account for the call instead of being compared against guesses. `memo.hits` counts the
       // calls the remembered circle answered - a high hit rate is the fast path working.
+      // Which path served the quarter-scale snapshot. 3.9.10 shipped a GL path that never engaged
+      // and left no trace; a counter is the difference between noticing in a minute and never.
+      snapshot: { gl: perf.snapGL, canvas2d: perf.snap2d },
       lockPhases: lockPhases(),
       // false means the page's CSP refused `new Function` and the in-script scan is in use.
       scanCompiled: !!scanCompiled,

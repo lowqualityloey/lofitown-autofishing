@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable };')();
+const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates']) {
+  for (const k of ['wrap180', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -98,12 +98,46 @@ test('fitStable demands a mature fit before a first press on a hard dial', () =>
   assert.equal(T.fitStable(null, {}), false);
 });
 
+test('the first-press hold is a fraction of one pass, not a fixed ceiling', () => {
+  // A 45 deg arc at 700 deg/s is under the pin for 64 ms. The old 2500 ms ceiling skipped ~4 passes
+  // of exactly the fish the player is watching; that is the reported "it did a round turn".
+  const fast = T.firstPressBudget(45, 700, {});
+  assert.ok(fast > 20 && fast < 30, 'budget ' + fast);
+  assert.ok(T.firstPressBudget(60, 1100, {}) < 25);
+  const slow = T.firstPressBudget(165, 120, {});
+  assert.ok(slow > 400 && slow < 600, 'the slow dial keeps a long, useful fit: ' + slow);
+  assert.equal(T.firstPressBudget(90, null, {}), 2500, 'no rate: keep the ceiling');
+  assert.equal(T.firstPressBudget(90, 0, {}), 2500, 'a static dial cannot be waited on');
+  assert.equal(T.firstPressBudget(0, 300, {}), 2500, 'no width: keep the ceiling');
+  assert.equal(T.firstPressBudget(90, 10, { firstPressMaxWaitMs: 800 }), 800, 'the ceiling still caps');
+  assert.equal(T.firstPressBudget(45, -700, {}), fast, 'spin direction does not matter');
+  // the step() gate has to use the budget, not the raw ceiling
+  assert.match(SRC, /firstPressBudget\(Number\(s\.width\)/);
+  assert.match(SRC, /firstPressMaxTransitFrac/);
+});
+
+test('the recovery scan backs off instead of running every second', () => {
+  // One whole-surface pass is a ~257k-test annulus sweep (250-300 ms measured); at a fixed 900 ms
+  // cadence that was a stall every second while the character waited for a bite.
+  assert.equal(T.dialFallbackWait(0, {}), 900);
+  assert.equal(T.dialFallbackWait(1, {}), 1800);
+  assert.equal(T.dialFallbackWait(2, {}), 3600);
+  assert.equal(T.dialFallbackWait(3, {}), 6000, 'capped');
+  assert.equal(T.dialFallbackWait(9, {}), 6000, 'never unbounded');
+  assert.equal(T.dialFallbackWait(null, {}), 900, 'a fresh run starts prompt');
+  assert.equal(T.dialFallbackWait(-1, {}), 900);
+  assert.equal(T.dialFallbackWait(4, { dialFallbackMaxMs: 1200 }), 1200);
+  // the scan must use the backoff, and a cast must reset it
+  assert.match(SRC, /dialFallbackWait\(F\.dialAnyFail, F\.opts\)/);
+  assert.match(SRC, /F\.dialAnyFail = 0; F\.dialAnyAt = 0/);
+});
+
 test('the first press on a narrow or fast dial waits for a mature fit, and the hold is bounded', () => {
   assert.match(SRC, /fitStable\(s\.fit, F\.opts\)/);
   assert.match(SRC, /F\.pressesThisDial === 0/);
   assert.match(SRC, /Number\(s\.width\) < \(F\.opts\.firstPressMaxWidthDeg \|\| 60\)/);
   assert.match(SRC, /Math\.abs\(Number\(s\.omega\) \|\| 0\) >= \(F\.opts\.firstPressFastOmega \|\| 300\)/);
-  assert.match(SRC, /firstPressMaxWaitMs \|\| 2500/, 'the hold must not starve a dial');
+  assert.match(SRC, /const giveUp = heldMs >= budget/, 'the hold must not starve a dial');
   assert.match(SRC, /F\.stats\.firstPressHeld/);
   assert.match(SRC, /F\.stats\.firstPressForced/);
   assert.match(SRC, /L\('first press held'/);
