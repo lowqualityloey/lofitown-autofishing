@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.14
+// @version      3.9.15
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.14" };
+  const F = { version: "3.9.15" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -1353,8 +1353,13 @@ const SPECIES = [
             }
           }
           const bh = y1 - y0;                 // bubble height; h stays the buffer height
-          if (bh > 25 && bh < 95 && (!best || n > best.n)) {
-            best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n };
+          // 25 was wide enough for a player's name tag, which is the same white-with-dark-text
+          // shape one size smaller. Tapping one opened that player's profile mid-session (reported
+          // live 2026-11-02). The prompt is ~108x50 at the reference size and scales with the
+          // canvas, so 28 px at the bottom keeps it and drops a tag.
+          const fill = n / Math.max(1, bw * bh);
+          if (bh >= 28 && bh < 95 && fill >= 0.45 && (!best || n > best.n)) {
+            best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n, via: 'box' };
           }
         }
         s = -1;
@@ -1624,7 +1629,7 @@ const SPECIES = [
       if (!r) continue;
       const ink = inkMix(r);
       if (ink.white < 0.45 || ink.dark < 0.02 || ink.dark > 0.5) continue;
-      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, n: b.count * SDOWN * SDOWN };
+      const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, n: b.count * SDOWN * SDOWN, via: 'anywhere' };
       if (!best || cand.n > best.n) best = cand;
     }
     if (best) L('bubble anywhere', { cx: best.cx, cy: best.cy, w: best.w, h: best.h });
@@ -3016,10 +3021,14 @@ const SPECIES = [
         // never reach a dial 100 px away.
         F.hint = { x: b.cx, y: b.cy + 53 };
         F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
-        if (rec.tap) tap(b.cx, b.cy);
+        // A blob found by the whole-surface scan is only a hint: it can be a player's name tag,
+        // and clicking one opens that player's profile. The boxed scan is the one allowed to
+        // click; the ladder's Space rung still casts when the hint was all we had.
+        const clickable = b.via !== 'anywhere';
+        if (rec.tap && clickable) tap(b.cx, b.cy);
         F.lastPress = t;
         F.stats.bubbles++;
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, tap: rec.tap, space: rec.space });
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: rec.tap && clickable, space: rec.space });
         if (rec.space) {
           F.lastSpaceTry = t;
           space(F.opts.spaceTarget);
@@ -4430,6 +4439,10 @@ const SPECIES = [
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
   var collapsed = false;
+  // The owner opened it. The game's zones can leave the layout no room, and that used to collapse
+  // the panel again inside the same place() call - a pill that looks clickable and does nothing.
+  // An overlapping panel the owner asked for beats a panel that refuses to open.
+  var userExpanded = false;
   var host = null;
   var root = null;
   var ui = {};
@@ -5111,8 +5124,8 @@ const SPECIES = [
     });
     host.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
-    min.addEventListener('click', function () { setCollapsed(true); });
-    pill.addEventListener('click', function () { setCollapsed(false); });
+    min.addEventListener('click', function () { userExpanded = false; setCollapsed(true); });
+    pill.addEventListener('click', function () { userExpanded = true; setCollapsed(false); });
     perfBox.addEventListener('click', function () {
       // Expand, then read: the report is a snapshot of the last ~10 s, not a live feed.
       var hidden = perfJson.classList.toggle('hide');
@@ -5661,8 +5674,14 @@ const SPECIES = [
       preferred: dragged || null
     });
     if (res === 'pill') {
-      if (!collapsed) { setCollapsed(true); return; }
-      res = { x: window.innerWidth - 60, y: 12, w: 48, h: 48 };
+      if (!collapsed) {
+        if (!userExpanded) { setCollapsed(true); return; }
+        // No room that clears the game, but the owner opened this on purpose: take the top-left
+        // corner below the HUD strip rather than bounce back to a pill.
+        res = { x: 12, y: 84, w: size.w, h: size.h };
+      } else {
+        res = { x: window.innerWidth - 60, y: 12, w: 48, h: 48 };
+      }
     }
     host.style.left = Math.round(res.x) + 'px';
     host.style.top = Math.round(res.y) + 'px';

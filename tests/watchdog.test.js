@@ -58,6 +58,15 @@ test('status() exposes the stall, so anything outside the loop can see it', () =
   assert.match(status, /lastTickAgoMs:/);
 });
 
+test('a panel the owner opened is not collapsed again by the layout', () => {
+  // Live 2026-11-02: collapsing to the pill and clicking it did nothing, because place() found no
+  // gap that cleared the game's zones and called setCollapsed(true) inside the same call.
+  assert.match(PANEL, /var userExpanded = false;/);
+  assert.match(PANEL, /pill\.addEventListener\('click', function \(\) \{ userExpanded = true;/);
+  assert.match(PANEL, /if \(!userExpanded\) \{ setCollapsed\(true\); return; \}/);
+  assert.match(PANEL, /res = \{ x: 12, y: 84/, 'an overlapping panel beats a panel that will not open');
+});
+
 test('the panel says stalled instead of running', () => {
   assert.match(PANEL, /var stalled = !!\(status && status\.running && status\.stalled\);/);
   assert.match(PANEL, /ui\.chip\.textContent = stalled \? 'stalled' : \(alarm \? doc\.verdict : phase\);/, 'the chip must not keep saying running');

@@ -108,6 +108,19 @@ test('the dial search can widen, and a blind run has a whole-surface recovery', 
   assert.match(step, /F\.opts\.dialFallbackMs/);
 });
 
+test('a prompt found anywhere is a hint, never a click target', () => {
+  // Live 2026-11-02: the whole-surface scan matched players' name tags - the same white blob, text
+  // included - and tapping one opened that player's profile in the middle of a session.
+  assert.match(SRC, /via: 'anywhere'/);
+  assert.match(SRC, /via: 'box'/);
+  assert.match(SRC, /const clickable = b\.via !== 'anywhere';/);
+  assert.match(SRC, /if \(rec\.tap && clickable\) tap\(b\.cx, b\.cy\);/);
+  // A name tag is one size smaller than the prompt: the box scan refuses anything under 28 px tall
+  // and anything that is not mostly solid white.
+  assert.match(SRC, /bh >= 28 && bh < 95/);
+  assert.match(SRC, /fill >= 0\.45/);
+});
+
 test('the recovery pass reuses the shared grab and the same validation', () => {
   const fn = SRC.slice(SRC.indexOf('const GREEN_LOOSE'), SRC.indexOf('F.sample = function'));
   assert.match(fn, /function greenBlobs\(\)/);

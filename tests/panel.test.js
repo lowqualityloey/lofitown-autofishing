@@ -20,8 +20,8 @@ test('the panel head names the build, so a stale tab is visible at a glance', ()
 });
 
 test('the collapse button is wired, and the pill brings the panel back', () => {
-  assert.match(src, /min\.addEventListener\('click', function \(\) \{ setCollapsed\(true\); \}\)/);
-  assert.match(src, /pill\.addEventListener\('click', function \(\) \{ setCollapsed\(false\); \}\)/);
+  assert.match(src, /min\.addEventListener\('click', function \(\) \{ userExpanded = false; setCollapsed\(true\); \}\)/);
+  assert.match(src, /pill\.addEventListener\('click', function \(\) \{ userExpanded = true; setCollapsed\(false\); \}\)/);
 });
 
 test('dragging never steals a click from a button inside the head', () => {
