@@ -1,0 +1,32 @@
+name: test
+
+# The suite is the project's only guard: it asserts that the built userscript is not stale, that
+# the version is stamped in both the header and the core, and that the docs index is complete.
+# Until now nothing ran it but the author's own shell.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # No install step: the project has no dependencies, no lockfile and no bundler.
+      - name: Unit tests
+        run: node --test
+
+      # The staleness guard inside the suite compares the committed build with a fresh one; this
+      # repeats it from the outside, because a stale dist/ is the failure that reaches users.
+      - name: The committed userscript build matches the source
+        run: |
+          node build-userscript.js
+          git diff --exit-code -- dist/autofish.user.js
