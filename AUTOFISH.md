@@ -2515,6 +2515,23 @@ pure midpoint rule.
 The old test asserted the opposite ("approaching the midpoint keeps the widest-tolerance schedule"),
 so it was updated with the measurement in the comment - a test that encodes the bug is not a guard.
 
+## 2026-11-02 3.9.22: one hit is not evidence
+
+The 3.9.20 fallback worked - it found the prompt on the overlay canvas and kept fishing - but it
+flipped on a **single** white blob, and the world canvas has HUD whites of its own. Measured live:
+**11 `ui layer moved` events in a 219-event buffer**, roughly one every few seconds, each one resetting
+the snapshot and briefly reading a canvas that cannot show a prompt. It also meant a false blob could
+become a click target on the world layer, which is the name-tag class of bug again.
+
+**3.9.22** requires two things before a surface is adopted: the prompt must be found at the **same
+spot twice** (within 12 px, within 2 s), and the alternate must be **sparse** - unless the surface
+being read has no ink at all, which is the merged-layer case where the renderer legitimately holds
+everything.
+
+That keeps the recovery (a genuine move is adopted on the second hit, about 300-600 ms later) and
+removes the flap, because a persistent world-canvas HUD blob can no longer win against a surface that
+is already drawing ink of its own.
+
 It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
 count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
 (208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
