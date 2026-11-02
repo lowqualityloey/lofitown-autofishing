@@ -2164,3 +2164,57 @@ The shared quarter-scale snapshot still allocates a fresh `getImageData` copy ea
 in this window); that is the remaining garbage source, but it no longer produced a long task in a
 10 s running sample.
 
+## 2026-11-02 3.9.10: the freeze was an allocation, the held press was a ceiling
+
+The owner reported two things from one session: the page "starts lagging, like freezing in few
+moments" after Start, and the dial is sometimes pressed a rotation or more late - suspected to be
+worse on high-tier fish. Both were measured in the live tab before any code changed.
+
+**The capture** (BrowserOS neo, 1179x821, 3.9.9, 678 s uptime, bot running):
+
+| Measurement | Value |
+| :--- | ---: |
+| fps / p50 / p95 / worst frame | 106.8 / 7 / 12.2 / **286.8 ms** |
+| readback path | 27,906 GL reads, **0** 2D |
+| allocation | **1,384 MB over 678 s = 2.04 MB/s** |
+| detector cost | findBubble 55.3, sample 29.7, snapshot 28.8, findCatch 25.1, lockDial 21.9 ms/s |
+| dials / first press held / forced | 18 / **9** / **2** |
+| presses accepted | 51 / 51, 9 caught of 10 attempts |
+
+The GL readback from 3.9.9 was working - `canvas2d` was zero - so the freeze was not a slow
+readback. It was the 2.04 MB/s: `downscale()` still called `getImageData` every scan tick, and a
+242 KB array lands in V8 large-object space. A 12.2 ms p95 with a 287 ms worst frame is the shape
+of a major collection, not of a slow detector.
+
+**The probe.** In the same tab, the same quarter-scale copy read both ways:
+
+| | `getImageData` | upload + `readPixels` |
+| :--- | ---: | ---: |
+| per call | 1.65 ms | **1.30 ms** |
+| allocation | 242 KB every call | none after warm-up |
+| pixels compared | 6,762 | **0 mismatches, no row flip** |
+
+**3.9.10** therefore reads the snapshot through our own framebuffer into one reused `Uint8Array`,
+with a one-off pixel comparison against `getImageData` (2% tolerance) and the 2D path as the
+fallback, logged once as `downscale readback`.
+
+**The late press** was not the planner. `planPress` extracted from the source and simulated against
+a rotating dial at 10-140 fps pressed **inside the window 100% of the time**; no trigger, margin or
+angle changed. What the capture showed is the first-press gate: `firstPressHeld` on half the dials,
+because the hold ceiling was a fixed `firstPressMaxWaitMs` = 2500 ms. At 700 deg/s a 45 deg arc is
+under the pin for 64 ms, so that ceiling is **about four passes** - and the dials it hits are
+exactly the fast, narrow, high-tier ones. The hold is now a budget:
+
+```
+firstPressBudget = min(2500 ms, 0.4 x width / |omega| x 1000)
+```
+
+which is 26 ms on that dial and 550 ms on a 165 deg / 120 deg/s one, so a slow wide dial keeps the
+long accurate fit it was designed for. The budget is in the timing core next to `fitStable`, with
+its own test and a source guard that `step()` uses it rather than the raw ceiling.
+
+`node --test` passes (231 tests). The remaining live check is the one this section cannot supply:
+install 3.9.10 and read `perf().readback.allocMBPerSec` (expect < 0.1) and `accuracy().firstPress*`
+in a seated session.
+
+
