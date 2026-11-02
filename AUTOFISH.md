@@ -2415,6 +2415,29 @@ that cannot separate the two is not an instrument.
 `pressErrorSummary()` reports presses, settled/assumed, measured, mean/p50/p95 residual, inside rate
 and mean window; `__fish.exportRun()` carries it plus the last 80 probes. `node --test` passes (252).
 
+## 2026-11-02 3.9.19: the press destroyed the frame it was being measured in
+
+The first live read of the 3.9.18 probe said `meanAbsResidual 76.7 deg` against a `40.2 deg` window,
+with every press accepted. That is not a bot missing by two window widths; it is an instrument
+measuring the wrong frame. A press makes the game spawn a new triangle, so **the first frame after a
+press shows the new triangle**, and back-extrapolating it to the judgement instant measures the spawn,
+not the error. `res: 61.6` beside `pred: 24.2` at `om: 69` is a one-frame jump of 61 deg.
+
+**3.9.19** deletes that measurement and measures the quantity that actually decides a marginal narrow
+press, **without pressing**: each frame, take the previous frame's `(delta, omega)`, predict delta for
+now, and compare with the measured delta. Samples where a press landed between the two frames are
+skipped, because those are the contaminated ones.
+
+It is reported in degrees **and milliseconds**, because the window is a time: a +/-18.5 deg window at
+300 deg/s is 62 ms wide, so 3 deg of scatter is 10 ms (fine) and 15 deg is 50 ms (marginal).
+`predictionSummary()` gives mean/p50/p95, the over-50 ms share, and the counts.
+
+The press log keeps what it got right: `settled` versus `assumed` verdicts, the predicted inside
+flag, and the window. The first live look said **3 of 9 presses were assumed** - a third of the
+zero-rejected-press figure this project quotes rests on an inference, and that is now countable.
+
+`node --test` passes (253).
+
 It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
 count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
 (208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the

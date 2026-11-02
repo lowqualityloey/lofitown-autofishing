@@ -28,6 +28,14 @@ window it landed**, and whether it was ever measured at all.
    narrow miss is a timing error (residual near or past the window) or a count problem (residual
    small, presses accepted, fish still lost).
 
+## Correction
+
+The first live read reported 76.7 deg of mean error on a 40.2 deg window with every press accepted.
+The instrument was wrong, not the bot: a press spawns a new triangle, so the first frame after one
+shows the spawn, and back-extrapolating it to the judgement instant measures the jump. 3.9.19 removes
+that measurement and measures prediction error without pressing (in degrees and milliseconds); the
+press log keeps the `settled`/`assumed` split, which read 3 of 9 assumed.
+
 ## Out of scope
 
 - No change to planPress, the trigger, marginDeg or any threshold. This release only measures.
