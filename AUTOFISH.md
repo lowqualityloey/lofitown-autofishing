@@ -2465,6 +2465,36 @@ inferred. The bot is not lying; the sentence that quoted it was too confident.
 The remaining gap is now the mid band (33/37) rather than narrow, and the open work is to make press
 verdicts observable instead of assumed. Neither is urgent.
 
+## 2026-11-02 3.9.20: the game split the layers again, and the bot kept reading the world
+
+Reported live: the session starts, fishes, and after a few minutes stops with a `REEL!` prompt on
+screen and the panel paused for a seat. The bot reported **0 bubbles in 15 minutes** while a prompt
+was visible, so the diagnosis is detection, not the seat.
+
+Enumerating the canvases from inside the game's own render call settled it:
+
+| canvas | painted pixels | white pixels |
+| :--- | ---: | ---: |
+| `app.renderer.canvas` (the world) | 967,959 | 2,424 |
+| the second canvas (**the UI layer**) | 6,498 | **3,384** |
+
+The prompt layer was back on its own sparse canvas. Earlier the same day the game had merged
+everything into the renderer (965k painted, second canvas empty), and `adoptSurface()` was written
+for that case: it hands the layer back "if the other canvas has ink". A world canvas always has ink,
+so five seconds after every adoption the bot flipped onto the world and stayed there, reading a
+canvas that can never show a prompt. That is "fishes for a few minutes, then nothing".
+
+**3.9.20** stops guessing. When the box scan on the current surface misses, the bot asks the **other**
+canvas - one boxed readback, throttled to 300 ms - and keeps it when the prompt is there. Verified
+live before shipping: the same box scan on the second canvas returns a 108x50 candidate at fill 0.63,
+the REEL bubble, against none on the world canvas. `checkSurface()` also refuses to hand the layer
+back to a canvas more than half painted, because "has ink" cannot tell a world from an overlay;
+`inkStats()` reports density for exactly that.
+
+The lesson is the one this project keeps relearning: an assumption about which surface holds the UI
+is a bug waiting for a game update. The fallback makes the surface a runtime fact for the prompt as
+well as for the dial.
+
 It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
 count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
 (208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
