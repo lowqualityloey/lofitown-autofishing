@@ -2270,4 +2270,40 @@ in eleven minutes was real - but its claim that the snapshot became allocation-f
 the field until this fix. The stall the owner reported after 3.9.10 was removed by the 3.9.11
 recovery backoff, not by the snapshot.
 
+## 2026-11-02 3.9.13: doctor() names the condition instead of waiting for a report
+
+Every incident this month had the same shape: a condition the bot could have named, found instead
+by opening the tab and measuring. Three of the four were invisible from outside, and the reason was
+always the same - nothing recorded which path the bot was actually taking.
+
+| Incident | What the bot said | What doctor() says |
+| :--- | :--- | :--- |
+| 3.9.10 snapshot path never engaged | nothing; `canvas2d: 0` looked healthy | `snapshot-fallback` |
+| 3.9.11 one 250-285 ms stall per second | nothing | `frame-stalls` |
+| 3.9.9 first press held about four rotations | a `firstPressHeld` count | `timing-held` |
+| loop stalled for 10.7 minutes (3.9.x) | nothing until `status()` was read | `loop-stalled` |
+
+`doctor(state)` is a pure function in its own sentinel block, and `__fish.doctor()` feeds it the
+state the bot already has: `postRender`, `lastTickAgoMs`, `snapshot.gl/canvas2d`,
+`readback.allocMBPerSec`, `longtasks`, `needsSeat`, the ages of the last prompt and dial, the press
+acceptance and the first-press hold. It returns one verdict, a severity, one action and the numbers
+that produced it. No readback, no timer, no retry: it reports, it never acts.
+
+Two things had to be added first. `perf().longtasks` counts long tasks from **outside** the loop -
+a 250 ms block the bot caused and one it did not look identical from inside, and only this counter
+separates them. `stats.holdPassesMax` records how many turns of the arc the first press waited
+through: above 1 it skipped a whole rotation, which is the 3.9.9 report, and 3.9.12 cannot pass 1 by
+construction, so the number doubles as a regression witness. The first version of this metric was a
+ratio against the instantaneous width/omega and it read 3.6 on a healthy build - the spin estimate
+spikes - which is exactly the false positive a diagnostic must not have.
+
+The panel shows a high-severity verdict in the phase chip (`detector-blind` instead of `running`),
+because a phase that says "running" while the bot has silently stopped working is the exact failure
+this exists to end.
+
+**Acceptance is that it diagnoses the failures we already lived through**, in `tests/doctor.test.js`:
+the real 3.9.10 state must return `snapshot-fallback`, the real 3.9.11 state `frame-stalls`, the real
+3.9.9 state `timing-held`, and the healthy 3.9.12 numbers must return `fishing` with severity ok.
+`node --test` passes (241 tests).
+
 

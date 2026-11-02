@@ -1116,7 +1116,14 @@
     // A stalled core still looks like "running" from the outside - the phase never changed, the
     // frames did. Say what is actually happening, in the place the phase is printed.
     var stalled = !!(status && status.running && status.stalled);
-    ui.chip.textContent = stalled ? 'stalled' : phase;
+    // The core's own verdict, and only a high-severity one: the chip is the phase label the owner
+    // reads at a glance, so a warning would be noise next to it. A named failure ("detector-blind",
+    // "snapshot-fallback") is worth more than "running" when the bot has silently stopped working.
+    var doc = null;
+    try { doc = (fish() && fish().doctor) ? fish().doctor() : null; } catch (e) { doc = null; }
+    var alarm = !!(doc && doc.severity === 'high' && !stalled);
+    ui.chip.textContent = stalled ? 'stalled' : (alarm ? doc.verdict : phase);
+    ui.chip.title = alarm ? doc.action : '';
     ui.dot.className = 'dot ' + (stalled ? 'stalled' : phase);
     ui.winToggle.textContent = state.window.on ? 'on' : 'off';
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';

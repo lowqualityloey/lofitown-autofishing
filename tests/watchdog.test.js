@@ -60,7 +60,8 @@ test('status() exposes the stall, so anything outside the loop can see it', () =
 
 test('the panel says stalled instead of running', () => {
   assert.match(PANEL, /var stalled = !!\(status && status\.running && status\.stalled\);/);
-  assert.match(PANEL, /ui\.chip\.textContent = stalled \? 'stalled' : phase;/, 'the chip must not keep saying running');
+  assert.match(PANEL, /ui\.chip\.textContent = stalled \? 'stalled' : \(alarm \? doc\.verdict : phase\);/, 'the chip must not keep saying running');
+  assert.match(PANEL, /doc\.severity === 'high'/, 'a high-severity verdict takes the chip');
   assert.match(PANEL, /'dot ' \+ \(stalled \? 'stalled' : phase\)/);
   assert.match(PANEL, /var stallNote = stalled \? 'loop stalled/, 'the red line names the stall');
   assert.match(PANEL, /if \(stallNote\) ui\.banner\.className = 'banner stall'/);

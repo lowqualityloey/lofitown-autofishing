@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.12
+// @version      3.9.13
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.12" };
+  const F = { version: "3.9.13" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -72,7 +72,7 @@ window.__autofishInstalled = true;
    * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
    * average cost of each detector, so a change can be justified by numbers rather than a guess.
    */
-  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0 };
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0, ltN: 0, ltMax: 0, ltRing: [] };
   /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
    * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
@@ -81,6 +81,32 @@ window.__autofishInstalled = true;
   perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
    *  inside a reel (the dial persists across presses) at a third of the old read count. */
+  /**
+   * Long tasks, counted from outside the loop.
+   *
+   * The bot can see its own detector cost but not a stall it did not cause - and a 250 ms block
+   * inside render() looks exactly like a 250 ms block from anywhere else. PerformanceObserver is
+   * the cheapest honest witness: no readback, no timer, no allocation per entry beyond the ring.
+   * 3.9.11's once-a-second stall was invisible for a day because nothing counted this.
+   */
+  let ltObs = null;
+  function watchLongTasks() {
+    if (ltObs || typeof PerformanceObserver === 'undefined') return;
+    try {
+      ltObs = new PerformanceObserver(function (list) {
+        const at = now();
+        const entries = list.getEntries();
+        for (const e of entries) {
+          perf.ltN++;
+          if (e.duration > perf.ltMax) perf.ltMax = e.duration;
+          perf.ltRing.push({ t: at, ms: e.duration });
+          if (perf.ltRing.length > 24) perf.ltRing.shift();
+        }
+      });
+      ltObs.observe({ entryTypes: ['longtask'] });
+    } catch (e) { ltObs = null; }
+  }
+
   const MEMO_EVERY_MS = 500;
   /** The remembered circle can only help while a dial is actually on screen: it caches the last
    *  circle, and between dials there is nothing at that spot to verify. So an attempt also needs a
@@ -93,6 +119,7 @@ window.__autofishInstalled = true;
     perf.card = 0; perf.cardN = 0;
     perf.readN = 0; perf.readGL = 0; perf.read2d = 0; perf.readMB = 0; perf.allocMB = 0;
     perf.snapGL = 0; perf.snap2d = 0;
+    perf.ltN = 0; perf.ltMax = 0; perf.ltRing.length = 0;
     perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   }
 
@@ -484,6 +511,85 @@ window.__autofishInstalled = true;
     return out;
   }
   // </timing-core>
+
+  /* ---- doctor ----------------------------------------------------------
+   * One verdict about why fishing is or is not happening, from state the bot already collects:
+   * no DOM, no timers, no reads. tests/doctor.test.js feeds it the states this project has actually
+   * been in, so the classes that each cost a live debugging session are named instead of inferred.
+   */
+  // <doctor-core>
+  /**
+   * s: { running, paused, hidden, stalled, lastTickAgoMs, postRender,
+   *      snapshot: { gl, canvas2d }, readback: { canvas2d, allocMBPerSec },
+   *      longtasks: { inLast10s, maxMs }, worstFrameMs,
+   *      needsSeat, sincePromptMs, sinceDialMs,
+   *      accepted, rejected, acceptRate, dials, held, forced, holdPassesMax }
+   * -> { verdict, severity: 'ok'|'warn'|'high', action, evidence }
+   */
+  function doctor(s) {
+    const st = s || {};
+    const o = (verdict, severity, action, evidence) =>
+      ({ verdict, severity, action, evidence: evidence || {} });
+
+    if (!st.running) return o('idle', 'ok', 'press Start', {});
+    if (st.stalled || (st.lastTickAgoMs != null && st.lastTickAgoMs > 2000)) {
+      return o('loop-stalled', 'high', 'reload the page: the loop stopped ticking',
+        { lastTickAgoMs: st.lastTickAgoMs });
+    }
+    if (st.hidden) return o('page-hidden', 'warn', 'bring the tab to the front', {});
+    if (st.paused) return o('paused', 'ok', 'press Resume', {});
+    if (st.postRender === false) {
+      return o('path-silent', 'high', 'detection is not on the render hook: rebuild or reinstall',
+        { postRender: false });
+    }
+    // Which path served the quarter-scale read. 3.9.10 shipped a GL path that never engaged and
+    // left no trace; this verdict is what would have said so in the first minute.
+    const snap = st.snapshot || {};
+    const snapN = (snap.gl || 0) + (snap.canvas2d || 0);
+    if (snapN >= 50 && !(snap.gl > 0)) {
+      return o('snapshot-fallback', 'high', 'the quarter-scale read fell back to getImageData: report it',
+        { gl: snap.gl || 0, canvas2d: snap.canvas2d || 0 });
+    }
+    const rb = st.readback || {};
+    if ((rb.canvas2d || 0) > 0 && (rb.allocMBPerSec || 0) > 1) {
+      return o('readback-allocating', 'high', 'the readback is allocating: report it',
+        { allocMBPerSec: rb.allocMBPerSec, canvas2d: rb.canvas2d });
+    }
+    const lt = st.longtasks || {};
+    if ((lt.inLast10s || 0) >= 3 && (lt.maxMs || 0) >= 100) {
+      return o('frame-stalls', 'warn', 'something is stalling the frame: read __fish.perf()',
+        { inLast10s: lt.inLast10s, maxMs: lt.maxMs });
+    }
+    if ((st.worstFrameMs || 0) > 250) {
+      return o('frame-stalls', 'warn', 'a frame took ' + Math.round(st.worstFrameMs) + ' ms',
+        { worstFrameMs: st.worstFrameMs });
+    }
+    if (st.needsSeat) return o('not-seated', 'warn', 'sit on a chair by the water', {});
+    if ((st.accepted || 0) + (st.rejected || 0) >= 20 &&
+        st.acceptRate != null && st.acceptRate < 0.9) {
+      return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
+        { acceptRate: st.acceptRate, accepted: st.accepted, rejected: st.rejected });
+    }
+    // More than one full turn of the arc held back is a whole skipped rotation: the 3.9.9 report.
+    // 3.9.12 cannot pass 1 by construction, so this is also the regression witness.
+    if ((st.holdPassesMax || 0) > 1) {
+      return o('timing-held', 'warn', 'the first press waits longer than one rotation',
+        { holdPassesMax: st.holdPassesMax, held: st.held, forced: st.forced });
+    }
+    if (st.sinceDialMs != null && st.sinceDialMs <= 5000) {
+      return o('fishing', 'ok', 'none', { sinceDialMs: st.sinceDialMs });
+    }
+    if (st.sincePromptMs != null && st.sincePromptMs <= 45000) {
+      return o('waiting-bite', 'ok', 'none', { sincePromptMs: st.sincePromptMs });
+    }
+    if (st.sinceDialMs != null && st.sinceDialMs <= 45000) {
+      return o('waiting-bite', 'ok', 'none', { sinceDialMs: st.sinceDialMs });
+    }
+    return o('detector-blind', 'high',
+      'no prompt and no dial for 45 s: run __fish.calibrate() and compare the colours',
+      { sincePromptMs: st.sincePromptMs, sinceDialMs: st.sinceDialMs });
+  }
+  // </doctor-core>
 
   /* ---- coordinate frame ------------------------------------------------
    * Everything the detectors see is in the UI canvas's backing-store pixels. Everything the DOM
@@ -2471,13 +2577,14 @@ const SPECIES = [
     F._postAt = now();
     installPostRender();     // detection has to run after the game's draw, not before it
     resetPerf();
+    watchLongTasks();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0,
+      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bands = {}; F.widths = {}; F.rarities = {};
@@ -2574,7 +2681,7 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0,
+      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bubbleMiss = 0; F.stallRetry = 0;
@@ -2862,6 +2969,14 @@ const SPECIES = [
       }
       F.bad = 0;
       settlePress(s, F.dialBlinks);
+      // Arc travel since the lock, in degrees: one turn is one pass of the pin under the wedge.
+      if (s.mid != null) {
+        if (F.geo._pm != null) {
+          const dm = Math.abs(wrap180(Number(s.mid) - F.geo._pm));
+          if (dm < 180) F.geo._travel = (F.geo._travel || 0) + dm;
+        }
+        F.geo._pm = Number(s.mid);
+      }
       s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
       if (F.geoReasons) F.geoReasons[F.planReason || 'none'] = (F.geoReasons[F.planReason || 'none'] || 0) + 1;
       const plan = planPress({
@@ -2903,6 +3018,15 @@ const SPECIES = [
            Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
         const heldMs = t - (F.geoAt || t);
         const stable = fitStable(s.fit, F.opts);
+        // How long the hold has lasted against one pass of the arc. Above 1 it skipped whole
+        // rotations - the 3.9.9 "it did a round turn" report. 3.9.12 cannot exceed 0.4 by
+        // construction, so this number is also the regression witness doctor() reads.
+        // Full turns of the arc waited through so far. This is the user-visible quantity - the
+        // owner reported "it does a round turn or more" - and unlike a ratio against the
+        // instantaneous width/omega it does not swing when the spin estimate spikes. 3.9.12 cannot
+        // pass 1 by construction; 3.9.9's fixed 2500 ms ceiling passed 2 or more on a fast dial.
+        const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
+        if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
         // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
         // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
         const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
@@ -2961,6 +3085,7 @@ const SPECIES = [
       }
       if (g) {
         F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
+        g._travel = 0; g._pm = null;                            // arc travel for this lock
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
@@ -3131,6 +3256,41 @@ const SPECIES = [
       ledger: { total: book.total || 0, species: Object.keys(book.species || {}).length, shiny: book.shiny || 0 },
       logTail: F.events.slice(-8),
     };
+  };
+
+  /**
+   * Why fishing is or is not happening, in one word plus one action: the state a support question
+   * would otherwise need five console commands to reconstruct. Pure read - it takes no samples and
+   * starts no timer, so a panel may poll it.
+   */
+  F.doctor = function () {
+    const s = F.stats || {};
+    const p = F.perf();
+    const t = now();
+    return doctor({
+      running: !!F.running,
+      paused: !!F.paused,
+      hidden: !!F.hidden,
+      stalled: !!F.stalled,
+      lastTickAgoMs: F.lastTickAt ? Math.round(t - F.lastTickAt) : null,
+      postRender: !!F._postRender,
+      snapshot: p.snapshot,
+      readback: p.readback,
+      longtasks: p.longtasks,
+      worstFrameMs: p.worst,
+      needsSeat: !!F.needsSeat,
+      sincePromptMs: F.lastBubbleAt ? Math.round(t - F.lastBubbleAt) : null,
+      sinceDialMs: F.geoAt ? Math.round(t - F.geoAt) : null,
+      accepted: s.pressAccepted || 0,
+      rejected: s.pressRejected || 0,
+      acceptRate: (s.pressAccepted || 0) + (s.pressRejected || 0)
+        ? (s.pressAccepted || 0) / ((s.pressAccepted || 0) + (s.pressRejected || 0))
+        : null,
+      dials: s.dials || 0,
+      held: s.firstPressHeld || 0,
+      forced: s.firstPressForced || 0,
+      holdPassesMax: s.holdPassesMax || 0,
+    });
   };
 
   /**
@@ -3393,6 +3553,16 @@ const SPECIES = [
     };
   });
 
+  /** Long-task totals plus the ones inside the last ten seconds. */
+  function longTaskReport() {
+    const t = now();
+    let n = 0, max = 0;
+    for (const e of perf.ltRing) {
+      if (t - e.t <= 10000) { n++; if (e.ms > max) max = e.ms; }
+    }
+    return { total: perf.ltN, maxMs: Math.round(perf.ltMax), inLast10s: n, max10sMs: Math.round(max) };
+  }
+
   /** lockDial's five phases as ms, ms per call and share of the call. */
   function lockPhases() {
     const total = perf.lock || 0, n = perf.lockN || 0;
@@ -3462,6 +3632,9 @@ const SPECIES = [
       // Which path served the quarter-scale snapshot. 3.9.10 shipped a GL path that never engaged
       // and left no trace; a counter is the difference between noticing in a minute and never.
       snapshot: { gl: perf.snapGL, canvas2d: perf.snap2d },
+      // Seen from outside the loop. A block the bot did not cause looks identical to one it did,
+      // and only this counter separates them; inLast10s is what doctor() reads.
+      longtasks: longTaskReport(),
       lockPhases: lockPhases(),
       // false means the page's CSP refused `new Function` and the in-script scan is in use.
       scanCompiled: !!scanCompiled,
@@ -5154,7 +5327,14 @@ const SPECIES = [
     // A stalled core still looks like "running" from the outside - the phase never changed, the
     // frames did. Say what is actually happening, in the place the phase is printed.
     var stalled = !!(status && status.running && status.stalled);
-    ui.chip.textContent = stalled ? 'stalled' : phase;
+    // The core's own verdict, and only a high-severity one: the chip is the phase label the owner
+    // reads at a glance, so a warning would be noise next to it. A named failure ("detector-blind",
+    // "snapshot-fallback") is worth more than "running" when the bot has silently stopped working.
+    var doc = null;
+    try { doc = (fish() && fish().doctor) ? fish().doctor() : null; } catch (e) { doc = null; }
+    var alarm = !!(doc && doc.severity === 'high' && !stalled);
+    ui.chip.textContent = stalled ? 'stalled' : (alarm ? doc.verdict : phase);
+    ui.chip.title = alarm ? doc.action : '';
     ui.dot.className = 'dot ' + (stalled ? 'stalled' : phase);
     ui.winToggle.textContent = state.window.on ? 'on' : 'off';
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
