@@ -2394,6 +2394,27 @@ attempt locked 7 dials and pressed 3 times); now every narrow attempt presses 5-
 15 narrow dials logged, 13 closed as `hit`, 1 `no-press` and 1 `skipped`. Presses per dial went from
 0.4 on the old lost attempts to 5.6.
 
+## 2026-11-02 3.9.18: a press now says where it landed
+
+3.9.17 opened the press gate, and the narrow band stopped losing fish to *access*: presses per dial
+went from 0.4 to 5.6 and 13 of 15 narrow dials closed as hits. The catch rate did not move, and the
+run could not say why - a lost narrow attempt and a caught one showed the same presses, the same spin
+rates and the same durations. The missing fact is **where the press landed**.
+
+**3.9.18** records, for every press: the window half-width, the spin rate, the delta at the press, the
+angle the plan predicted for the judgement instant, and whether that prediction was inside the window.
+The first frame after the press is back-extrapolated to the same instant and the difference - in
+degrees - is the model error. A narrow miss now reads as "landed 14 deg outside a +/-18.5 deg window"
+instead of as a fish that got away.
+
+It also counts how each verdict was reached: `settled` when a frame observed the outcome, `assumed`
+when the next press implied the game had acted. That distinction matters because the
+zero-rejected-press figure this project quotes is partly built on the assumption, and an instrument
+that cannot separate the two is not an instrument.
+
+`pressErrorSummary()` reports presses, settled/assumed, measured, mean/p50/p95 residual, inside rate
+and mean window; `__fish.exportRun()` carries it plus the last 80 probes. `node --test` passes (252).
+
 It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
 count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
 (208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
