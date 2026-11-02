@@ -183,6 +183,15 @@ node scripts/release.js --check   # verify the tag, both assets and the public U
 node scripts/release.js           # create or refresh the mirror release from the verified asset
 ```
 
+
+**The vault record rides on the commit.** Put the trailer on its own paragraph in the release commit message:
+
+```bash
+git commit -m "docs: ship 3.9.20 - <what changed>" -m "HeyLoey-Milestone: <one line, the concrete outcome>"
+```
+
+The repository's post-commit hook reads that trailer synchronously and calls `heyloey done "<summary>"`, so the milestone reaches the vault even when no agent remembered to call it - which is exactly how a release goes unrecorded. An ordinary commit writes nothing, and an empty trailer is not an opt-in. Keep the summary under 600 characters (the CLI rejects longer ones) and read the daily note back after a release to confirm the entry exists.
+
 It takes `dist/autofish.user.js` as committed at `v<package.json version>`, requires the source release's asset to be byte-identical to it, uploads those bytes to the mirror, then downloads the mirror asset anonymously - the path an installed copy polls - and compares hashes. It refuses when the asset differs from the tagged build, when the tag is missing, or when `dist/` is stale at a tagged HEAD. Run it after `gh release create v<version>` here; the mirror repository and asset name come from the userscript's `@updateURL`, so the two cannot point at different places.
 
 ## Documentation

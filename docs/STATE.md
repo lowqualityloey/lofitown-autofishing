@@ -263,9 +263,13 @@ Staging area for rules observed during sessions but not yet approved as invarian
    scan throttle; a Gecko readback is not a Chromium one.
 5. Run `node scripts/release.js --check` after every tag: it is the only check that proves the public
    asset matches the tagged build.
+6. Carry `HeyLoey-Milestone: <summary>` on the release commit (see README "Releasing") and read the
+   daily note back afterwards. Logging on agent judgement failed once - 3.9.12 shipped in a session
+   that had not loaded the vault rule and went unrecorded until it was backfilled - and the trailer is
+   the only path that does not depend on an agent remembering.
 
 Items 1-4 are field experiments: they need a live game tab and a human at the keyboard, and no
-automated run can produce them. Item 5 is a release ritual, not a one-off.
+automated run can produce them. Items 5-6 are release rituals, not one-offs.
 
 ---
 
