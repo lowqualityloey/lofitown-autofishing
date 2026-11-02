@@ -2217,4 +2217,31 @@ its own test and a source guard that `step()` uses it rather than the raw ceilin
 install 3.9.10 and read `perf().readback.allocMBPerSec` (expect < 0.1) and `accuracy().firstPress*`
 in a seated session.
 
+## 2026-11-02 3.9.11: the once-a-second stall was the recovery scan
+
+Reported right after 3.9.10 was installed: dial play is smooth now, but the page **pauses every
+second** while the character waits to reel. Measured in the same live tab (1179x821):
+
+| Condition | Long tasks | fps | worst frame |
+| :--- | ---: | ---: | ---: |
+| bot running, no dial | 6 in 6 s, each 250-285 ms | 105.6 | 285 ms |
+| **core paused** (`__fish.pause()`) | **0** | **143.8** | **12 ms** |
+| resumed | 4 in 4 s | 104.4 | 275 ms |
+| `dialFallbackMs` set to 0 | **0** | **143.1** | **18 ms** |
+
+The one-second period is the throttle on `dialAnywhere()`: 900 ms. It is a brute-force annulus
+sweep - ~1,430 offsets x 9 radii x 20 rim samples = **~257k pixel tests**, 250-300 ms - and it
+fires whenever nothing has been locked for 2.5 s, which is *exactly* the wait-for-a-bite state.
+A dial only exists during the minigame, so in that state every pass is wasted. The same pass also
+allocated a fresh 420x420 rim mask per blob: 705 KB, and the 2.0 MB/s `perf().allocMB` still
+reporting after 3.9.10 was this, not the snapshot.
+
+**3.9.11** treats a wrong hint as a per-cast problem rather than a per-second one: the cadence
+doubles after each fruitless pass (900 ms, 1.8 s, 3.6 s, then 6 s) and resets on a cast, on a
+normal lock and on a recovery hit. The rim mask buffer is reused. The sweep itself is unchanged,
+so recovery still finds the dial when it really is off the hint.
+
+Residual: at worst one ~250 ms pass every 6 s while a fruitless search is in progress. If that is
+still visible, the next step is a coarse-to-fine sweep (every other ring and half the angles, then
+refine the best two candidates), which is a behaviour change that needs a live dial to validate.
 

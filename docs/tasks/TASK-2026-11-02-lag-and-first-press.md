@@ -73,3 +73,19 @@ sampled pixels, no row flip**.
 - `node --test`
 - `node build-userscript.js` (dist must change with this commit, not before it)
 - live: `__fish.perf().readback`, `__fish.status().accuracy`, `__fish.status().logTail`
+
+## Follow-up (3.9.11): the once-a-second stall after 3.9.10
+
+The owner confirmed dial play was smooth on 3.9.10 and reported one remaining symptom: the page
+pauses every second while waiting to reel. Measured in the live tab:
+
+| Condition | Long tasks | fps | worst |
+| :--- | ---: | ---: | ---: |
+| bot running, no dial | 6 in 6 s @ 250-285 ms | 105.6 | 285 ms |
+| core paused | **0** | 143.8 | 12 ms |
+| `dialFallbackMs` = 0 | **0** | 143.1 | 18 ms |
+
+Root cause: `dialAnywhere()` - a ~257k-test annulus sweep costing 250-300 ms, throttled to 900 ms,
+firing forever whenever nothing has locked for 2.5 s (i.e. the whole wait-for-a-bite phase), and
+allocating a 705 KB rim mask per blob. Fixed by backing the cadence off (900 ms doubling, cap 6 s)
+with a reset on a cast / a normal lock / a recovery hit, and by reusing the mask buffer.
