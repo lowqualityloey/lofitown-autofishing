@@ -2352,6 +2352,63 @@ not one dial press was blamed. Split by dial width, wide and full went **52/52**
 narrow band **9/12** - narrow dials are where the last of the fish are lost, which is what the owner
 had guessed from play before there was a number for it.
 
+## 2026-11-02 3.9.17: the press gate was shut when a dial arrived
+
+The 3.9.15 run left one band with a number against it: narrow dials (width < 60 deg) went **9 of 12**,
+against 52/52 for wide and full. The per-attempt rows said why before any code changed:
+
+| width | dials | presses | rejected | duration | outcome |
+| ---: | ---: | ---: | ---: | ---: | :--- |
+| 47.1 | **7** | **3** | 0 | 19.0 s | lost |
+| 35.0 | 1 | 7 | 0 | 12.4 s | lost |
+| 47.5 | 2 | 3 | 0 | 10.6 s | lost |
+
+Caught narrow attempts average 1.8 dials and 5.6 presses; the lost ones 3.3 dials and 4.3 presses,
+with nothing rejected anywhere in the run. Seven dials and three presses is not bad timing - it is
+dials the bot never pressed at all.
+
+The gate is `F.armed`. It was opened at Start and re-opened only when the pin was more than
+`win + 12` degrees from the wedge midpoint **and** `newTriangle()` could see a spawn - but nothing
+opened it when a **new dial locked**. A dial that ended disarmed therefore left the next one
+disarmed. On a narrow dial `win` is about 19.5 deg, so the geometric test needs 31.5 deg of
+separation, which a pin sitting inside the arc never provides. On a wide dial (win 78) the same test
+almost always passes, which is precisely why the defect showed up in one band.
+
+**3.9.17** opens the gate at every lock - a new spawn is a new triangle by definition - and adds a
+second re-arm path: an accepted press is proof of a spawn even when the geometry cannot see the new
+triangle, so the next rotation is pressed instead of skipped. Each dial now records its width, rate,
+presses, held time and whether it arrived with the gate open, and `locksDisarmed` counts arrivals
+with it shut, so this can never again be invisible.
+
+The second shape in that table is not a bug and is not patched: one dial pressed seven times, all
+accepted, and the fish still left at 12.4 s. That is a throughput limit - one press per rotation -
+and shortening the press gap to beat it would trade accepted presses for rejected ones.
+
+## 2026-11-02 3.9.17 result: the gate was the door, not the fish
+
+A 60-minute session on 3.9.17 produced 95 new attempts (rows carrying a per-dial log): **90 caught,
+5 lost**, 498 presses, **0 rejected**. Bands: full 11/11, wide 26/26, mid 47/48, **narrow 6/10**.
+
+The gate fix did exactly what it claimed. Narrow dials were previously passed untouched (one lost
+attempt locked 7 dials and pressed 3 times); now every narrow attempt presses 5-7 times, and of the
+15 narrow dials logged, 13 closed as `hit`, 1 `no-press` and 1 `skipped`. Presses per dial went from
+0.4 on the old lost attempts to 5.6.
+
+It did **not** lift the narrow catch rate. Of the four lost narrow attempts, two had the same press
+count as the caught ones (6 and 7 accepted presses on a single dial), the same spin rates
+(208-346 deg/s) and similar durations (10-12 s). Presses happen, the game accepts every one, and the
+fish still leaves: the remaining loss is press *quality* inside a small window, or a press count the
+fish timer does not allow - not access.
+
+`locksDisarmed` was also measuring the wrong thing: it counted dials that *arrived* with the gate
+shut, which is now normal (174 of 177 - every dial after a press), and looked like the fix had
+failed. It now counts only a dial that arrived shut **and died unpressed**, which is the case worth
+alerting on.
+
+The next instrument is per-press timing error: record, for each scheduled press, the predicted
+pin-to-midpoint angle and the angle measured on the next frame, so a narrow miss can be read as
+degrees of error instead of inferred from a lost fish. Another gate fix would be guesswork.
+
 The run also paid for the tooling that measured it. Three defects came out of the export: attempt
 numbers restart with the page while the store does not (a reload made `n=1` exist three times and the
 merge keyed on it), `startedAt` read 1970 for rows written before the wall-clock fix, and `doctor()`
