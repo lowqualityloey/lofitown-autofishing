@@ -11,6 +11,7 @@
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-10-27-event-card-freeze.md](reviews/2026-10-27-event-card-freeze.md) | Review of the stuck catch-card bug and its fix. |
 | [reviews/2026-10-28-performance-review.md](reviews/2026-10-28-performance-review.md) | Performance review: where the frame budget actually goes, the findings ranked, and the smallest useful fixes. |
+| [reviews/2026-11-02-lag-and-first-press-review.md](reviews/2026-11-02-lag-and-first-press-review.md) | Two-axis review of the 3.9.10-3.9.12 work, including the snapshot path that silently never ran. |
 | [images/](images/) | README screenshots: the panel in-game and close up, both from the shipped 3.8.10 build. |
 
 The lab notebook is not here: every measurement, fix and retraction lives in

@@ -2245,3 +2245,29 @@ Residual: at worst one ~250 ms pass every 6 s while a fruitless search is in pro
 still visible, the next step is a coarse-to-fine sweep (every other ring and half the angles, then
 refine the best two candidates), which is a behaviour change that needs a live dial to validate.
 
+## 2026-11-02 3.9.12: the snapshot "fix" never ran - the texture was attached before it had storage
+
+Found in the review of this branch, not by a new symptom. On the installed 3.9.11,
+`perf().readback.allocMBPerSec` still read **2.6 MB/s**, and freezing the snapshot
+(`scanTickMs = 1000000` for six seconds) dropped the allocation to **0.00 MB** - so the
+quarter-scale read was still `getImageData`, and the "allocation-free snapshot" never ran once.
+
+The cause is an ordering bug that is silent by construction: `framebufferTexture2D` ran before
+`texImage2D`, so the framebuffer had no storage to attach and `checkFramebufferStatus` returned
+**36054 = FRAMEBUFFER_INCOMPLETE_ATTACHMENT**. The code then set `sglOff` and used the 2D fallback
+for the life of the page. The probe that "validated" the approach printed that same 36054 and it
+was read as success: the number was on screen and the label was assumed. `canvas2d: 0` looked like
+proof it was working, but the fallback inside `downscale()` never counted as a `read2d` - only as
+`allocMB`.
+
+**3.9.12** allocates storage with an explicit size first and attaches second, retries the
+attachment after a canvas resize, falls back on a lost context, and reports
+`perf().snapshot = { gl, canvas2d }`. Verified in the same tab: the storage-first sequence returns
+**36053 (COMPLETE)** where the old order returned 36054.
+
+The 3.9.10 section above stands on *why* the allocation mattered - 1.4 GB of large-object garbage
+in eleven minutes was real - but its claim that the snapshot became allocation-free was false in
+the field until this fix. The stall the owner reported after 3.9.10 was removed by the 3.9.11
+recovery backoff, not by the snapshot.
+
+
