@@ -38,7 +38,7 @@ are untouched, which is what the task record promised.
 | 2 | ⚠️ IMPORTANT | The snapshot path had **no telemetry**, which is why a dead fix looked alive; `perf().readback.canvas2d` stayed 0 because the fallback in `downscale()` was not counted as a read2d | **fixed**: `perf().snapshot = { gl, canvas2d }` |
 | 3 | ⚠️ IMPORTANT | `F.dialAnyFail` survived across sessions, so a new run inherited the previous run's backoff | **fixed**: reset in `F.start()` |
 | 4 | ⚠️ IMPORTANT | No `isContextLost()` guard; a lost context would have returned blank pixels forever | **fixed**: falls back and logs |
-| 5 | ⚠️ IMPORTANT | Accuracy after the first-press budget is **not measured** beyond 5 attempts; `firstPressForced` rose from 2 to 6 | **open** — needs one seated session before any accuracy claim |
+| 5 | ⚠️ IMPORTANT | Accuracy after the first-press budget was unmeasured (5 attempts, `firstPressForced` 2 → 6) | **verified on 3.9.12**: 8 caught / 8 attempts, 0 lost, **43/43 presses accepted**, `firstPressHeld` 10 / `firstPressForced` 6 — forcing early did not cost acceptance |
 | 6 | 💡 SUGGEST | The GL self-check compares only the red channel | open |
 | 7 | 💡 SUGGEST | `dialAnywhere` is still a ~257k-test sweep; a coarse-to-fine pass would cut it ~4x | open, needs a live dial to validate recall |
 | 8 | 👏 PRAISE | Every failure class here became a source guard: the budget curve, the backoff curve, the attachment order, the counter | keep |
@@ -75,5 +75,6 @@ brute force for an unvalidated one. Recorded here rather than done.
 
 ## Follow-ups
 
-1. Install 3.9.12 and read `perf().snapshot` — expect `{ gl: >0, canvas2d: 0 }` and `allocMBPerSec` near 0.
-2. One seated session on 3.9.12 before quoting any accuracy number for the first-press budget.
+1. ~~Install 3.9.12 and read `perf().snapshot`~~ — **done live**: `{ gl: 3676, canvas2d: 0 }`, `allocMBPerSec` 0.01 (was 2.6), allocation delta **0.00 MB** over ten seconds.
+2. ~~One seated session before quoting a first-press accuracy number~~ — **done**: 8/8 caught, 0 lost, 43/43 accepted on 3.9.12. Still a small sample; the long-run claim stays 103/112 from 3.8.8.
+3. Release: tag `v3.9.12`, run `node scripts/release.js`, confirm the mirror asset matches.
