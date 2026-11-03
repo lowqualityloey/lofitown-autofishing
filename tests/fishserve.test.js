@@ -33,6 +33,30 @@ test('POST /session appends a row and GET /sessions totals the day', async () =>
   } finally { server.close(); }
 });
 
+test('a foreign Origin cannot write, and only allowed origins get CORS headers', async () => {
+  const { server, dir, port } = await boot();
+  try {
+    const evil = await fetch('http://127.0.0.1:' + port + '/catch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', Origin: 'https://evil.example' },
+      body: JSON.stringify({ species: 'Nope', t: Date.now() }),
+    });
+    assert.equal(evil.status, 403);
+    assert.equal(evil.headers.get('access-control-allow-origin'), null);
+    assert.ok(!readFileSync(join(dir, 'catches.csv'), 'utf8').includes('Nope'), 'nothing was appended');
+
+    const good = await fetch('http://127.0.0.1:' + port + '/catch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain', Origin: 'https://app.lofi.town' },
+      body: JSON.stringify({ species: 'Guppy', t: Date.now() }),
+    });
+    assert.equal(good.status, 200);
+    assert.equal(good.headers.get('access-control-allow-origin'), 'https://app.lofi.town');
+    assert.equal(good.headers.get('vary'), 'Origin');
+    assert.ok(readFileSync(join(dir, 'catches.csv'), 'utf8').includes('Guppy'));
+  } finally { server.close(); }
+});
+
 test('GET /sessions only counts the requested day', async () => {
   const { server, port } = await boot();
   try {

@@ -28,8 +28,21 @@ const path = require('path');
 const PORT = Number(process.env.FISHSERVE_PORT) || 8731;
 const CATCH_HEAD = ['time', 'species', 'rarity', 'quality', 'weight', 'value'];
 const SESSION_HEAD = ['time', 'started_at', 'minutes', 'catches', 'reason'];
-const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*' };
-const JS = Object.assign({ 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' }, CORS);
+// The game page and this server's own install page are the only origins that need to talk to it.
+// A wildcard let any page the user visited read the history, append CSV rows, or write PNGs - and
+// CORS alone never stopped a write, so a foreign Origin is rejected outright on POST.
+const CORS_HEADERS = { 'Access-Control-Allow-Headers': '*' };
+const isAllowedOrigin = (origin, port) => !origin ||
+  origin === 'https://lofi.town' || origin === 'https://app.lofi.town' ||
+  origin === 'https://www.lofi.town' ||
+  origin === 'http://localhost:' + port || origin === 'http://127.0.0.1:' + port;
+const corsFor = (origin, port) => {
+  if (!origin) return CORS_HEADERS;
+  return isAllowedOrigin(origin, port)
+    ? Object.assign({ 'Access-Control-Allow-Origin': origin, Vary: 'Origin' }, CORS_HEADERS)
+    : {};
+};
+const JS_HEAD = { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' };
 
 // Resolved per request so tests can point the server at a temp dir.
 const fileOf = (env, fallback) => process.env[env] || path.join(__dirname, fallback);
@@ -91,7 +104,7 @@ function localDay(iso) {
 }
 
 const json = (res, code, obj) => {
-  res.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, CORS));
+  res.writeHead(code, Object.assign({ 'Content-Type': 'application/json' }, res._cors || CORS_HEADERS));
   res.end(JSON.stringify(obj));
 };
 
@@ -127,15 +140,22 @@ function createServer() {
     const url = req.url.split('?');
     const route = url[0];
     const query = new URLSearchParams(url[1] || '');
+    const origin = req.headers.origin;
+    const cors = corsFor(origin, PORT);
+    res._cors = cors;
+    if (req.method === 'POST' && origin && !isAllowedOrigin(origin, PORT)) {
+      res.writeHead(403, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, cors));
+      return res.end('forbidden origin');
+    }
 
-    if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end(); }
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
 
     const file = STATIC[route];
     if (req.method === 'GET' && file) {
       const full = path.join(__dirname, file);
       fs.readFile(full, (e, d) => {
-        if (e) { res.writeHead(404, CORS); return res.end('not found'); }
-        res.writeHead(200, route === '/install' ? Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, CORS) : JS);
+        if (e) { res.writeHead(404, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, cors)); return res.end('not found'); }
+        res.writeHead(200, route === '/install' ? Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, cors) : Object.assign({}, JS_HEAD, cors));
         // The userscript has to inject the panel from whichever host:port served it, and only the
         // request knows that (8731 is often already taken on Windows by an older copy).
         res.end(route.slice(-8) === '.user.js' ? withHost(d.toString('utf8'), req.headers.host) : d);
@@ -221,7 +241,7 @@ function createServer() {
       return;
     }
 
-    res.writeHead(404, CORS);
+    res.writeHead(404, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, cors));
     res.end('not found');
   });
 }
