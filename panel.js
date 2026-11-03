@@ -42,6 +42,7 @@
   var wakeSentinel = null;
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
+  var placed = false;         // keep a clear position instead of snapping back when a card clears
   var collapsed = false;
   // The owner opened it. The game's zones can leave the layout no room, and that used to collapse
   // the panel again inside the same place() call - a pill that looks clickable and does nothing.
@@ -1273,6 +1274,15 @@
     var size = collapsed ? { w: 48, h: 48 } : { w: 264, h: ui.card.getBoundingClientRect().height || 300 };
     var zone = zoneRect();
     var exclude = zone ? L.inflate(zone, 12) : null;
+    // If the current position still clears the fishing UI, stay there. Recomputing the preferred
+    // corner every 250 ms made the panel jump left/right every time a catch card appeared.
+    if (placed) {
+      var current = host.getBoundingClientRect();
+      var sameSize = Math.abs(current.width - size.w) < 1 && Math.abs(current.height - size.h) < 1;
+      var inside = current.left >= 0 && current.top >= 0 &&
+        current.right <= window.innerWidth && current.bottom <= window.innerHeight;
+      if (sameSize && inside && !L.intersects({ x: current.left, y: current.top, w: current.width, h: current.height }, exclude)) return;
+    }
     var res = L.place({
       panel: size,
       viewport: { w: window.innerWidth, h: window.innerHeight },
@@ -1292,6 +1302,7 @@
     }
     host.style.left = Math.round(res.x) + 'px';
     host.style.top = Math.round(res.y) + 'px';
+    placed = true;
   }
 
   function restorePosition() {

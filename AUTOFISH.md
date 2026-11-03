@@ -1,6 +1,7 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.26) - post-render detection over the merged WebGL layer, the stable first-press
+Status: **WORKING (3.9.27) - fullscreen-safe surface adoption, a live-sized catch-card box and a
+non-jumping panel, on top of post-render detection over the merged WebGL layer, the stable first-press
 gate, containment's `inside-now` press, an allocation-free WebGL readback, a monotonic session catch
 clock and press verdicts split by evidence. Live 3.9.23 baseline: 141.1 fps, p50 6.9 ms, p95 11.9 ms,
 25/25 presses accepted (that build's counter still mixes observed and inferred verdicts).** Read
@@ -2650,3 +2651,35 @@ holds the same circle for 2 s while allowing a width jump (the real 70 deg dial)
 cleared so the memo cannot immediately re-lock it. Zero-press dial records now leave `omega`,
 `biasMs` and `sincePress` null instead of copying the previous press. 267 tests pass; the fix is not
 claimed live until a narrow run with no 20+ dial zero-press loop is observed.
+
+## 2026-11-03 3.9.27: fullscreen is a surface change, not a second game
+
+**The report.** In native BrowserOS fullscreen (F11, 1920x1080) the bot stopped fishing. It was not
+stalled: frames advanced and the panel stayed on-screen. It was tapping cream world art every four
+seconds, logging `catch text missing` / `catch card dismissed`, and after 45 s paused with
+`needsSeat: true` while a CAST! prompt was visible.
+
+**Why.** Two independent assumptions broke at the larger canvas:
+1. `adoptSurface()` treated four blank scans as proof that the prompt layer had moved. The sparse
+   overlay is legitimately blank between prompts, so a resize could hand the read surface to the
+   renderer; the fixed `BOX_CARD` then read snow, trees and chairs as a catch card. The card branch
+   returns before the bubble branch, so the visible CAST! prompt was never reached.
+2. The fixed 620x315x365x405 card box was measured on the 1179x821 layout. It was never scaled, and
+the card scan ran whenever no dial was up, not only while a pressed fish was awaiting its card.
+
+**Fix.** Adoption now asks the other canvas for a prompt at the same spot twice, using the same
+`probeOtherSurface()` rule as the prompt fallback, instead of trusting a blank count. A resize or
+`fullscreenchange` re-resolves the canvases and resets the cached surface state. The card box follows
+the live canvas via `cardBox()`, and a card scan requires a live `pendingWin` no older than 30 s. The
+panel also keeps a position that still clears the fishing zones instead of snapping back to its
+preferred corner when a card clears.
+
+**Verification.** `node --test`: **270 tests, 0 failures**; the built userscript is 3.9.27. Live at
+1179x821, 3.9.26 reproduced the false-card loop before injection (`cards: 1`, `textGaps: 1`, zero
+attempts). After the 3.9.27 replacement the same tab detected CAST, caught a fish, and logged a real
+card with `textGaps: 0`; the panel made one initial correction from a restored x=903 to x=12, then
+stayed put for the rest of a two-minute sample. Native F11 at 1920x1080 logged `surface resized`,
+ran for over 30 s with `needsSeat: false`, and finished the session at 8 attempts, 7 caught, 1 lost,
+44/44 accepted presses, `cards: 7` and `textGaps: 0`; the panel stayed at x=12 through 122 samples.
+This confirms the surface/card/panel fixes at the two sizes, not the narrow ghost fix (that is 3.9.26
+and remains separately unconfirmed).

@@ -36,6 +36,14 @@ test('dragging never steals a click from a button inside the head', () => {
   );
 });
 
+test('the panel keeps a clear position instead of snapping back when a card clears', () => {
+  assert.match(src, /var placed = false;/, 'the panel needs a first-placement flag');
+  const place = src.slice(src.indexOf('function place()'), src.indexOf('function restorePosition()'));
+  assert.match(place, /if \(placed\) \{/, 'the current position is considered');
+  assert.match(place, /L\.intersects\(/, 'a position is kept only when it clears the game');
+  assert.match(place, /placed = true;/, 'a successful placement is remembered');
+});
+
 test('collapsing actually hides the card and shows the 48px pill', () => {
   assert.match(src, /\.hide\{display:none\}/);
   assert.match(src, /\.pill\{width:48px;height:48px/);

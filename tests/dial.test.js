@@ -119,7 +119,7 @@ test('a missed surface asks the other canvas before concluding there is no promp
   // One hit is not evidence: require the same spot twice, and never adopt a dense layer while this
   // surface has ink of its own.
   assert.match(SRC, /const same = prev && Math\.abs\(prev\.x - found\.cx\) <= 12/);
-  assert.match(SRC, /if \(inkStats\(alt\)\.density >= 0\.5\) \{ F\.altHit = null; return null; \}/, 'a dense layer is never adopted here');
+  assert.match(SRC, /if \(!allowDense && inkStats\(alt\)\.density >= 0\.5\) \{ F\.altHit = null; return null; \}/, 'only the blank-adoption path may consider a dense layer');
 });
 
 test('a new dial opens the press gate, and an accepted press re-arms the next rotation', () => {

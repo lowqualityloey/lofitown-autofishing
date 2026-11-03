@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.26
+// @version      3.9.27
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.26" };
+  const F = { version: "3.9.27" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -1223,8 +1223,13 @@ const SPECIES = [
   function surfaces() {
     const cans = [...document.querySelectorAll('canvas')];
     const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
-    gameCanvas = app ? app.renderer.canvas : cans[0];
-    uiCanvas = cans.find((c) => c !== gameCanvas) || cans[1] || cans[0];
+    const renderer = app && app.renderer && app.renderer.canvas;
+    // The overlay is the pointer-events-none canvas; the renderer is the world. Prefer the DOM
+    // marker so a resize cannot leave us reading the world as if it were the prompt layer.
+    const overlay = cans.find((c) => c !== renderer && c.parentElement &&
+      String(c.parentElement.className || '').indexOf('pointer-events-none') !== -1);
+    gameCanvas = renderer || cans.find((c) => c !== overlay) || cans[0];
+    uiCanvas = overlay || cans.find((c) => c !== gameCanvas) || cans[1] || cans[0];
   }
 
   /**
@@ -1259,20 +1264,18 @@ const SPECIES = [
    * 0 bubbles while a CAST prompt was on screen. Adopt the candidate that actually has pixels, and
    * give the old layer back if the game ever starts drawing on it again.
    */
+  let probingSurface = false;
   function adoptSurface() {
-    if (!gameCanvas || gameCanvas === uiCanvas || !gameCanvas.isConnected || !gameCanvas.width) return false;
-    // Do not require ink from inside this callback: the renderer is WebGL and its buffer can read
-    // blank depending on where this frame sits relative to the game's own render. The other canvas
-    // has been empty for four scans, so it is not a UI layer; the renderer is the only candidate.
-    const ink = hasInk(gameCanvas);
-    const old = uiCanvas;
-    uiCanvas = gameCanvas;
-    gameCanvas = old;
-    uiAdopted = true;
-    uiCheckAt = now();
-    snapAt = 0;           // the next snapshot must read the canvas just adopted
-    L('ui layer moved', { surface: 'renderer canvas', ink });
-    return true;
+    // A blank current surface is not evidence that the layer moved: the sparse overlay is
+    // legitimately blank between prompts. Ask the other canvas for a prompt, twice at the same
+    // spot, before handing the read surface to the renderer. This is the same evidence rule used
+    // by probeOtherSurface; the old blank-count swap was the reason a fullscreen resize could
+    // leave the bot reading the world and mistaking cream ground for a catch card.
+    if (probingSurface) return false;
+    probingSurface = true;
+    let found = null;
+    try { found = probeOtherSurface(true); } finally { probingSurface = false; }
+    return !!found;
   }
 
   /** The UI canvas read blank for several scans: if the other candidate has ink, the UI moved. */
@@ -1283,8 +1286,11 @@ const SPECIES = [
    * painted, second canvas empty) and split onto its own sparse canvas (later the same day: world
    * 968k, overlay 6.5k). A surface pick can be right at load and wrong an hour later, so a miss is
    * not evidence of "no prompt" until the other canvas has been asked too.
+   *
+   * allowDense is only for adoptSurface(), after the current surface has already read blank for
+   * four scans. The ordinary fallback still rejects a dense world canvas.
    */
-  function probeOtherSurface() {
+  function probeOtherSurface(allowDense) {
     const cans = [...document.querySelectorAll('canvas')];
     const alt = cans.find((c) => c !== uiCanvas && c.isConnected && c.width);
     if (!alt) return null;
@@ -1302,12 +1308,10 @@ const SPECIES = [
       now() - prev.at < 2000;
     F.altHit = { x: found.cx, y: found.cy, at: now() };
     if (!same) return null;
-    // Never adopt a dense layer through this path. The world canvas is always full, and adopting it
-    // is what made the bot blind for fifteen minutes. The merged layout (renderer holds everything,
-    // second canvas empty) is handled by adoptSurface()'s blank counter, which does not come through
-    // here - so requiring a sparse alternate unconditionally loses nothing and removes the last flap,
-    // where a blank overlay between prompts looked like the merged case.
-    if (inkStats(alt).density >= 0.5) { F.altHit = null; return null; }
+    // Never adopt a dense layer through the ordinary fallback: the world canvas is always full, and
+    // adopting it is what made the bot blind for fifteen minutes. The blank-current-surface path
+    // may pass allowDense, but only after the prompt was found twice at the same spot.
+    if (!allowDense && inkStats(alt).density >= 0.5) { F.altHit = null; return null; }
     gameCanvas = cur;
     uiCanvas = alt;
     uiAdopted = true;
@@ -1337,6 +1341,33 @@ const SPECIES = [
     }
     if (uiBlank > 3) { uiBlank = 0; return adoptSurface(); }
     return false;
+  }
+
+  /** A window resize or fullscreen transition can replace the surface underneath us. Re-resolve it
+   * instead of carrying a cached world canvas into the next scan. */
+  function resetSurface() {
+    surfaces();
+    uiAdopted = false; uiCheckAt = 0; uiBlank = 0; F.altHit = null; snapAt = 0;
+    F.lastBubble = null; F.lastBubbleAt = 0; F.lastCardRect = null;
+    F.cardCheckAt = 0; F.cardScan = 0; F.lastCard = 0; F.cardWait = null;
+    F.geo = null; F.bad = 0; F.pressesThisDial = 0; F.lastLockAt = 0;
+    const cw = (uiCanvas && uiCanvas.width) || window.innerWidth;
+    const ch = (uiCanvas && uiCanvas.height) || window.innerHeight;
+    F.hint = { x: Math.round(cw / 2), y: Math.round(ch * 0.42) };
+    L('surface resized', { w: cw, h: ch });
+  }
+  let surfaceWatch = null;
+  function watchSurfaces() {
+    if (surfaceWatch) return;
+    surfaceWatch = function () { if (F.running) resetSurface(); };
+    window.addEventListener('resize', surfaceWatch);
+    document.addEventListener('fullscreenchange', surfaceWatch);
+  }
+  function unwatchSurfaces() {
+    if (!surfaceWatch) return;
+    window.removeEventListener('resize', surfaceWatch);
+    document.removeEventListener('fullscreenchange', surfaceWatch);
+    surfaceWatch = null;
   }
 
   function dataHasInk(d) {
@@ -1870,7 +1901,19 @@ const SPECIES = [
    * It is drawn on the same UI layer, so it is found by colour and area - a cream fill over a
    * wide centre rect. The dial cannot trip this: it covers well under the 45% threshold.
    */
-  const BOX_CARD = { x: 620, y: 315, w: 365, h: 405 };
+  const CARD_BOX_REF = { x: 620, y: 315, w: 365, h: 405, cw: 1179, ch: 821 };
+  /** The card box follows the live canvas, like promptBox(). At 1920x1080 the fixed 1179x821
+   * rectangle was reading cream world art and tapping it every four seconds. */
+  function cardBox(cw, ch) {
+    const W = Math.max(1, Math.round(cw || CARD_BOX_REF.cw));
+    const H = Math.max(1, Math.round(ch || CARD_BOX_REF.ch));
+    const sx = W / CARD_BOX_REF.cw, sy = H / CARD_BOX_REF.ch;
+    const w = Math.min(W, Math.max(260, Math.round(CARD_BOX_REF.w * sx)));
+    const h = Math.min(H, Math.max(300, Math.round(CARD_BOX_REF.h * sy)));
+    const x = Math.max(0, Math.min(W - w, Math.round(CARD_BOX_REF.x * sx)));
+    const y = Math.max(0, Math.min(H - h, Math.round(CARD_BOX_REF.y * sy)));
+    return { x, y, w, h };
+  }
 
   /**
    * Cheap "might a card be up?" test on the shared snapshot: a card is a big parchment panel, so a
@@ -1879,10 +1922,11 @@ const SPECIES = [
    * below still runs on every card tick.
    */
   function cardGate() {
-    const x0 = Math.max(0, Math.floor(BOX_CARD.x / SDOWN));
-    const y0 = Math.max(0, Math.floor(BOX_CARD.y / SDOWN));
-    const x1 = Math.min(sw, Math.ceil((BOX_CARD.x + BOX_CARD.w) / SDOWN));
-    const y1 = Math.min(sh, Math.ceil((BOX_CARD.y + BOX_CARD.h) / SDOWN));
+    const box = cardBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    const x0 = Math.max(0, Math.floor(box.x / SDOWN));
+    const y0 = Math.max(0, Math.floor(box.y / SDOWN));
+    const x1 = Math.min(sw, Math.ceil((box.x + box.w) / SDOWN));
+    const y1 = Math.min(sh, Math.ceil((box.y + box.h) / SDOWN));
     let hit = 0, n = 0;
     for (let y = y0; y < y1; y += 2) {
       for (let x = x0, i = (y * sw + x0) * 4; x < x1; x += 2, i += 8) {
@@ -1905,7 +1949,8 @@ const SPECIES = [
   }
 
   function cardInBox() {
-    const r = readUI(BOX_CARD.x, BOX_CARD.y, BOX_CARD.w, BOX_CARD.h);
+    const box = cardBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    const r = readUI(box.x, box.y, box.w, box.h);
     if (!r) return null;
     const frac = creamFraction(r);
     if (frac < 0.2) return null;      // paper is 249,238,208 and covers ~28% once art and frame are excluded
@@ -2953,6 +2998,7 @@ const SPECIES = [
       maxMinutes: 240,
     }, opts || {});
     surfaces();
+    watchSurfaces();
     F._hookTryAt = 0; F._rafN = 0; F._stepFrame = -1;
     F._postAt = now();
     installPostRender();     // detection has to run after the game's draw, not before it
@@ -2992,7 +3038,8 @@ const SPECIES = [
     F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
-    F.paused = false; F.lastBubble = null; F.lastCardRect = null;
+    F.paused = false; F.lastBubble = null; F.lastBubbleAt = 0; F.lastCardRect = null;
+    F.lastCard = 0; F.cardCheckAt = 0; F.cardScan = 0;
     F.pressesThisDial = 0;
     F.running = true; F.startedAt = now(); F.hiddenPauses = 0;
     F.lastTickAt = now(); F.stalled = false;
@@ -3005,6 +3052,7 @@ const SPECIES = [
 
   F.stop = function () {
     F.running = false;
+    unwatchSurfaces();
     F.castHold = false;      // a stopped core must not inherit a hold from the session that held it
     perf.stoppedAt = now();   // freeze the measurement window; a later perf() must not be diluted
     cancelPend();
@@ -3258,7 +3306,10 @@ const SPECIES = [
     // text is drawn, so the card is held open until the catch has been read - tapping on sight
     // dismissed cards that had not printed their species yet, losing the record. Bounded, so a
     // card that never prints text still clears.
-    if (!F.geo && t - (F.lastCard || 0) > 1500) {
+    // Only look for a card while a press is still awaiting its catch. The old unconditional scan
+    // read cream world art as a card at 1920x1080 and kept the bot in a dismiss/tap loop forever.
+    const awaitingCard = !!(F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000);
+    if (!F.geo && t - (F.lastCard || 0) > 1500 && awaitingCard) {
       const card = F.findCatch();
       if (card) {
         markShapeHit(t);
@@ -4817,6 +4868,7 @@ const SPECIES = [
   var wakeSentinel = null;
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
+  var placed = false;         // keep a clear position instead of snapping back when a card clears
   var collapsed = false;
   // The owner opened it. The game's zones can leave the layout no room, and that used to collapse
   // the panel again inside the same place() call - a pill that looks clickable and does nothing.
@@ -6048,6 +6100,15 @@ const SPECIES = [
     var size = collapsed ? { w: 48, h: 48 } : { w: 264, h: ui.card.getBoundingClientRect().height || 300 };
     var zone = zoneRect();
     var exclude = zone ? L.inflate(zone, 12) : null;
+    // If the current position still clears the fishing UI, stay there. Recomputing the preferred
+    // corner every 250 ms made the panel jump left/right every time a catch card appeared.
+    if (placed) {
+      var current = host.getBoundingClientRect();
+      var sameSize = Math.abs(current.width - size.w) < 1 && Math.abs(current.height - size.h) < 1;
+      var inside = current.left >= 0 && current.top >= 0 &&
+        current.right <= window.innerWidth && current.bottom <= window.innerHeight;
+      if (sameSize && inside && !L.intersects({ x: current.left, y: current.top, w: current.width, h: current.height }, exclude)) return;
+    }
     var res = L.place({
       panel: size,
       viewport: { w: window.innerWidth, h: window.innerHeight },
@@ -6067,6 +6128,7 @@ const SPECIES = [
     }
     host.style.left = Math.round(res.x) + 'px';
     host.style.top = Math.round(res.y) + 'px';
+    placed = true;
   }
 
   function restorePosition() {

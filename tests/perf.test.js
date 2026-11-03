@@ -192,6 +192,29 @@ test('the catch-card scan is throttled to about 10 Hz', () => {
   assert.ok(Number(m[1]) >= 100, 'a card waits for a tap; there is nothing to win by scanning faster');
 });
 
+test('the card box follows the live canvas and only runs while a catch is pending', () => {
+  // Live at 1920x1080: the old fixed 1179 box read cream world art and tapped it every 4 s.
+  assert.match(CORE, /const CARD_BOX_REF = \{ x: 620, y: 315, w: 365, h: 405, cw: 1179, ch: 821 \}/);
+  assert.match(CORE, /function cardBox\(cw, ch\)/);
+  for (const start of ['function cardGate()', 'function cardInBox()']) {
+    const fn = fnBody(start);
+    assert.match(fn, /cardBox\(uiCanvas && uiCanvas\.width, uiCanvas && uiCanvas\.height\)/, start + ' must size from the live canvas');
+  }
+  const step = CORE.slice(CORE.indexOf('const awaitingCard'), CORE.indexOf('const awaitingCard') + 400);
+  assert.match(step, /F\.pendingWin && t - \(F\.pendingWin\.closedAt \|\| t\) < 30000/, 'a stale win must not trigger a card scan');
+  assert.match(step, /t - \(F\.lastCard \|\| 0\) > 1500 && awaitingCard/, 'the card scan needs a pending catch');
+});
+
+test('a window resize re-resolves the UI surface instead of keeping a cached world canvas', () => {
+  assert.match(CORE, /function resetSurface\(\)/);
+  assert.match(CORE, /window\.addEventListener\('resize', surfaceWatch\)/);
+  assert.match(CORE, /document\.addEventListener\('fullscreenchange', surfaceWatch\)/);
+  const start = CORE.slice(CORE.indexOf('F.start = function'), CORE.indexOf('F.stop = function'));
+  assert.match(start, /watchSurfaces\(\);/, 'start must install the surface watcher');
+  const stop = CORE.slice(CORE.indexOf('F.stop = function'), CORE.indexOf('F.pause = function'));
+  assert.match(stop, /unwatchSurfaces\(\);/, 'stop must remove the surface watcher');
+});
+
 // A white blob is not always the cast button. Measured live 2026-10-28: a false-positive bubble was
 // tapped every ~0.9 s for 60+ s with no cast, because the bubble branch returns before the cast
 // retry. These guards keep the bounded recovery ladder (click -> keybind -> stand up) wired in.
@@ -281,15 +304,17 @@ test('the quarter-scale GL path allocates texture storage before attaching it', 
   assert.match(CORE, /snapshot: \{ gl: perf\.snapGL, canvas2d: perf\.snap2d \}/);
 });
 
-test('a merged UI canvas is adopted when the second layer is blank', () => {
-  // The game can paint everything into the renderer canvas and leave the old UI layer empty; the
-  // bot then reads a transparent surface and reports no prompt (live 2026-11-02: 965k painted
-  // pixels on canvas 0, 0 on canvas 1, 0 bubbles while CAST! was on screen).
-  const adopt = CORE.slice(CORE.indexOf('function adoptSurface'), CORE.indexOf('function dataHasInk'));
-  assert.doesNotMatch(adopt, /if \(!hasInk\(gameCanvas\)\) return false;/, 'a WebGL buffer may read blank from this callback; the empty-layer count is the evidence');
-  assert.match(adopt, /uiCanvas = gameCanvas;/, 'the renderer canvas becomes the read surface');
-  assert.match(adopt, /L\('ui layer moved'/, 'the swap is observable in the event log');
-  assert.match(adopt, /snapAt = 0;/, 'the next snapshot must re-read the adopted canvas');
+test('a blank layer is not adopted without a prompt on the other canvas', () => {
+  // A sparse overlay is legitimately blank between prompts; the old blank-count swap could
+  // hand the read surface to the world canvas and mistake cream ground for a catch card.
+  const adopt = CORE.slice(CORE.indexOf('function adoptSurface'), CORE.indexOf('function probeOtherSurface'));
+  assert.match(adopt, /probeOtherSurface\(true\)/, 'adoption needs a prompt, not just a blank count');
+  assert.doesNotMatch(adopt, /uiCanvas = gameCanvas/, 'the world must never be adopted blindly');
+  const probe = CORE.slice(CORE.indexOf('function probeOtherSurface'), CORE.indexOf('function checkSurface'));
+  assert.match(probe, /if \(!allowDense && inkStats\(alt\)\.density >= 0\.5\)/, 'only the blank-adoption path may consider a dense layer');
+  assert.match(probe, /uiCanvas = alt;/, 'the prompted alternative is the only surface adopted');
+  assert.match(probe, /L\('ui layer moved'/, 'the swap is observable in the event log');
+  assert.match(probe, /snapAt = 0;/, 'the next snapshot must re-read the adopted canvas');
   const down = CORE.slice(CORE.indexOf('function downscale'), CORE.indexOf('function snapshotInner'));
   assert.match(down, /if \(dataHasInk\(sdata\)\) uiBlank = 0; else uiBlank\+\+;/, 'a blank read is counted');
   assert.match(down, /checkSurface\(\)/, 'the blank count is acted on');

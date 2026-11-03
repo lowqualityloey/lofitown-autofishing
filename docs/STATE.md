@@ -1,14 +1,14 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.26 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.27 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
-- **Target Release / Deadline**: 3.9.26 built 2026-11-03, not released
-- **Current Working Branch**: `main` (this worktree); `audit/autofish-3.9` is merged into it
+- **Target Release / Deadline**: 3.9.27 built 2026-11-03, not released
+- **Current Working Branch**: `fix/narrow-ghost` (this worktree); it is stacked on the #18 commit
 - **Last Updated**: 2026-11-03
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
@@ -257,6 +257,8 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-11-02 | First-press budget | A live capture held the first press on **9 of 18 dials and forced 2**, because the hold ceiling was a fixed 2500 ms - about four passes on a 45 deg arc at 700 deg/s, i.e. exactly the high-tier dials the owner reported as slow. The budget is now `min(firstPressMaxWaitMs, 0.4 x width/omega x 1000)`, so a hard dial presses on its first pass with the best fit available. `planPress` itself was exonerated by simulation at 10-140 fps (inside the window 100% of the time). | `AUTOFISH.md` 3.9.10; `tests/timing.test.js` |
 | 2026-11-02 | Readback allocation | 121 `getImageData` calls in 5 s allocated 40.4 MB and major collections froze the page for ~250 ms about once a second while running. `readUI` now reads the renderer's WebGL buffer with `readPixels` into one reused `Uint8Array` (0.67 MB at 1179x821), flips the rows in place, and keeps the 2D path as the fallback; the shared quarter-scale snapshot still allocates ~2.4 MB/s. Live: **138.5 fps / 0 long tasks** running vs **105.2 fps / 5 long tasks, max 264.5 ms** on 3.9.8; 1/1 caught, 5/5 presses accepted. | `AUTOFISH.md` 3.9.9; `tests/perf.test.js` |
 
+| 2026-11-03 | Fullscreen surface and card gate | Native F11 at 1920x1080 exposed a false catch card: `adoptSurface()` trusted four blank scans and could hand the read surface to the renderer, while the fixed card box read cream world art. Adoption now requires a prompt found twice; resize/fullscreen re-resolves the canvases; the card box scales with the live canvas and a card scan needs a `pendingWin` no older than 30 s. The panel keeps a clear position instead of snapping back. Live 3.9.27 at 1179x821 and native F11 1920x1080: 7 catches/8 attempts, 44/44 accepted presses, `cards: 7`, `textGaps: 0`, and the panel stable at x=12 in fullscreen. | `AUTOFISH.md` 3.9.27; `tests/perf.test.js`; `tests/panel.test.js` |
+
 ---
 
 ## 7. Next Immediate Actions (Queued)
@@ -275,10 +277,11 @@ Staging area for rules observed during sessions but not yet approved as invarian
    that had not loaded the vault rule and went unrecorded until it was backfilled - and the trailer is
    the only path that does not depend on an agent remembering.
 
-7. Make `adoptSurface()` require a **found prompt** instead of a blank count. It still treats four
-   blank scans as "the UI layer moved", and the overlay is legitimately blank between prompts, so it
-   flips onto the world canvas roughly once a minute and `checkSurface` hands it back 5 s later. The
-   probe already uses the right rule; the adoption path predates it.
+7. **Done in 3.9.27:** `adoptSurface()` requires a **found prompt** twice instead of a blank count;
+   a dense renderer is considered only when the current surface has already read blank, which keeps
+   the merged layout working. A resize or `fullscreenchange` re-resolves the canvases, and the card
+   box follows the live surface. Native-F11 confirmation passed at 1920x1080, with 7/8 catches and
+   no false cards; the panel stayed at x=12.
 
 Items 1-4 are field experiments: they need a live game tab and a human at the keyboard, and no
 automated run can produce them. Items 5-6 are release rituals, not one-offs. Item 7 is the last known
