@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.25) - post-render detection over the merged WebGL layer, the stable first-press
+Status: **WORKING (3.9.26) - post-render detection over the merged WebGL layer, the stable first-press
 gate, containment's `inside-now` press, an allocation-free WebGL readback, a monotonic session catch
 clock and press verdicts split by evidence. Live 3.9.23 baseline: 141.1 fps, p50 6.9 ms, p95 11.9 ms,
 25/25 presses accepted (that build's counter still mixes observed and inferred verdicts).** Read
@@ -2631,3 +2631,22 @@ the fish manually while it spun.
 `inside-now` with `deltaOmega(-142)` and `wait` with the raw -142; a 35 deg no-rate dial budgets
 under 60 ms while a 90 deg dial keeps 2,500 ms. The 3.9.24 session is still running; 3.9.25 is built
 and is not claimed until a fresh live run confirms presses on a Legendary.
+
+## 2026-11-03 3.9.26: a fading narrow ring is a ghost, not a fish
+
+**The sighting.** A live 3.9.25 session ended with **171 attempts, 157 caught, 14 lost**; 892 of 893
+presses were accepted. Two narrow attempts spent 30-45 s on 21-28 dials with **0 presses** (#136 had
+21 dials and 30.7 s; #70 had 28 dials, 8 presses, 2 hits and 45.4 s). The rings were 30-40 deg,
+lasted only **~2.7 s** and shrank from 40 to 30 deg, while a real unpressed dial lasts ~15.9 s.
+
+The old ghost test was `presses === 0 && dialTravel < 15`. These rings drifted ~35 deg while fading,
+so they became `skipped` instead of `ghost` and the remembered-circle memo re-locked the same circle.
+The 70 deg real dial arrived after the attempt had already been spent. The twelve other losses were
+clean-press fish, a separate throughput/timer shape; no press planner change is made here.
+
+**Fix.** `dialGhost()` treats a zero-press dial as a ghost when it barely moved, or when it is
+short-lived (<5 s), narrow (<60 deg) and shrinking by at least 5 deg. On a ghost, `ghostBlocked()`
+holds the same circle for 2 s while allowing a width jump (the real 70 deg dial); `lastLockAt` is
+cleared so the memo cannot immediately re-lock it. Zero-press dial records now leave `omega`,
+`biasMs` and `sincePress` null instead of copying the previous press. 267 tests pass; the fix is not
+claimed live until a narrow run with no 20+ dial zero-press loop is observed.

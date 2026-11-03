@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait, dialGhost, ghostBlocked };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait', 'dialGhost', 'ghostBlocked']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -116,6 +116,33 @@ test('deltaOmega gives the planner the rate of delta, not the tracker midpoint r
   // Conversion happens once at the source; the tracker keeps the midpoint rate for tracking.
   assert.match(SRC, /const omega = deltaOmega\(midOmega\)/);
   assert.match(SRC, /geo\._om = midOmega/);
+});
+
+test('a short shrinking narrow dial is a ghost, not a skipped fish', () => {
+  const ghost = { presses: 0, heldMs: 2743, width: 30, widthShrink: 10, travel: 35 };
+  assert.equal(T.dialGhost(ghost, {}), true, 'the live 30-40 deg fade is a ghost');
+  assert.equal(T.dialGhost(Object.assign({}, ghost, { travel: 0 }), {}), true, 'the old static ghost stays a ghost');
+  assert.equal(T.dialGhost(Object.assign({}, ghost, { heldMs: 15900 }), {}), false, 'a real dial timing out is not a ghost');
+  assert.equal(T.dialGhost(Object.assign({}, ghost, { width: 70 }), {}), false, 'a wide real dial is not a ghost');
+  assert.equal(T.dialGhost(Object.assign({}, ghost, { widthShrink: 2 }), {}), false, 'without a fade it is a skipped dial');
+  assert.equal(T.dialGhost(Object.assign({}, ghost, { presses: 1 }), {}), false, 'a pressed dial is never a ghost');
+  assert.equal(T.dialGhost(ghost, { ghostMaxMs: 2000 }), false, 'the lifetime is configurable');
+  assert.match(SRC, /const ghost = dialGhost\(\{ presses, heldMs, width, widthShrink, travel: F\.dialTravel \}, F\.opts\)/);
+  assert.match(SRC, /F\.ghostGeo = \{/);
+  assert.match(SRC, /F\.lastLockAt = 0/, 'the memo must be cleared on a ghost');
+  assert.match(SRC, /const last = presses > 0 \? F\.dialLastPress : null/, 'zero-press telemetry must not reuse the previous press');
+});
+
+test('a ghost cooldown blocks the same fading circle but allows a wider real dial', () => {
+  const ghost = { cx: 840, cy: 411, R: 96, width: 35, until: 5000 };
+  assert.equal(T.ghostBlocked({ cx: 842, cy: 412, R: 96 }, 35, 4000, ghost, {}), true);
+  assert.equal(T.ghostBlocked({ cx: 842, cy: 412, R: 96 }, 70, 4000, ghost, {}), false, 'a width jump is a new triangle');
+  assert.equal(T.ghostBlocked({ cx: 842, cy: 412, R: 96 }, 35, 6000, ghost, {}), false, 'the cooldown expires');
+  assert.equal(T.ghostBlocked({ cx: 900, cy: 411, R: 96 }, 35, 4000, ghost, {}), false, 'only the same circle is blocked');
+  assert.equal(T.ghostBlocked(null, 35, 4000, ghost, {}), false);
+  assert.match(SRC, /ghostBlocked\(g, g\.width, tNow, F\.ghostGeo, F\.opts\)/);
+  assert.match(SRC, /ghostBlocked\(locked, locked\.width, tNow, F\.ghostGeo, F\.opts\)/);
+  assert.match(SRC, /ghostBlocked\(geo, geo\.width, t, F\.ghostGeo, F\.opts\)/);
 });
 
 test('the first-press hold is a fraction of one pass, not a fixed ceiling', () => {

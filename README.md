@@ -136,7 +136,7 @@ __fish.opts        // press timing, windows, retry ladders (live-editable)
 fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`),
 and `readback.allocMBPerSec` is the canvas-readback garbage rate (`gl` reads allocate nothing after
 the buffer grows; `canvas2d` is the fallback). It only records while the bot is running, so read it
-mid-session. The same version is printed in the panel header (`v3.9.25`, or `dev` for the unbundled
+mid-session. The same version is printed in the panel header (`v3.9.26`, or `dev` for the unbundled
 bookmarklet path), so a stale install is visible without opening the console.
 
 On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.25
+// @version      3.9.26
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.25" };
+  const F = { version: "3.9.26" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -291,6 +291,47 @@ window.__autofishInstalled = true;
     const cap = cfg.dialFallbackMaxMs != null ? cfg.dialFallbackMaxMs : 6000;
     const n = Math.max(0, Math.min(8, Number(fail) || 0));
     return Math.min(cap, base * Math.pow(2, n));
+  }
+
+  /**
+   * Is this zero-press dial a fading ring rather than a fish?
+   *
+   * A real unpressed dial stays up for about 15.9 s. The narrow ghosts measured live 2026-11-03
+   * lasted only ~2.7 s and shrank from 40 to 30 deg. The old test only caught a ring that barely
+   * moved, but these drift ~35 deg while fading, so they were counted as skipped fish and
+   * re-locked. A short, narrow, shrinking dial is a ghost; a long-lived one is not.
+   */
+  function dialGhost(st, o) {
+    const s = st || {};
+    const cfg = o || {};
+    if ((Number(s.presses) || 0) > 0) return false;
+    const travel = Math.abs(Number(s.travel) || 0);
+    if (travel < (cfg.ghostTravelDeg != null ? cfg.ghostTravelDeg : 15)) return true;
+    const held = Number(s.heldMs);
+    const width = Number(s.width);
+    const shrink = Number(s.widthShrink);
+    const maxHeld = cfg.ghostMaxMs != null ? cfg.ghostMaxMs : 5000;
+    const maxWidth = cfg.ghostMaxWidthDeg != null ? cfg.ghostMaxWidthDeg : 60;
+    const minShrink = cfg.ghostMinShrinkDeg != null ? cfg.ghostMinShrinkDeg : 5;
+    return held >= 0 && held < maxHeld && width > 0 && width < maxWidth && shrink >= minShrink;
+  }
+
+  /**
+   * Is a lock candidate the same fading circle we just ghosted? A short cooldown stops the memo
+   * and the next scan from re-locking the same ring; a real triangle at the same circle widens the
+   * arc (live: 30-40 deg ghost, 70 deg real dial), so a width jump is allowed through.
+   */
+  function ghostBlocked(g, width, at, ghost, o) {
+    if (!g || !ghost || !(at < ghost.until)) return false;
+    const cfg = o || {};
+    const maxPx = cfg.ghostCirclePx != null ? cfg.ghostCirclePx : 10;
+    const maxR = cfg.ghostRadiusPx != null ? cfg.ghostRadiusPx : 8;
+    const maxDw = cfg.ghostWidthDeg != null ? cfg.ghostWidthDeg : 12;
+    const dx = Math.abs(Number(g.cx) - Number(ghost.cx));
+    const dy = Math.abs(Number(g.cy) - Number(ghost.cy));
+    const dr = Math.abs(Number(g.R) - Number(ghost.R));
+    const dw = Math.abs((Number(width) || 0) - (Number(ghost.width) || 0));
+    return dx <= maxPx && dy <= maxPx && dr <= maxR && dw <= maxDw;
   }
 
   /**
@@ -2311,7 +2352,12 @@ const SPECIES = [
       const g = { cx: F.lastGeo.cx, cy: F.lastGeo.cy, R: F.lastGeo.R };
       const s = F.sample(g);
       perf.lockMemo += now() - tMemo;                 // the hit AND the miss: a miss still paid a read
-      if (s && s.valid && s.ring >= 0.8) { perf.lockMemoN++; F.lastLockAt = tNow; g.width = s.width; return g; }
+      if (s && s.valid && s.ring >= 0.8) {
+        g.width = s.width;
+        if (!ghostBlocked(g, g.width, tNow, F.ghostGeo, F.opts)) {
+          perf.lockMemoN++; F.lastLockAt = tNow; return g;
+        }
+      }
     } else if (F.lastGeo) {
       perf.lockMemoSkipped++;
       if (!recent) perf.lockMemoCold++;
@@ -2333,6 +2379,7 @@ const SPECIES = [
     const tRefine = now();
     const locked = finishLock(r, mask, best);
     perf.lockRefine += now() - tRefine;
+    if (locked && ghostBlocked(locked, locked.width, tNow, F.ghostGeo, F.opts)) return null;
     if (locked) F.lastLockAt = tNow;                // a dial is up: the memo is worth a read again
     return locked;
   };
@@ -2412,6 +2459,7 @@ const SPECIES = [
       }
       const geo = finishLock(r, mask, fine);
       if (geo) {
+        if (ghostBlocked(geo, geo.width, t, F.ghostGeo, F.opts)) continue;
         F.dialAnyFail = 0;
         L('dial found anywhere', { cx: geo.cx, cy: geo.cy, R: geo.R, width: Math.round(geo.width) });
         return geo;
@@ -2727,8 +2775,14 @@ const SPECIES = [
   function closeDial(t, ring) {
     const presses = F.pressesThisDial;
     const heldMs = Math.round(t - (F.geoAt || t));
-    const last = F.dialLastPress;
+    // A zero-press dial has no current press; the previous dial's stamp is not evidence for it.
+    const last = presses > 0 ? F.dialLastPress : null;
     const sincePress = last ? Math.round(t - last.t) : null;
+    const width = Math.round((F.geo && F.geo.width) || 0);
+    const widths = (F.geoTrace || [])
+      .map((r) => Number(r.w))
+      .filter((w) => isFinite(w) && w > 0);
+    const widthShrink = widths.length > 1 ? Math.max(...widths) - Math.min(...widths) : 0;
     const hitMs = F.opts.hitMs || 1500;
     // The dial is gone. A press still unresolved either ended the fish (accepted) or did nothing;
     // the dial's own verdict below is about the DIAL, not about how accurate the press was.
@@ -2741,19 +2795,26 @@ const SPECIES = [
     // A locked ring that never rotated is the fade-out of a solved dial or a ripple, not a fish:
     // its wedge sits still (omega 0) and no press is ever due. Count it apart so the loss tally
     // stays honest.
-    const ghost = presses === 0 && (F.dialTravel || 0) < 15;
+    const ghost = dialGhost({ presses, heldMs, width, widthShrink, travel: F.dialTravel }, F.opts);
     const skipped = !ghost && presses === 0 && heldMs >= (F.opts.skipMs || 300);
     const verdict = ghost ? 'ghost'
       : presses === 0 ? (skipped ? 'skipped' : 'no-press')
       : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
     F.stats.dialsClosed++;
     F.stats[verdict === 'hit' ? 'hits' : verdict === 'miss' ? 'misses' : verdict === 'ghost' ? 'ghosts' : verdict === 'skipped' ? 'skipped' : 'noPress']++;
+    if (ghost && F.geo) {
+      F.ghostGeo = {
+        cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width,
+        until: t + (F.opts.ghostCooldownMs || 2000),
+      };
+      F.lastLockAt = 0;                       // the memo must not immediately re-lock it
+    }
     if (F.attempt && verdict === 'hit') F.attempt.dialHits = (F.attempt.dialHits || 0) + 1;
     if (F.attempt && verdict === 'miss') F.attempt.dialMisses = (F.attempt.dialMisses || 0) + 1;
     if (skipped && F.attempt) F.attempt.skipped++;
     const rec = {
       heldMs, presses, verdict, sincePress,
-      width: Math.round((F.geo && F.geo.width) || 0),
+      width,
       omega: last && last.omega != null ? Math.round(last.omega) : null,
       biasMs: last ? last.biasMs : null,
       reasons: F.geoReasons || null,
@@ -2910,7 +2971,7 @@ const SPECIES = [
     F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
     // Opt-in only. A userscript has no local server, and a hardcoded localhost POST turns every
     // catch into a failed request. The panel passes a URL only when the user turned POST catches on.
-    F.geo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) ? String(opts.logUrl) : null;
+    F.geo = null; F.ghostGeo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) ? String(opts.logUrl) : null;
     // A fresh start has no prompt to learn the widget from: prefer the circle the last run locked
     // (scaled if the canvas was a different size), else the middle of the play area. Never a
     // literal point measured at one viewport - dialAnywhere() is the backstop when this is wrong.
@@ -3004,6 +3065,7 @@ const SPECIES = [
       firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
+    F.ghostGeo = null;
     F.bubbleMiss = 0; F.stallRetry = 0;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
