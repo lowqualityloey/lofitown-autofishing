@@ -65,6 +65,20 @@ test('the hook wraps the renderer prototype and ticks after the game has drawn',
   assert.equal(h.ticks(), 1, 'detection runs once, after the draw');
 });
 
+test('a re-pasted core takes the hook over instead of reporting a dead one', () => {
+  const p = makePixi();
+  const A = {}, B = {};
+  const a = mkHook(p.win, A);
+  const b = mkHook(p.win, B);
+  assert.equal(a.api.installPostRender(), true);
+  assert.equal(b.api.installPostRender(), true, 'the second core adopts the existing wrapper');
+  assert.equal(B._postRender, true);
+  assert.equal(p.Renderer.prototype.render.__autofishPostRender, true);
+  p.app.renderer.render('stage');
+  assert.equal(b.ticks(), 1, 'the live core steps after the game draws');
+  assert.equal(a.ticks(), 0, 'the stopped core no longer owns the tick');
+});
+
 test('a renderer drawing a different canvas does not feed the step', () => {
   const p = makePixi();
   const F = {};

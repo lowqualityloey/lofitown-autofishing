@@ -715,6 +715,22 @@
     };
   }
 
+  /**
+   * Press verdicts by their evidence. `observed` saw the game spawn a new triangle; `assumed`
+   * inferred acceptance from the next press arriving; `timing` inferred it from the dial closing
+   * soon after. Only the observed row is a measurement - the others are why the headline used to
+   * read 697 of 697 accepted.
+   */
+  function pressVerdictReport(t) {
+    const src = t || {};
+    const one = (c) => {
+      const accepted = (c && c.accepted) || 0;
+      const rejected = (c && c.rejected) || 0;
+      return { accepted, rejected, total: accepted + rejected, rate: accepted + rejected ? +(accepted / (accepted + rejected)).toFixed(3) : null };
+    };
+    return { observed: one(src.observed), assumed: one(src.assumed), timing: one(src.timing) };
+  }
+
   // </stats-core>
 
   /* ---- coordinate frame ------------------------------------------------
@@ -1829,13 +1845,17 @@ const SPECIES = [
    */
   const CARD_MIN_W = 180, CARD_MIN_H = 250, CARD_MAX_W = 760, CARD_MAX_H = 820;
   let shapeAt = 0;
+  let cardI = null;                 // the integral image is reused: this runs up to 2.5x/s
   function cardByShape() {
     const t = now();
     if (t - shapeAt < 400) return null;
     shapeAt = t;
     if (!snapshot()) return null;              // shared quarter read, no second copy of the layer
     const stride = sw + 1;
-    const I = new Int32Array(stride * (sh + 1));
+    const need = stride * (sh + 1);
+    // Row 0 and column 0 are never written by the pass below, so a reused buffer keeps its zeros.
+    if (!cardI || cardI.length !== need) cardI = new Int32Array(need);
+    const I = cardI;
     for (let y = 0; y < sh; y++) {
       let row = 0;
       for (let x = 0; x < sw; x++) {
@@ -2032,6 +2052,9 @@ const SPECIES = [
     row.raritySource = info.derived ? 'catalogue' : 'card';
     row.shiny = info.shiny;
     F.catches.push(row);
+    // A sequence, not the ring's length: the session's no-catch clock (panel -> session.js) only
+    // advances on a strictly larger fact, so a 400-row display ring froze it after 400 fish.
+    F.stats.catchSeq = (F.stats.catchSeq || 0) + 1;
     if (F.catches.length > 400) F.catches.shift();
     L('catch logged', { species: row.species, rarity: row.rarity, derived: info.derived, shiny: info.shiny, quality: row.quality, weight: row.weight, value: row.value });
     // Local ledger: the only history the server-free install keeps. Never allowed to throw.
@@ -2534,9 +2557,19 @@ const SPECIES = [
    * the only observable a good press leaves before the fish is landed. The sweep is keyed by the
    * probe offset, so it now measures presses rather than dial closures.
    */
-  function recordPressVerdict(verdict, biasMs) {
+  function recordPressVerdict(verdict, biasMs, source) {
     if (verdict !== 'accepted' && verdict !== 'rejected') return;
     if (F.pressWait) F.pressWait.verdict = verdict;
+    // The counters below are kept for compatibility; the split is what can honestly be quoted.
+    const src = source === 'observed' || source === 'timing' ? source : 'assumed';
+    if (!F.stats.pressVerdicts) {
+      F.stats.pressVerdicts = {
+        observed: { accepted: 0, rejected: 0 },
+        assumed: { accepted: 0, rejected: 0 },
+        timing: { accepted: 0, rejected: 0 },
+      };
+    }
+    F.stats.pressVerdicts[src][verdict]++;
     F.stats[verdict === 'accepted' ? 'pressAccepted' : 'pressRejected']++;
     // The game spawning a new triangle is the proof newTriangle() tries to read from geometry;
     // when an accepted press cannot be seen that way on a narrow dial, this timestamp is what
@@ -2560,7 +2593,7 @@ const SPECIES = [
     if (!w || w.verdict) return;
     const out = pressOutcome({ press: w.press, s, blinks, opts: F.opts });
     if (out.verdict !== 'accepted' && out.verdict !== 'rejected') return;
-    recordPressVerdict(out.verdict, w.biasMs);
+    recordPressVerdict(out.verdict, w.biasMs, 'observed');
     L('press verdict', { verdict: out.verdict, biasMs: w.biasMs, width: Math.round((w.press && w.press.width) || 0) });
     if (F.pressProbe && !F.pressProbe.via) {
       F.pressProbe.via = 'settled';
@@ -2613,7 +2646,7 @@ const SPECIES = [
     F.dialBlinks = 0;
     // A second press is only possible after the re-arm gate saw a spawn, so an unresolved press
     // here was accepted by the game even though no frame managed to settle it.
-    if (F.pressWait && !F.pressWait.verdict) recordPressVerdict('accepted', F.pressWait.biasMs);
+    if (F.pressWait && !F.pressWait.verdict) recordPressVerdict('accepted', F.pressWait.biasMs, 'assumed');
     F.lastPress = now();
     F.pressWait = { press: F.pressStamp, at: F.lastPress, biasMs: (s && s.biasMs) || 0, verdict: null };
     F.stats.presses++; F.pressesThisDial++;
@@ -2659,7 +2692,7 @@ const SPECIES = [
     // The dial is gone. A press still unresolved either ended the fish (accepted) or did nothing;
     // the dial's own verdict below is about the DIAL, not about how accurate the press was.
     if (F.pressWait && !F.pressWait.verdict) {
-      recordPressVerdict(presses > 0 && sincePress != null && sincePress <= hitMs ? 'accepted' : 'rejected', F.pressWait.biasMs);
+      recordPressVerdict(presses > 0 && sincePress != null && sincePress <= hitMs ? 'accepted' : 'rejected', F.pressWait.biasMs, 'timing');
     }
     F.pressWait = null;
     // A dial the bot never pressed that stayed up long enough to be real is a LOST FISH, not the
@@ -2686,7 +2719,6 @@ const SPECIES = [
       arm: F.dialArm || null,
       trace: F.geoReasons && !(verdict === 'hit') ? F.geoTrace.slice() : null,
     };
-    if (last && last.omega != null) rec.omega = Math.round(last.omega);
     // Per-dial detail on the attempt: "dial locked, never pressed" was visible only as a total
     // before, and a narrow dial is exactly where that costs a fish.
     if (F.attempt) {
@@ -2719,7 +2751,6 @@ const SPECIES = [
   }
 
   function clearPendingWin() {
-    if (F.pendingWin && F.pendingWin.timer) clearTimeout(F.pendingWin.timer);
     F.pendingWin = null;
   }
 
@@ -2828,7 +2859,7 @@ const SPECIES = [
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
-      frames: 0, errors: 0, cards: 0,
+      frames: 0, errors: 0, cards: 0, catchSeq: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
       firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
@@ -2859,7 +2890,7 @@ const SPECIES = [
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
     F.paused = false; F.lastBubble = null; F.lastCardRect = null;
-    F.pressesThisDial = 0; F.pressesAtThisDial = 0;
+    F.pressesThisDial = 0;
     F.running = true; F.startedAt = now(); F.hiddenPauses = 0;
     F.lastTickAt = now(); F.stalled = false;
     L('start', { opts: F.opts, ui: !!uiCanvas, game: !!gameCanvas });
@@ -2926,7 +2957,7 @@ const SPECIES = [
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
-      frames: 0, errors: 0, cards: 0,
+      frames: 0, errors: 0, cards: 0, catchSeq: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
       firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
@@ -3015,17 +3046,32 @@ const SPECIES = [
   function installPostRender() {
     const proto = renderProto();
     if (!proto) return false;
-    if (proto.render.__autofishPostRender) { F._postRender = true; return true; }
+    const prev = proto.render && proto.render.__autofishHook;
+    if (prev) {
+      // A re-pasted core inherits the one wrapper. loop() returns as soon as _postRender is true,
+      // so a wrapper still owned by the stopped copy would report a live hook and never step.
+      prev.owner = F;
+      F._postTick = F._postTick || postRenderTick;
+      F._postRender = true;
+      F._postAt = now();
+      return true;
+    }
     const orig = proto.render;
+    const hook = { owner: F };
     const wrapped = function () {
       const out = orig.apply(this, arguments);
       const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
-      if (this && app && (this.canvas === app.renderer.canvas || this === app.renderer)) postRenderTick();
+      if (this && app && (this.canvas === app.renderer.canvas || this === app.renderer)) {
+        const owner = hook.owner;
+        if (owner && typeof owner._postTick === 'function') owner._postTick();
+      }
       return out;
     };
     wrapped.__autofishPostRender = true;
+    wrapped.__autofishHook = hook;
     try { proto.render = wrapped; } catch (e) { return false; }
     if (proto.render !== wrapped) return false;   // a frozen prototype must not look installed
+    F._postTick = postRenderTick;
     F._postRender = true;
     F._postAt = now();
     L('post-render hook', { canvas: !!(uiCanvas && uiCanvas.width) });
@@ -3140,7 +3186,8 @@ const SPECIES = [
     // press was scored a loss with no catch recorded. Worse, a tap aimed at the dial lands on the
     // paper instead. Look for the card whenever a press is awaiting its verdict, and while it is up
     // hold fire on the dial.
-    if (F.pendingWin && t - (F.cardScan || 0) > 120) {
+    // Bounded: a lost attempt must not leave a 120 ms card scan running for the whole session.
+    if (F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000 && t - (F.cardScan || 0) > 120) {
       F.cardScan = t;
       const c = F.findCatch();
       if (c) {
@@ -3509,13 +3556,14 @@ const SPECIES = [
     // status() that throws blanks the whole HUD.
     const s = F.stats || {};
     const frame = uiFrame();
+    const verdicts = pressVerdictReport(s.pressVerdicts);
     return {
       running: !!F.running,
       paused: !!F.paused,
       stalled: !!F.stalled,
       postRender: !!F._postRender,
       lastTickAgoMs: F.lastTickAt ? Math.round(now() - F.lastTickAt) : null,
-      catchCount: F.catches ? F.catches.length : 0,
+      catchCount: s.catchSeq || 0,
       hidden: !!F.hidden,
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,
       hint: F.hint,
@@ -3529,6 +3577,8 @@ const SPECIES = [
         firstPressHeld: s.firstPressHeld || 0, firstPressForced: s.firstPressForced || 0,
         pressAcceptRate: s.pressAccepted + s.pressRejected
           ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
+        pressVerdicts: verdicts,
+        pressAcceptRateObserved: verdicts.observed.rate,
         openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses } : null,
         byWidth: F.widthReport(),
       },
@@ -3703,15 +3753,23 @@ const SPECIES = [
   F.accuracy = function () {
     const s = F.stats || {};
     const presses = s.presses || 0;
-    const caught = (F.attempts || []).filter((a) => a.verdict === 'caught').length;
-    const lost = (F.attempts || []).filter((a) => a.verdict === 'lost').length;
+    // Whole-session totals. The attempts ring is capped at 200, so deriving the headline from it
+    // made accuracy() disagree with status() after 200 fish and divided session presses by a
+    // ring-sized catch count. The ring now only feeds `recent`; the band reports use session maps.
+    const attempts = s.attempts || 0;
+    const caught = s.caught || 0;
+    const lost = s.lost || 0;
+    const verdicts = pressVerdictReport(s.pressVerdicts);
     return {
-      attempts: (F.attempts || []).length, caught, lost,
+      attempts, caught, lost,
       catchRate: caught + lost ? +(caught / (caught + lost)).toFixed(3) : null,
       presses, pressesPerCatch: caught ? +(presses / caught).toFixed(2) : null,
       pressAccepted: s.pressAccepted || 0, pressRejected: s.pressRejected || 0,
       pressAcceptRate: s.pressAccepted + s.pressRejected
         ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
+      // The honest denominator: only verdicts where the spawn was actually seen.
+      pressVerdicts: verdicts,
+      pressAcceptRateObserved: verdicts.observed.rate,
       openAttempt: F.attempt ? { n: F.attempt.n, presses: F.attempt.presses, dials: F.attempt.dials, ms: Math.round(now() - F.attempt.startedAt) } : null,
       shapeHits: s.shapeHits || 0,
       // The last ten fish, each with its own denominator: presses the game answered with a new
@@ -3850,7 +3908,7 @@ const SPECIES = [
     const asAttempts = merged.map((r) => ({
       verdict: r.v, band: r.b, widthBand: r.wb, presses: r.p,
       pressAccepted: r.pa, pressRejected: r.pr, dials: r.d,
-      avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t, dials: r.d, dialLog: r.dl,
+      avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t, dialLog: r.dl,
     }));
     const p = F.perf();
     const out = {

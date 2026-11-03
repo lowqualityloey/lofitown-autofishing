@@ -435,3 +435,13 @@ test('a longer hidden stop keeps the run paused instead of ending it', () => {
   assert.equal(r.state.phase, 'cooldown');
   assert.equal(r.state.stopReason, 'hidden');
 });
+
+test('a frozen catch fact trips the no-catch clock: the producer has to stay monotonic', () => {
+  // The 400-catch ring froze status().catchCount, and this is what that did to a long run:
+  // no catch could ever be newer than the last fact, so the ten-minute watchdog fired.
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 1000, { catches: 400 }));
+  const r = tick(state, T0 + 602_000, { catches: 400 });
+  assert.equal(r.state.phase, 'paused');
+  assert.equal(r.state.pauseReason, 'no-catch');
+});

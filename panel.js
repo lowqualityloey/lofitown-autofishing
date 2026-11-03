@@ -1095,11 +1095,14 @@
         var n = (a.caught || 0) + (a.lost || 0);
         var rate = a.catchRate == null ? '—' : Math.round(a.catchRate * 100) + '%';
         var narrow = (a.byWidth || []).filter(function (w) { return w.band === 'narrow'; })[0];
-        var sent = (a.pressAccepted || 0) + (a.pressRejected || 0);
+        var pv = a.pressVerdicts && a.pressVerdicts.observed;
+        var sent = pv ? pv.total : (a.pressAccepted || 0) + (a.pressRejected || 0);
+        var hit = pv ? pv.accepted : (a.pressAccepted || 0);
+        var inferred = a.pressVerdicts ? a.pressVerdicts.assumed.total + a.pressVerdicts.timing.total : 0;
         ui.accLine.textContent = 'acc ' + (a.caught || 0) + '/' + n + ' (' + rate + ')' +
           (narrow ? ' · narrow ' + narrow.caught + '/' + narrow.attempts : '') +
-          (sent ? ' · hit ' + (a.pressAccepted || 0) + '/' + sent : '');
-        ui.accLine.title = 'fish attempts, not presses; hit = a press the game answered with a new triangle; narrow is the rare-dial signal';
+          (sent ? ' · hit ' + hit + '/' + sent : '');
+        ui.accLine.title = 'fish attempts, not presses; hit = presses the game answered with a new triangle (observed only; ' + inferred + ' inferred verdicts excluded); narrow is the rare-dial signal';
       }
     }
     var p = null;
@@ -1289,7 +1292,6 @@
     }
     host.style.left = Math.round(res.x) + 'px';
     host.style.top = Math.round(res.y) + 'px';
-    ui.wrap.className = 'wrap';
   }
 
   function restorePosition() {
