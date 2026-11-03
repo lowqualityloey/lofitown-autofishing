@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -98,6 +98,26 @@ test('fitStable demands a mature fit before a first press on a hard dial', () =>
   assert.equal(T.fitStable(null, {}), false);
 });
 
+test('deltaOmega gives the planner the rate of delta, not the tracker midpoint rate', () => {
+  assert.equal(T.deltaOmega(142), -142);
+  assert.equal(T.deltaOmega(-142), 142);
+  assert.equal(T.deltaOmega(0), 0);
+  assert.equal(T.deltaOmega(null), null);
+  // Live 2026-11-03, The Bloop (Legendary): a 40 deg dial at a mid rate of -116..-142 deg/s.
+  // delta = pin - mid, so its rate is the negation. At delta -16 inside a 40 deg arc (win 16) the
+  // converted rate is inside-now; the raw mid rate waits for the opposite crossing.
+  const contain = { trigger: 'contain', midDeg: 6, marginDeg: 4, leadMs: 25, horizonMs: 40 };
+  const fixed = T.planPress({ t: 1000, width: 40, armed: true, delta: -16, omega: T.deltaOmega(-142) }, contain);
+  assert.equal(fixed.reason, 'inside-now');
+  assert.equal(fixed.press, true);
+  const raw = T.planPress({ t: 1000, width: 40, armed: true, delta: -16, omega: -142 }, contain);
+  assert.equal(raw.press, false, 'the raw midpoint rate waits for the opposite crossing');
+  assert.notEqual(raw.reason, 'inside-now');
+  // Conversion happens once at the source; the tracker keeps the midpoint rate for tracking.
+  assert.match(SRC, /const omega = deltaOmega\(midOmega\)/);
+  assert.match(SRC, /geo\._om = midOmega/);
+});
+
 test('the first-press hold is a fraction of one pass, not a fixed ceiling', () => {
   // A 45 deg arc at 700 deg/s is under the pin for 64 ms. The old 2500 ms ceiling skipped ~4 passes
   // of exactly the fish the player is watching; that is the reported "it did a round turn".
@@ -114,6 +134,15 @@ test('the first-press hold is a fraction of one pass, not a fixed ceiling', () =
   // the step() gate has to use the budget, not the raw ceiling
   assert.match(SRC, /firstPressBudget\(Number\(s\.width\)/);
   assert.match(SRC, /firstPressMaxTransitFrac/);
+});
+
+test('a narrow dial with no spin estimate releases the first press promptly', () => {
+  const narrow = T.firstPressBudget(35, null, {});
+  assert.ok(narrow > 30 && narrow < 60,
+    'a 35 deg dial with no rate must release in one pass, not 2.5 s: ' + narrow);
+  assert.equal(T.firstPressBudget(35, 0, {}), narrow, 'a static estimate is still no estimate');
+  assert.equal(T.firstPressBudget(35, null, { firstPressMaxWidthDeg: 30 }), 2500,
+    'only a narrow dial gets the assumed rate');
 });
 
 test('the recovery scan backs off instead of running every second', () => {

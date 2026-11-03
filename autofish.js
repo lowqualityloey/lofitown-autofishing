@@ -219,6 +219,17 @@
   }
 
   /**
+   * The tracker fits the midpoint's rate, d(mid)/dt. The planner's delta is (pin - mid), so the
+   * rate it needs is the negation. Converting once here is what stops a live dial from being
+   * scheduled a full turn late: on 2026-11-03 a 40 deg Legendary dial logged 69 consecutive
+   * 'wait' frames and never pressed.
+   */
+  function deltaOmega(midOmega) {
+    if (midOmega == null || !isFinite(midOmega)) return null;
+    return midOmega === 0 ? 0 : -midOmega;
+  }
+
+  /**
    * How long the first press may wait for a mature spin fit, in ms.
    *
    * The fixed 2500 ms ceiling is several rotations on a fast dial: at 700 deg/s a 45 deg arc is
@@ -232,8 +243,18 @@
     const cfg = o || {};
     const capMs = cfg.firstPressMaxWaitMs != null ? cfg.firstPressMaxWaitMs : 2500;
     const frac = cfg.firstPressMaxTransitFrac != null ? cfg.firstPressMaxTransitFrac : 0.4;
-    const w = Number(width), om = Math.abs(Number(omega));
-    if (!(w > 0) || !(om > 0)) return capMs;
+    const w = Number(width);
+    if (!(w > 0)) return capMs;
+    const om = Math.abs(Number(omega));
+    if (!(om > 0)) {
+      // No rate at all. A wide dial never enters the first-press gate, so keep the old ceiling
+      // there; a narrow dial must not stare at a spinning wedge for 2.5 s (live 2026-11-03: a
+      // 35 deg Legendary dial held 2,619 ms with zero presses). Assume the fast-dial floor and
+      // hold for only a fraction of one pass.
+      if (w >= (cfg.firstPressMaxWidthDeg || 60)) return capMs;
+      const assumed = cfg.firstPressAssumeOmega || 300;
+      return Math.min(capMs, (w / assumed) * 1000 * frac);
+    }
     return Math.min(capMs, (w / om) * 1000 * frac);
   }
 
@@ -2513,10 +2534,12 @@ const SPECIES = [
       while (hist.length > 12) hist.shift();
     }
     const fit = fitOmega(hist, { now: tNow, maxAgeMs: 200, limit: 1500, minSpanMs: 12 });
-    const omega = fit ? fit.omega : null;
-    geo._mid = mid; geo._mt = tNow; geo._om = omega; geo._fit = fit;
+    const midOmega = fit ? fit.omega : null;      // d(mid)/dt, used to track the wedge
+    const omega = deltaOmega(midOmega);           // d(delta)/dt, what planPress/newTriangle use
+    geo._mid = mid; geo._mt = tNow; geo._om = midOmega; geo._fit = fit;
 
-    // Signed distance from the wedge midpoint to the pin: 0 means aligned.
+    // Signed distance from the wedge midpoint to the pin: 0 means aligned. Since delta = -mid,
+    // its rate is -d(mid)/dt; that conversion is the one deltaOmega() exists for.
     const delta = wrap180(0 - mid);
 
     // Lead: where the midpoint will be when a dispatched event is processed.
@@ -2827,6 +2850,7 @@ const SPECIES = [
       firstPressFastOmega: 300,     // ...or spinning at least this fast (deg/s)
       firstPressMaxWaitMs: 2500,    // never hold a first press longer than this, even if the fit is noisy
       firstPressMaxTransitFrac: 0.4, // ...and never past this fraction of one pass (width / omega)
+      firstPressAssumeOmega: 300,    // no fit at all on a narrow dial: assume at least this fast
       insideNowMs: 60,              // contain: pin past centre and still inside -> press now rather than wait a turn
       relockGraceMs: 450,           // hold a dial's geometry this long after a press (the ring blinks)
       maxPressPerDial: 12,          // safety cap on presses per dial lock (one per rotation is normal)

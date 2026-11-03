@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.24) - post-render detection over the merged WebGL layer, the stable first-press
+Status: **WORKING (3.9.25) - post-render detection over the merged WebGL layer, the stable first-press
 gate, containment's `inside-now` press, an allocation-free WebGL readback, a monotonic session catch
 clock and press verdicts split by evidence. Live 3.9.23 baseline: 141.1 fps, p50 6.9 ms, p95 11.9 ms,
 25/25 presses accepted (that build's counter still mixes observed and inferred verdicts).** Read
@@ -2607,3 +2607,27 @@ instance stopped, the new one reported `postRender: true` and logged `post-rende
 advanced - the takeover this release fixes. The tab then stopped receiving frames after 11 (doctor:
 `loop-stalled`, `lastTickAgoMs` 18.6 s) before a fish could be pressed, so the one-minute fishing run
 is inconclusive and no catch-rate claim is made from it.
+
+## 2026-11-03 3.9.25: the Legendary dial the planner scheduled a turn late
+
+**The sighting.** A live 3.9.24 session landed **The Bloop (Legendary)** in attempt 1: twelve dials,
+five presses, and a card. Four of its first dials were 30-35 deg and had **no spin estimate**
+(`omega: null`) with **0 presses**; one was held for **2,619 ms**. The later 40 deg dials at
+~-116 deg/s logged 69 consecutive `wait` frames and were skipped after 606-863 ms. The user pressed
+the fish manually while it spun.
+
+**Two defects, both in the press plan.**
+1. `sample()` returned `omega` as `d(mid)/dt`, but `delta = pin - mid`, so the rate of `delta` is the
+   negation. `planPress()` and `newTriangle()` use `d(delta)/dt`; with the live sign the scheduled
+   crossing was a full turn late (a 40 deg dial: 2.2 s instead of 0.30 s), and `pred` pushed the
+   pin out of the window instead of into it. `deltaOmega(midRate)` now converts once at the source;
+   the tracker still keeps the raw midpoint rate in `geo._om`.
+2. When the fit was null on a narrow dial, `firstPressBudget()` fell back to the full 2,500 ms
+   ceiling. The first-press gate therefore held a 35 deg Legendary dial for 2.6 s with no rate to
+   wait for. A narrow dial now assumes the 300 deg/s fast-dial floor and releases after 0.4 of one
+   pass (~47 ms at 35 deg); wide dials keep the old ceiling.
+
+**Verification.** `node --test`: 265 tests, 0 failures. New guards: the live 40 deg frame is
+`inside-now` with `deltaOmega(-142)` and `wait` with the raw -142; a 35 deg no-rate dial budgets
+under 60 ms while a 90 deg dial keeps 2,500 ms. The 3.9.24 session is still running; 3.9.25 is built
+and is not claimed until a fresh live run confirms presses on a Legendary.
