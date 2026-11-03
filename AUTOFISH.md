@@ -1,9 +1,9 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.9) - post-render detection over the merged WebGL layer, the stable first-press
-gate, containment's `inside-now` press, and an allocation-free WebGL readback. Live 3.9.9 readback
-check: 138.5 fps with 0 long tasks while running (3.9.8: 105.2 fps with five ~250 ms GC stalls),
-1/1 caught with 5/5 presses accepted.** Read
+Status: **WORKING (3.9.24) - post-render detection over the merged WebGL layer, the stable first-press
+gate, containment's `inside-now` press, an allocation-free WebGL readback, a monotonic session catch
+clock and press verdicts split by evidence. Live 3.9.23 baseline: 141.1 fps, p50 6.9 ms, p95 11.9 ms,
+25/25 presses accepted (that build's counter still mixes observed and inferred verdicts).** Read
 [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
 before trusting it for real fishing.
 
@@ -2564,3 +2564,46 @@ copy(__fish.exportRun())
 attempts, then the export. Nothing in README/STATE changes until that sample exists.
 
 
+
+## 2026-11-03 3.9.24: the catch clock, the hook owner and honest press counts
+
+**The 400th fish stopped the session.** `F.catches` is a 400-row display ring, and `status().catchCount`
+reported its length. `panel.js` feeds that fact to `session.js`, which treats only a strictly larger
+value as a catch, so after 400 fish `lastCatchAt` froze: ten minutes later the run paused `no-catch`,
+retried three times and stopped. At the README's own 1.3 attempts/min that is about five hours into a
+twelve-hour session. `stats.catchSeq` now increments in `recordCatch()` and is what `catchCount`
+reports; the ring stays a display buffer.
+
+**A re-pasted core was silently dead.** `installPostRender()` returned early whenever the prototype
+already carried `__autofishPostRender`, while `loop()` returns as soon as `_postRender` is true. A
+second copy of the core therefore reported `postRender: true`, never stepped, and the stall watchdog
+could not repair it because `installPostRender()` was a no-op. The wrapper now carries
+`__autofishHook = { owner }` and dispatches the current owner's `_postTick`; a re-paste retargets the
+one wrapper instead of nesting or dying. The userscript path was never affected
+(`__autofishInstalled`); the console/bookmarklet path was.
+
+**"697/697 accepted" was partly inference.** `recordPressVerdict()` was called from three places with
+different evidence and incremented one counter: `settlePress` saw the game spawn a new triangle,
+`doPress` inferred it when the next press arrived, and `closeDial` inferred it from the dial closing
+within 1.5 s. Verdicts now carry `observed` / `assumed` / `timing`, `accuracy()` and `status()` expose
+`pressVerdicts` and `pressAcceptRateObserved`, and the panel prints the observed rate with the inferred
+count in its tooltip. The legacy fields stay for older consumers.
+
+**Smaller, same pass.** `accuracy()` now takes attempts/caught/lost from the session counters, not the
+200-row ring (it disagreed with `status()` after 200 fish and divided session presses by ring catches);
+`cardByShape()` reuses its integral image instead of allocating ~240-430 KB up to 2.5x/s; `pendingWin`
+no longer leaves a 120 ms card scan running for the session (the `timer` it cleared was never set);
+`exportRun()`'s duplicate `dials` key, a duplicate `rec.omega`, the unused `pressesAtThisDial` and a
+no-op `panel.js` class assignment are gone; `fishserve` answers a foreign `Origin` with 403 and echoes
+CORS only for the game's three hosts and its own loopback origin.
+
+**Verification.** `node --test`: 263 tests, 0 failures. New guards: a 401st catch still reads as a
+catch; a frozen catch fact trips the session watchdog; a re-pasted core ticks while the stopped one
+does not; observed/assumed/timing report separately; a foreign Origin cannot append a CSV row. Not
+verified live: the 400-catch path needs about five hours, so it is a unit test only.
+
+**Live smoke, honest scope.** The patched core was injected over a running 3.9.23 tab: the old
+instance stopped, the new one reported `postRender: true` and logged `post-render hook`, and frames
+advanced - the takeover this release fixes. The tab then stopped receiving frames after 11 (doctor:
+`loop-stalled`, `lastTickAgoMs` 18.6 s) before a fish could be pressed, so the one-minute fishing run
+is inconclusive and no catch-rate claim is made from it.
