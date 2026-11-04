@@ -2681,5 +2681,8 @@ card with `textGaps: 0`; the panel made one initial correction from a restored x
 stayed put for the rest of a two-minute sample. Native F11 at 1920x1080 logged `surface resized`,
 ran for over 30 s with `needsSeat: false`, and finished the session at 8 attempts, 7 caught, 1 lost,
 44/44 accepted presses, `cards: 7` and `textGaps: 0`; the panel stayed at x=12 through 122 samples.
-This confirms the surface/card/panel fixes at the two sizes, not the narrow ghost fix (that is 3.9.26
-and remains separately unconfirmed).
+This confirms the surface/card/panel fixes at the two sizes. The 3.9.26 narrow-ghost path was then
+exercised by a fresh live 3.9.27 session: **145 attempts, 144 caught (99.3%)**, 777/777 accepted
+presses, 2 ghosts and 144 catch cards. The only loss was attempt #5 - 6 accepted presses, 3 dial
+hits, 61.7 deg average width, 14.3 s, ending on the cast prompt - not a ghost. The filter is validated
+on the ghost rings that session saw; this is not a claim that every narrow ghost-only loss is gone.

@@ -6,10 +6,13 @@
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
-  distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist
-- **Target Release / Deadline**: 3.9.27 built 2026-11-03, not released
-- **Current Working Branch**: `fix/narrow-ghost` (this worktree); it is stacked on the #18 commit
-- **Last Updated**: 2026-11-03
+  distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist; 3.9.27 is merged to
+  `main` at 1216258 and pushed, with its release still pending
+- **Target Release / Deadline**: 3.9.27 built 2026-11-03, merged/pushed 2026-11-04 at 1216258,
+  release pending
+- **Current Working Branch**: `fix/narrow-ghost` merged into `main` and pushed; this worktree still
+  has the merged fix branch checked out
+- **Last Updated**: 2026-11-04
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
 ---
@@ -258,6 +261,7 @@ Staging area for rules observed during sessions but not yet approved as invarian
 | 2026-11-02 | Readback allocation | 121 `getImageData` calls in 5 s allocated 40.4 MB and major collections froze the page for ~250 ms about once a second while running. `readUI` now reads the renderer's WebGL buffer with `readPixels` into one reused `Uint8Array` (0.67 MB at 1179x821), flips the rows in place, and keeps the 2D path as the fallback; the shared quarter-scale snapshot still allocates ~2.4 MB/s. Live: **138.5 fps / 0 long tasks** running vs **105.2 fps / 5 long tasks, max 264.5 ms** on 3.9.8; 1/1 caught, 5/5 presses accepted. | `AUTOFISH.md` 3.9.9; `tests/perf.test.js` |
 
 | 2026-11-03 | Fullscreen surface and card gate | Native F11 at 1920x1080 exposed a false catch card: `adoptSurface()` trusted four blank scans and could hand the read surface to the renderer, while the fixed card box read cream world art. Adoption now requires a prompt found twice; resize/fullscreen re-resolves the canvases; the card box scales with the live canvas and a card scan needs a `pendingWin` no older than 30 s. The panel keeps a clear position instead of snapping back. Live 3.9.27 at 1179x821 and native F11 1920x1080: 7 catches/8 attempts, 44/44 accepted presses, `cards: 7`, `textGaps: 0`, and the panel stable at x=12 in fullscreen. | `AUTOFISH.md` 3.9.27; `tests/perf.test.js`; `tests/panel.test.js` |
+| 2026-11-04 | 3.9.27 merge and release prep | `fix/narrow-ghost` fast-forwarded into `main` (`d959ec3` -> `1216258`) and pushed to `origin/main`. A fresh live 3.9.27 session ran 145 attempts / 144 caught (99.3%) with 777/777 accepted presses, 2 ghosts and 144 cards; the only loss was attempt #5 (61.7 deg, 6 presses / 3 hits, cast prompt), not ghost-only. README, state tracker and screenshots refreshed; release pending. | `AUTOFISH.md` 3.9.27; `README.md`; `docs/images/` |
 
 ---
 
