@@ -60,10 +60,10 @@ control: press Start.
 
 - **Session / Cooldown / Daily time cap / Clock window** - how long it fishes, how long it rests after, how much game time it may spend per day, and an optional time-of-day window. Every field can be typed (`90`, `1h 30`, `21:30`) as well as stepped; the cap is **fishing time**, not a fish limit, and 24 h is reachable.
 - **Pause / Resume, Stop, Start now** - Pause holds the current session (no cooldown, no lost time); Stop ends it and starts the rest. A daily-cap or clock-window stop does not start a cooldown, and **Start now** skips the self-imposed rest after a confirmation.
-- **Hidden stop / Chain runs / Resume after reload / POST catches / Profile** - page-hidden limit, automatic next session after a rest, opt-in reload resume, opt-in local CSV POST, and which catch history this account uses. The catch-history line has an **all/today** toggle and a confirm-guarded reset for the current profile.
+- **Stop when hidden / Auto-start next run / Resume after reload / Send catches to CSV / Profile** - page-hidden limit, automatic next session after a rest, opt-in reload resume, opt-in local CSV POST, and which catch history this account uses. The catch-history line has an **all/today** toggle and a confirm-guarded reset for the current profile.
 - **Cozier popup** - hides the in-session Cozier upsell. Cosmetic only: a free account still cannot fish in a focus session.
-- **Perf line** - fps, frame p50/p95/worst and per-detector ms/s, the same numbers as `__fish.perf()`.
-- **left / catches / presses / today** - session time remaining, catches this session, dial presses, game time spent today against the cap.
+- **Diagnostics** - fps, typical/slow/worst frame time and per-detector work per second, the same numbers as `__fish.perf()`.
+- **Timer / catches / presses / today** - session time remaining, catches this session, dial presses, game time spent today against the cap.
 - **Catch history** - all-time and today totals together, lifetime shiny/golden, today's shiny/golden, and how many day buckets are kept (60 max). The strip can show all-time or **today**; **UNK** appears when the card printed no tier and the species is not in the built-in catalogue.
 - **Last catch** - species, weight, rarity (a leading `~` means the rarity came from the built-in catalogue because the card printed none), and the local time.
 - **acc / perf** - fish attempts caught vs attempts, plus the narrow-dial slice; click the block for `__fish.calibration()` and the full frame report.
@@ -114,7 +114,7 @@ Turning occlusion tracking off keeps a **covered** window rendering:
   the `WindowOcclusionEnabled` policy to `0` (Edge: `SOFTWARE\Policies\Microsoft\Edge`).
 
 The simplest reliable setup is a window that stays on screen: move the game tab into its own window
-and leave it uncovered. The panel pauses the clock when the page hides; **Hidden stop** sets how
+and leave it uncovered. The panel pauses the clock when the page hides; **Stop when hidden** sets how
 long it may stay hidden before the session ends (2-60 min, default 2). Switching tabs or minimising
 the window is not recoverable - no page gets frames while it is hidden.
 
@@ -141,14 +141,14 @@ __fish.opts        // press timing, windows, retry ladders (live-editable)
 fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`),
 and `readback.allocMBPerSec` is the canvas-readback garbage rate (`gl` reads allocate nothing after
 the buffer grows; `canvas2d` is the fallback). It only records while the bot is running, so read it
-mid-session. The same version is printed in the panel header (`v3.9.28`, or `dev` for the unbundled
+mid-session. The same version is printed in the panel header (`v3.9.29`, or `dev` for the unbundled
 bookmarklet path), so a stale install is visible without opening the console.
 
 On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
 
 ## Optional: the server path
 
-Only needed if you want session records on disk and the `/sessions` and `/diag` endpoints. Catches are sent to the local CSV only when **POST catches** is on (off by default; the local ledger always works), and session rows are mirrored only for the `default` profile because `sessions.csv` has no profile column.
+Only needed if you want session records on disk and the `/sessions` and `/diag` endpoints. Catches are sent to the local CSV only when **Send catches to CSV** is on (off by default; the local ledger always works), and session rows are mirrored only for the `default` profile because `sessions.csv` has no profile column.
 
 ```bash
 ./run.sh    # picks a free port, prints the install URL and the bookmarklet

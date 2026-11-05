@@ -591,7 +591,7 @@
       stepperRow('Session', 'dur'),
       stepperRow('Cooldown', 'cool'),
       stepperRow('Daily time cap', 'cap'),
-      stepperRow('Hidden stop', 'hidden')
+      stepperRow('Stop when hidden', 'hidden')
     );
 
     // clock window
@@ -618,7 +618,7 @@
     // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
     // window and the cap still bound it.
     var chainRow = el('div', 'row');
-    var chainLabel = el('div', 'label', 'Chain runs');
+    var chainLabel = el('div', 'label', 'Auto-start next run');
     var chainToggle = el('button', 'icon', 'off');
     chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
     chainRow.append(chainLabel, chainToggle);
@@ -633,7 +633,7 @@
 
     // Off by default: a userscript has no server, and a failed localhost POST on every catch is noise.
     var postRow = el('div', 'row');
-    var postLabel = el('div', 'label', 'POST catches');
+    var postLabel = el('div', 'label', 'Send catches to CSV');
     var postToggle = el('button', 'icon', (window.__panel && window.__panel.postCatches) ? 'on' : 'off');
     postToggle.title = 'send each catch to the local fishserve CSV (opt-in; the local ledger always works)';
     postRow.append(postLabel, postToggle);
@@ -654,7 +654,7 @@
 
     var meters = el('div', 'meters');
     meters.append(
-      meter('left'), meter('catches'), meter('presses'), meter('today')
+      meter('left', 'Timer'), meter('catches'), meter('presses'), meter('today')
     );
     body.appendChild(meters);
 
@@ -706,12 +706,13 @@
     // keystrokes, so __fish.perf() cannot be read there - and these are the numbers that decide
     // whether a build needs another detour. Same source; a click expands the whole report.
     var perfBox = el('div', 'perfbox');
-    var perfLine = el('div', 'perf', 'perf: no frames yet');
-    var accLine = el('div', 'perf', 'acc: no attempts yet');
+    var perfLine = el('div', 'perf', 'No frames measured yet');
+    var accLine = el('div', 'perf', 'No attempts yet');
+    var accMore = el('div', 'perf', '');
     var perfMore = el('div', 'perf', '');
     var perfJson = el('pre', 'perfjson hide', '');
     perfBox.title = 'frame budget and fish accuracy; click for the full calibration report';
-    perfBox.append(perfLine, accLine, perfMore, perfJson);
+    perfBox.append(perfLine, accLine, accMore, perfMore, perfJson);
     diagSec.body.appendChild(perfBox);
 
     // Tier 2 lives below the run view, never above it.
@@ -736,7 +737,7 @@
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, lastCatch: lastCatch,
       logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
-      perfLine: perfLine, accLine: accLine, perfMore: perfMore, perfJson: perfJson
+      perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfJson: perfJson
     });
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
@@ -861,9 +862,9 @@
     return { el: box, body: rows };
   }
 
-  function meter(name) {
+  function meter(name, labelText) {
     var row = el('div', 'm');
-    var label = el('span', null, name);
+    var label = el('span', null, labelText || name);
     var value = el('b', null, '—');
     row.append(label, value);
     ui['m' + name.charAt(0).toUpperCase() + name.slice(1)] = value;
@@ -1133,29 +1134,37 @@
       var a = null;
       try { a = (fish() && fish().accuracy) ? fish().accuracy() : null; } catch (e) { a = null; }
       if (!a || (!a.attempts && !a.presses)) {
-        ui.accLine.textContent = 'acc: no attempts yet';
+        ui.accLine.textContent = 'No attempts yet';
+        if (ui.accMore) ui.accMore.textContent = '';
       } else {
         var n = (a.caught || 0) + (a.lost || 0);
-        var rate = a.catchRate == null ? '—' : Math.round(a.catchRate * 100) + '%';
+        var rate = a.catchRate == null ? '' : ' · ' + Math.round(a.catchRate * 100) + '%';
         var narrow = (a.byWidth || []).filter(function (w) { return w.band === 'narrow'; })[0];
         var pv = a.pressVerdicts && a.pressVerdicts.observed;
         var sent = pv ? pv.total : (a.pressAccepted || 0) + (a.pressRejected || 0);
         var hit = pv ? pv.accepted : (a.pressAccepted || 0);
         var inferred = a.pressVerdicts ? a.pressVerdicts.assumed.total + a.pressVerdicts.timing.total : 0;
-        ui.accLine.textContent = 'acc ' + (a.caught || 0) + '/' + n + ' (' + rate + ')' +
-          (narrow ? ' · narrow ' + narrow.caught + '/' + narrow.attempts : '') +
-          (sent ? ' · hit ' + hit + '/' + sent : '');
-        ui.accLine.title = 'fish attempts, not presses; hit = presses the game answered with a new triangle (observed only; ' + inferred + ' inferred verdicts excluded); narrow is the rare-dial signal';
+        ui.accLine.textContent = 'Caught ' + (a.caught || 0) + ' of ' + n + rate;
+        // Two counts, both said as "x of y" so neither needs a legend: which dials it missed,
+        // and whether the presses landed.
+        var detail = [];
+        if (narrow) detail.push('rare dials ' + narrow.caught + ' of ' + narrow.attempts);
+        if (sent) detail.push(hit + ' of ' + sent + ' presses landed');
+        if (ui.accMore) ui.accMore.textContent = detail.join(' · ');
+        ui.accLine.title = 'fish landed out of fish attempted; the rate is catches over attempts';
+        if (ui.accMore) {
+          ui.accMore.title = 'rare dials are the narrow ones the rare fish paint; "presses landed" counts only the presses the game answered with a new triangle (' + inferred + ' inferred verdicts excluded)';
+        }
       }
     }
     var p = null;
     try { p = (fish() && fish().perf) ? fish().perf() : null; } catch (e) { p = null; }
-    if (!p || !p.frames) { ui.perfLine.textContent = 'perf: no frames yet'; ui.perfMore.textContent = ''; return; }
-    ui.perfLine.textContent = p.fps + ' fps · p50 ' + p.p50 + ' · p95 ' + p.p95 + ' · worst ' + p.worst + ' ms';
+    if (!p || !p.frames) { ui.perfLine.textContent = 'No frames measured yet'; ui.perfMore.textContent = ''; return; }
+    ui.perfLine.textContent = p.fps + ' fps · ' + p.p50 + ' ms typical · ' + p.p95 + ' ms slow · ' + p.worst + ' ms worst';
     var r = p.rates || {};
     function share(key) { return (r[key] && r[key].msPerSec != null) ? r[key].msPerSec : '–'; }
-    ui.perfMore.textContent = 'ms/s: snap ' + share('snapshot') + ' · bub ' + share('findBubble') +
-      ' · dial ' + share('lockDial') + ' · card ' + share('findCatch');
+    ui.perfMore.textContent = 'per second: scan ' + share('snapshot') + ' · bubble ' + share('findBubble') +
+      ' · dial ' + share('lockDial') + ' · card ' + share('findCatch') + ' ms';
   }
 
   function render() {
@@ -1201,8 +1210,8 @@
     var stats = (status && status.stats) || {};
 
     if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
-    else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' held';
-    else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cool';
+    else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' paused';
+    else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cooling';
     else if (phase === 'waiting') ui.mLeft.textContent = 'at ' + state.window.start;
     else ui.mLeft.textContent = minutesText(state.durationMs);
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));
