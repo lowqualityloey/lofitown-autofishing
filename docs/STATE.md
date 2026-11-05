@@ -7,10 +7,11 @@
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist; 3.9.31 is merged to
-  `main` at dde3e17 and pushed, and the v3.9.31 release is prepared from it
-- **Target Release / Deadline**: 3.9.31 built 2026-11-05, merged/pushed 2026-11-05 at dde3e17,
-  release in preparation
-- **Current Working Branch**: `main` at dde3e17; the panel branch is merged and pushed, the release docs branch is open
+  `main` (`dde3e17` for the panel, `ea1d5fc` for the release docs) and published as v3.9.31 on
+  2026-11-05
+- **Target Release / Deadline**: 3.9.31 built 2026-11-05, merged/pushed 2026-11-05 at ea1d5fc,
+  released 2026-11-05
+- **Current Working Branch**: `main` at `ea1d5fc`; the panel and release-docs branches are merged and pushed
 - **Last Updated**: 2026-11-05
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
@@ -261,7 +262,7 @@ Staging area for rules observed during sessions but not yet approved as invarian
 
 | 2026-11-03 | Fullscreen surface and card gate | Native F11 at 1920x1080 exposed a false catch card: `adoptSurface()` trusted four blank scans and could hand the read surface to the renderer, while the fixed card box read cream world art. Adoption now requires a prompt found twice; resize/fullscreen re-resolves the canvases; the card box scales with the live canvas and a card scan needs a `pendingWin` no older than 30 s. The panel keeps a clear position instead of snapping back. Live 3.9.27 at 1179x821 and native F11 1920x1080: 7 catches/8 attempts, 44/44 accepted presses, `cards: 7`, `textGaps: 0`, and the panel stable at x=12 in fullscreen. | `AUTOFISH.md` 3.9.27; `tests/perf.test.js`; `tests/panel.test.js` |
 | 2026-11-04 | 3.9.27 merge and release prep | `fix/narrow-ghost` fast-forwarded into `main` (`d959ec3` -> `1216258`) and pushed to `origin/main`. A fresh live 3.9.27 session ran 145 attempts / 144 caught (99.3%) with 777/777 accepted presses, 2 ghosts and 144 cards; the only loss was attempt #5 (61.7 deg, 6 presses / 3 hits, cast prompt), not ghost-only. README, state tracker and screenshots refreshed; released 2026-11-04. | `AUTOFISH.md` 3.9.27; `README.md`; `docs/images/` |
-| 2026-11-05 | 3.9.28-3.9.31 panel release | `freebuff/run-impeccable-skill-instructions` merged as PR #20 (`dde3e17`) carrying three panel commits. 3.9.28 split the card into a run surface plus folded `Session & guards` and `Diagnostics`; 3.9.29 rewrote the diagnostics as plain sentences ("Caught 144 of 145", "6.9 ms typical") and renamed the idle meter `Timer`; 3.9.31 rounds each detector share to whole ms and splits the per-second line in two, because the live 3.9.29 line measured 256 px inside the 244 px card and clipped its last field. Live 3.9.31 read on the real game: 142.7 fps, p50 6.9 / p95 11.9 / worst 20.7 ms, 3 caught of 3, 6/6 presses, `per second: scan 61 · bubble 74` and `dial 23 · card 2 ms` with no clipping - a short check run, not a field run. 270 tests. | `AUTOFISH.md`; `panel.js`; `tests/panel.test.js` |
+| 2026-11-05 | 3.9.28-3.9.31 panel release | `freebuff/run-impeccable-skill-instructions` merged as PR #20 (`dde3e17`) carrying three panel commits. 3.9.28 split the card into a run surface plus folded `Session & guards` and `Diagnostics`; 3.9.29 rewrote the diagnostics as plain sentences ("Caught 144 of 145", "6.9 ms typical") and renamed the idle meter `Timer`; 3.9.31 rounds each detector share to whole ms and splits the per-second line in two, because the live 3.9.29 line measured 256 px inside the 244 px card and clipped its last field. Live 3.9.31 read on the real game: 142.7 fps, p50 6.9 / p95 11.9 / worst 20.7 ms, 3 caught of 3, 6/6 presses, `per second: scan 61 · bubble 74` and `dial 23 · card 2 ms` with no clipping - a short check run, not a field run. 270 tests. Released as v3.9.31 (`ea1d5fc`): both the source and mirror releases carry 315,296 bytes / sha256 `00f661f5b26b`, and `releases/latest` serves the same bytes anonymously. | `AUTOFISH.md`; `panel.js`; `tests/panel.test.js`; `scripts/release.js` |
 
 ---
 
