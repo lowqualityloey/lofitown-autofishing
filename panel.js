@@ -536,6 +536,13 @@
     '.perfbox{display:flex;flex-direction:column;gap:1px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer}',
     '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
+    '.sec{border-top:1px solid rgba(255,255,255,.08)}',
+    '.sechead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#aab4bf;font:inherit;font-size:11px;letter-spacing:.3px;padding:8px 0 7px;cursor:pointer;text-align:left}',
+    '.sechead:hover{color:#e8ecef}',
+    '.sechead:focus-visible{outline:2px solid rgba(90,209,139,.55);outline-offset:2px;border-radius:6px}',
+    '.chev{flex:none;display:inline-block;font-size:9px;color:#8b95a0;transition:transform .16s cubic-bezier(.16,1,.3,1)}',
+    '.sec.open .chev{transform:rotate(90deg)}',
+    '.secbody{display:flex;flex-direction:column;gap:9px;padding-bottom:9px}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.hide{display:none}'
   ].join('\n');
@@ -574,7 +581,13 @@
 
     var body = el('div', 'body');
 
-    body.append(
+    // Two tiers. A running session asks one question at a glance - is it working, and how much
+    // budget is left - so the counters, the ledger and the Start/Pause pair stay on the surface,
+    // while everything decided once (lengths, guards, profile, frame report) folds away below.
+    var setSec = section('Session & guards');
+    var diagSec = section('Diagnostics');
+
+    setSec.body.append(
       stepperRow('Session', 'dur'),
       stepperRow('Cooldown', 'cool'),
       stepperRow('Daily time cap', 'cap'),
@@ -587,12 +600,12 @@
     var winToggle = el('button', 'icon', 'off');
     winToggle.title = 'run only between two times';
     winRow.append(winLabel, winToggle);
-    body.appendChild(winRow);
+    setSec.body.appendChild(winRow);
 
     var timeRow = el('div', 'row');
     timeRow.appendChild(stepper('from', 15));
     timeRow.appendChild(stepper('to', 15));
-    body.appendChild(timeRow);
+    setSec.body.appendChild(timeRow);
 
     // cosmetic only: quietens the in-session Cozier upsell, see setUpsellHidden()
     var upsellRow = el('div', 'row');
@@ -600,7 +613,7 @@
     var upsellToggle = el('button', 'icon', upsellOn ? 'on' : 'off');
     upsellToggle.title = 'hide the in-session Cozier upsell (cosmetic: a free account still cannot fish in focus)';
     upsellRow.append(upsellLabel, upsellToggle);
-    body.appendChild(upsellRow);
+    setSec.body.appendChild(upsellRow);
 
     // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
     // window and the cap still bound it.
@@ -609,14 +622,14 @@
     var chainToggle = el('button', 'icon', 'off');
     chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
     chainRow.append(chainLabel, chainToggle);
-    body.appendChild(chainRow);
+    setSec.body.appendChild(chainRow);
 
     var reloadRow = el('div', 'row');
     var reloadLabel = el('div', 'label', 'Resume after reload');
     var reloadToggle = el('button', 'icon', (window.__panel && window.__panel.resumeAfterReload) ? 'on' : 'off');
     reloadToggle.title = 'start a session again after a page reload; the interrupted run is logged first';
     reloadRow.append(reloadLabel, reloadToggle);
-    body.appendChild(reloadRow);
+    setSec.body.appendChild(reloadRow);
 
     // Off by default: a userscript has no server, and a failed localhost POST on every catch is noise.
     var postRow = el('div', 'row');
@@ -624,7 +637,7 @@
     var postToggle = el('button', 'icon', (window.__panel && window.__panel.postCatches) ? 'on' : 'off');
     postToggle.title = 'send each catch to the local fishserve CSV (opt-in; the local ledger always works)';
     postRow.append(postLabel, postToggle);
-    body.appendChild(postRow);
+    setSec.body.appendChild(postRow);
 
     // One ledger per profile, because two accounts in one browser used to share one history.
     var profRow = el('div', 'row');
@@ -637,7 +650,7 @@
     var profReset = el('button', 'icon', '↺');
     profReset.title = 'clear this profile’s catch history (cannot be undone)';
     profRow.append(profLabel, profSel, profAdd, profReset);
-    body.appendChild(profRow);
+    setSec.body.appendChild(profRow);
 
     var meters = el('div', 'meters');
     meters.append(
@@ -699,7 +712,10 @@
     var perfJson = el('pre', 'perfjson hide', '');
     perfBox.title = 'frame budget and fish accuracy; click for the full calibration report';
     perfBox.append(perfLine, accLine, perfMore, perfJson);
-    body.appendChild(perfBox);
+    diagSec.body.appendChild(perfBox);
+
+    // Tier 2 lives below the run view, never above it.
+    body.append(setSec.el, diagSec.el);
 
     var bannerEl = el('div', 'banner');
 
@@ -817,6 +833,32 @@
 
     restorePosition();
     render();
+  }
+
+  /**
+   * One folded tier-2 block: a header the user can open, and the rows it owns.
+   *
+   * The panel used to put ten controls, a ledger and a frame report in one column, so the one
+   * decision a running session asks - Start or Pause - carried the same weight as the daily cap.
+   * A real <button> header (never a div, so Enter and Space work) keeps the rows in the DOM but
+   * out of the glance. place() is re-run because opening one changes the card's height.
+   */
+  function section(title) {
+    var box = el('div', 'sec');
+    var toggle = el('button', 'sechead');
+    var chev = el('span', 'chev', '\u25B8');
+    var name = el('span', null, title);
+    toggle.append(chev, name);
+    toggle.setAttribute('aria-expanded', 'false');
+    var rows = el('div', 'secbody hide');
+    toggle.addEventListener('click', function () {
+      var open = !rows.classList.toggle('hide');
+      box.classList.toggle('open', open);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      place();
+    });
+    box.append(toggle, rows);
+    return { el: box, body: rows };
   }
 
   function meter(name) {

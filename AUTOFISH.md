@@ -1,10 +1,12 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.27) - fullscreen-safe surface adoption, a live-sized catch-card box and a
-non-jumping panel, on top of post-render detection over the merged WebGL layer, the stable first-press
-gate, containment's `inside-now` press, an allocation-free WebGL readback, a monotonic session catch
-clock and press verdicts split by evidence. Live 3.9.23 baseline: 141.1 fps, p50 6.9 ms, p95 11.9 ms,
-25/25 presses accepted (that build's counter still mixes observed and inferred verdicts).** Read
+Status: **WORKING (3.9.28) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, on top of
+post-render detection over the merged WebGL layer, the stable first-press gate, containment's
+`inside-now` press, an allocation-free WebGL readback, a monotonic session catch clock and press
+verdicts split by evidence. The 3.9.28 panel change passed the suite and the build but has not been
+looked at in a live tab yet. Live 3.9.23 baseline: 141.1 fps, p50 6.9 ms, p95 11.9 ms, 25/25 presses
+accepted (that build's counter still mixes observed and inferred verdicts).** Read
 [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
 before trusting it for real fishing.
 

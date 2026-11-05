@@ -53,6 +53,11 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 
 ## The panel
 
+The panel is two tiers. The surface carries only what a glance needs - the phase chip, the session
+clock, catches, presses, today against the cap, the rarity strip and the **Start / Pause** pair -
+while **Session & guards** and **Diagnostics** fold away beneath it. A first run therefore needs one
+control: press Start.
+
 - **Session / Cooldown / Daily time cap / Clock window** - how long it fishes, how long it rests after, how much game time it may spend per day, and an optional time-of-day window. Every field can be typed (`90`, `1h 30`, `21:30`) as well as stepped; the cap is **fishing time**, not a fish limit, and 24 h is reachable.
 - **Pause / Resume, Stop, Start now** - Pause holds the current session (no cooldown, no lost time); Stop ends it and starts the rest. A daily-cap or clock-window stop does not start a cooldown, and **Start now** skips the self-imposed rest after a confirmation.
 - **Hidden stop / Chain runs / Resume after reload / POST catches / Profile** - page-hidden limit, automatic next session after a rest, opt-in reload resume, opt-in local CSV POST, and which catch history this account uses. The catch-history line has an **all/today** toggle and a confirm-guarded reset for the current profile.
@@ -136,7 +141,7 @@ __fish.opts        // press timing, windows, retry ladders (live-editable)
 fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`),
 and `readback.allocMBPerSec` is the canvas-readback garbage rate (`gl` reads allocate nothing after
 the buffer grows; `canvas2d` is the fallback). It only records while the bot is running, so read it
-mid-session. The same version is printed in the panel header (`v3.9.27`, or `dev` for the unbundled
+mid-session. The same version is printed in the panel header (`v3.9.28`, or `dev` for the unbundled
 bookmarklet path), so a stale install is visible without opening the console.
 
 On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
