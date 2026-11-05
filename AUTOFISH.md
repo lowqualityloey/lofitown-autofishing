@@ -1,10 +1,19 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.27) - fullscreen-safe surface adoption, a live-sized catch-card box and a
-non-jumping panel, on top of post-render detection over the merged WebGL layer, the stable first-press
-gate, containment's `inside-now` press, an allocation-free WebGL readback, a monotonic session catch
-clock and press verdicts split by evidence. Live 3.9.23 baseline: 141.1 fps, p50 6.9 ms, p95 11.9 ms,
-25/25 presses accepted (that build's counter still mixes observed and inferred verdicts).** Read
+Status: **WORKING (3.9.31) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
+diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
+"292 of 300 presses landed"), on top of
+post-render detection over the merged WebGL layer, the stable first-press gate, containment's
+`inside-now` press, an allocation-free WebGL readback, a monotonic session catch clock and press
+verdicts split by evidence. The 3.9.28 two-tier split was rendered against a stub core and 3.9.29
+changes only its strings. 3.9.29 has since been read in a live tab, which confirms 3.9.28's split: 142.9 fps, p50 6.9 ms,
+p95 11.6 ms, worst 18.4 ms, 3 catches from 3 attempts and 12 of 12 presses landed. That run is where
+3.9.30 comes from - the live per-second line measured 256 px inside the 244 px card and clipped its
+last field, so those detector shares are rounded to whole ms and split over two lines:
+with three-digit shares the single line still measured 241.7 px, leaving no room for a four-digit one. Live 3.9.23 baseline:
+141.1 fps, p50 6.9 ms, p95 11.9 ms, 25/25 presses accepted (that build's counter still mixes
+observed and inferred verdicts).** Read
 [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)
 before trusting it for real fishing.
 
@@ -119,7 +128,7 @@ Then open **http://127.0.0.1:8741/install** in the lofi.town tab and drag the bu
 bookmarks bar. On the game page, click the bookmark once: a small **AutoFish** card appears in the
 corner of the game and runs from there.
 
-- **Session / Cooldown / Daily time cap / Hidden stop** — click the value and type (`90`, `1h 30`)
+- **Session / Cooldown / Daily time cap / Stop when hidden** — click the value and type (`90`, `1h 30`)
   or use `−` / `+` (hold to accelerate). Defaults 60 min, 30 min, 4 h. Ranges: session 5 min –
   **12 h**, cooldown **1 min** – 2 h, daily cap 30 min – **24 h**. The cap is fishing **time**, not a
   fish count. A session that reaches its timer stops into the cooldown; a clock-window or daily-cap
@@ -132,9 +141,10 @@ corner of the game and runs from there.
 - **Catch history** — all-time and today totals, today's shiny/golden, lifetime shiny/golden and the
   kept-day count. The strip toggles **all/today**; `↺` clears the current profile after confirmation.
   The ledger keeps 60 day buckets; all-time species and tier totals are never trimmed.
-- **Resume after reload / POST catches** — both off by default. Resume starts a fresh session after
-  a reload (the interrupted one is logged first; a user-held pause is not auto-resumed). POST sends
-  catches to the local fishserve CSV only when enabled; the local ledger always works.
+- **Resume after reload / Send catches to CSV** — both off by default. Resume starts a fresh session
+  after a reload (the interrupted one is logged first; a user-held pause is not auto-resumed).
+  Sending writes each catch to the local fishserve CSV only when enabled; the local ledger always
+  works.
 - **Meters** — time left, catches this session, presses this session, and today's total against the
   daily cap.
 - **Loop stall** — when the game stops handing the bot frames (an occluded or throttled tab), the
@@ -1408,9 +1418,9 @@ and their gold comes from the bundle's own per-tier map, so the generator now re
 
 **"Sometimes it stops" is the 120-second hidden threshold.** A hidden page pauses at 5 s and *stops*
 the session at 120 s (`HIDDEN_STOP_MS`), then cooldown, then idle. Sessions never chain, so a run
-survives being away for under two minutes and dies if you are away longer. `Hidden stop` is now a
-2-60 minute stepper, and `Chain runs` (off by default) restarts after the cooldown while the window
-is open, the cap is unspent and the page is visible.
+survives being away for under two minutes and dies if you are away longer. `Stop when hidden` is a
+2-60 minute stepper, and `Auto-start next run` (off by default) restarts after the cooldown while
+the window is open, the cap is unspent and the page is visible.
 
 **The daily cap was server-only.** `loadToday()` set today's minutes to 0 on any fetch failure, and
 `savePrefs()` never stored `todayMs` or `cooldownUntil`, so without fishserve a reload zeroed the
@@ -1916,7 +1926,7 @@ slice, and its click dumps `perf + accuracy + calibration`.
 fired for the common no-window setup; it is now an explicit **Resume after reload** toggle and a
 reload does not turn a user-held pause into a running session. The core's catch POST no longer
 hardcodes `http://127.0.0.1:8731/catch`: a userscript with no server was firing a failed request on
-every catch. It is opt-in via **POST catches** or `__fish.start({ logUrl })`. Budget and cooldown are
+every catch. It is opt-in via **Send catches to CSV** or `__fish.start({ logUrl })`. Budget and cooldown are
 now keyed by profile, and profile switching is idle-only; the old `default` budget key is preserved.
 
 **What is deliberately still open.** (a) The width/rarity reports need a real seated sample before

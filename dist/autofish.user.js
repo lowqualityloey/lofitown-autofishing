@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.27
+// @version      3.9.31
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.27" };
+  const F = { version: "3.9.31" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -5362,6 +5362,13 @@ const SPECIES = [
     '.perfbox{display:flex;flex-direction:column;gap:1px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer}',
     '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
+    '.sec{border-top:1px solid rgba(255,255,255,.08)}',
+    '.sechead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#aab4bf;font:inherit;font-size:11px;letter-spacing:.3px;padding:8px 0 7px;cursor:pointer;text-align:left}',
+    '.sechead:hover{color:#e8ecef}',
+    '.sechead:focus-visible{outline:2px solid rgba(90,209,139,.55);outline-offset:2px;border-radius:6px}',
+    '.chev{flex:none;display:inline-block;font-size:9px;color:#8b95a0;transition:transform .16s cubic-bezier(.16,1,.3,1)}',
+    '.sec.open .chev{transform:rotate(90deg)}',
+    '.secbody{display:flex;flex-direction:column;gap:9px;padding-bottom:9px}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.hide{display:none}'
   ].join('\n');
@@ -5400,11 +5407,17 @@ const SPECIES = [
 
     var body = el('div', 'body');
 
-    body.append(
+    // Two tiers. A running session asks one question at a glance - is it working, and how much
+    // budget is left - so the counters, the ledger and the Start/Pause pair stay on the surface,
+    // while everything decided once (lengths, guards, profile, frame report) folds away below.
+    var setSec = section('Session & guards');
+    var diagSec = section('Diagnostics');
+
+    setSec.body.append(
       stepperRow('Session', 'dur'),
       stepperRow('Cooldown', 'cool'),
       stepperRow('Daily time cap', 'cap'),
-      stepperRow('Hidden stop', 'hidden')
+      stepperRow('Stop when hidden', 'hidden')
     );
 
     // clock window
@@ -5413,12 +5426,12 @@ const SPECIES = [
     var winToggle = el('button', 'icon', 'off');
     winToggle.title = 'run only between two times';
     winRow.append(winLabel, winToggle);
-    body.appendChild(winRow);
+    setSec.body.appendChild(winRow);
 
     var timeRow = el('div', 'row');
     timeRow.appendChild(stepper('from', 15));
     timeRow.appendChild(stepper('to', 15));
-    body.appendChild(timeRow);
+    setSec.body.appendChild(timeRow);
 
     // cosmetic only: quietens the in-session Cozier upsell, see setUpsellHidden()
     var upsellRow = el('div', 'row');
@@ -5426,31 +5439,31 @@ const SPECIES = [
     var upsellToggle = el('button', 'icon', upsellOn ? 'on' : 'off');
     upsellToggle.title = 'hide the in-session Cozier upsell (cosmetic: a free account still cannot fish in focus)';
     upsellRow.append(upsellLabel, upsellToggle);
-    body.appendChild(upsellRow);
+    setSec.body.appendChild(upsellRow);
 
     // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
     // window and the cap still bound it.
     var chainRow = el('div', 'row');
-    var chainLabel = el('div', 'label', 'Chain runs');
+    var chainLabel = el('div', 'label', 'Auto-start next run');
     var chainToggle = el('button', 'icon', 'off');
     chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
     chainRow.append(chainLabel, chainToggle);
-    body.appendChild(chainRow);
+    setSec.body.appendChild(chainRow);
 
     var reloadRow = el('div', 'row');
     var reloadLabel = el('div', 'label', 'Resume after reload');
     var reloadToggle = el('button', 'icon', (window.__panel && window.__panel.resumeAfterReload) ? 'on' : 'off');
     reloadToggle.title = 'start a session again after a page reload; the interrupted run is logged first';
     reloadRow.append(reloadLabel, reloadToggle);
-    body.appendChild(reloadRow);
+    setSec.body.appendChild(reloadRow);
 
     // Off by default: a userscript has no server, and a failed localhost POST on every catch is noise.
     var postRow = el('div', 'row');
-    var postLabel = el('div', 'label', 'POST catches');
+    var postLabel = el('div', 'label', 'Send catches to CSV');
     var postToggle = el('button', 'icon', (window.__panel && window.__panel.postCatches) ? 'on' : 'off');
     postToggle.title = 'send each catch to the local fishserve CSV (opt-in; the local ledger always works)';
     postRow.append(postLabel, postToggle);
-    body.appendChild(postRow);
+    setSec.body.appendChild(postRow);
 
     // One ledger per profile, because two accounts in one browser used to share one history.
     var profRow = el('div', 'row');
@@ -5463,11 +5476,11 @@ const SPECIES = [
     var profReset = el('button', 'icon', '↺');
     profReset.title = 'clear this profile’s catch history (cannot be undone)';
     profRow.append(profLabel, profSel, profAdd, profReset);
-    body.appendChild(profRow);
+    setSec.body.appendChild(profRow);
 
     var meters = el('div', 'meters');
     meters.append(
-      meter('left'), meter('catches'), meter('presses'), meter('today')
+      meter('left', 'Timer'), meter('catches'), meter('presses'), meter('today')
     );
     body.appendChild(meters);
 
@@ -5519,13 +5532,21 @@ const SPECIES = [
     // keystrokes, so __fish.perf() cannot be read there - and these are the numbers that decide
     // whether a build needs another detour. Same source; a click expands the whole report.
     var perfBox = el('div', 'perfbox');
-    var perfLine = el('div', 'perf', 'perf: no frames yet');
-    var accLine = el('div', 'perf', 'acc: no attempts yet');
+    var perfLine = el('div', 'perf', 'No frames measured yet');
+    var accLine = el('div', 'perf', 'No attempts yet');
+    var accMore = el('div', 'perf', '');
     var perfMore = el('div', 'perf', '');
+    // The four detector shares are split over two lines: at 9.5px the single line reached 241-252 px
+    // in the 244 px card once the shares were three digits wide, and a second line cannot be
+    // outgrown by a digit the way a single one can.
+    var perfRate = el('div', 'perf', '');
     var perfJson = el('pre', 'perfjson hide', '');
     perfBox.title = 'frame budget and fish accuracy; click for the full calibration report';
-    perfBox.append(perfLine, accLine, perfMore, perfJson);
-    body.appendChild(perfBox);
+    perfBox.append(perfLine, accLine, accMore, perfMore, perfRate, perfJson);
+    diagSec.body.appendChild(perfBox);
+
+    // Tier 2 lives below the run view, never above it.
+    body.append(setSec.el, diagSec.el);
 
     var bannerEl = el('div', 'banner');
 
@@ -5546,7 +5567,7 @@ const SPECIES = [
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, lastCatch: lastCatch,
       logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
-      perfLine: perfLine, accLine: accLine, perfMore: perfMore, perfJson: perfJson
+      perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
@@ -5645,9 +5666,35 @@ const SPECIES = [
     render();
   }
 
-  function meter(name) {
+  /**
+   * One folded tier-2 block: a header the user can open, and the rows it owns.
+   *
+   * The panel used to put ten controls, a ledger and a frame report in one column, so the one
+   * decision a running session asks - Start or Pause - carried the same weight as the daily cap.
+   * A real <button> header (never a div, so Enter and Space work) keeps the rows in the DOM but
+   * out of the glance. place() is re-run because opening one changes the card's height.
+   */
+  function section(title) {
+    var box = el('div', 'sec');
+    var toggle = el('button', 'sechead');
+    var chev = el('span', 'chev', '\u25B8');
+    var name = el('span', null, title);
+    toggle.append(chev, name);
+    toggle.setAttribute('aria-expanded', 'false');
+    var rows = el('div', 'secbody hide');
+    toggle.addEventListener('click', function () {
+      var open = !rows.classList.toggle('hide');
+      box.classList.toggle('open', open);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      place();
+    });
+    box.append(toggle, rows);
+    return { el: box, body: rows };
+  }
+
+  function meter(name, labelText) {
     var row = el('div', 'm');
-    var label = el('span', null, name);
+    var label = el('span', null, labelText || name);
     var value = el('b', null, '—');
     row.append(label, value);
     ui['m' + name.charAt(0).toUpperCase() + name.slice(1)] = value;
@@ -5917,29 +5964,39 @@ const SPECIES = [
       var a = null;
       try { a = (fish() && fish().accuracy) ? fish().accuracy() : null; } catch (e) { a = null; }
       if (!a || (!a.attempts && !a.presses)) {
-        ui.accLine.textContent = 'acc: no attempts yet';
+        ui.accLine.textContent = 'No attempts yet';
+        if (ui.accMore) ui.accMore.textContent = '';
       } else {
         var n = (a.caught || 0) + (a.lost || 0);
-        var rate = a.catchRate == null ? '—' : Math.round(a.catchRate * 100) + '%';
+        var rate = a.catchRate == null ? '' : ' · ' + Math.round(a.catchRate * 100) + '%';
         var narrow = (a.byWidth || []).filter(function (w) { return w.band === 'narrow'; })[0];
         var pv = a.pressVerdicts && a.pressVerdicts.observed;
         var sent = pv ? pv.total : (a.pressAccepted || 0) + (a.pressRejected || 0);
         var hit = pv ? pv.accepted : (a.pressAccepted || 0);
         var inferred = a.pressVerdicts ? a.pressVerdicts.assumed.total + a.pressVerdicts.timing.total : 0;
-        ui.accLine.textContent = 'acc ' + (a.caught || 0) + '/' + n + ' (' + rate + ')' +
-          (narrow ? ' · narrow ' + narrow.caught + '/' + narrow.attempts : '') +
-          (sent ? ' · hit ' + hit + '/' + sent : '');
-        ui.accLine.title = 'fish attempts, not presses; hit = presses the game answered with a new triangle (observed only; ' + inferred + ' inferred verdicts excluded); narrow is the rare-dial signal';
+        ui.accLine.textContent = 'Caught ' + (a.caught || 0) + ' of ' + n + rate;
+        // Two counts, both said as "x of y" so neither needs a legend: which dials it missed,
+        // and whether the presses landed.
+        var detail = [];
+        if (narrow) detail.push('rare dials ' + narrow.caught + ' of ' + narrow.attempts);
+        if (sent) detail.push(hit + ' of ' + sent + ' presses landed');
+        if (ui.accMore) ui.accMore.textContent = detail.join(' · ');
+        ui.accLine.title = 'fish landed out of fish attempted; the rate is catches over attempts';
+        if (ui.accMore) {
+          ui.accMore.title = 'rare dials are the narrow ones the rare fish paint; "presses landed" counts only the presses the game answered with a new triangle (' + inferred + ' inferred verdicts excluded)';
+        }
       }
     }
     var p = null;
     try { p = (fish() && fish().perf) ? fish().perf() : null; } catch (e) { p = null; }
-    if (!p || !p.frames) { ui.perfLine.textContent = 'perf: no frames yet'; ui.perfMore.textContent = ''; return; }
-    ui.perfLine.textContent = p.fps + ' fps · p50 ' + p.p50 + ' · p95 ' + p.p95 + ' · worst ' + p.worst + ' ms';
+    if (!p || !p.frames) { ui.perfLine.textContent = 'No frames measured yet'; ui.perfMore.textContent = ''; ui.perfRate.textContent = ''; return; }
+    ui.perfLine.textContent = p.fps + ' fps · ' + p.p50 + ' ms typical · ' + p.p95 + ' ms slow · ' + p.worst + ' ms worst';
     var r = p.rates || {};
-    function share(key) { return (r[key] && r[key].msPerSec != null) ? r[key].msPerSec : '–'; }
-    ui.perfMore.textContent = 'ms/s: snap ' + share('snapshot') + ' · bub ' + share('findBubble') +
-      ' · dial ' + share('lockDial') + ' · card ' + share('findCatch');
+    // Whole ms only: the tenths pushed this line to 256 px in a 244 px card and clipped the last
+    // field on a live run, and at these magnitudes a tenth was never the deciding digit.
+    function share(key) { return (r[key] && r[key].msPerSec != null) ? Math.round(r[key].msPerSec) : '–'; }
+    ui.perfMore.textContent = 'per second: scan ' + share('snapshot') + ' · bubble ' + share('findBubble');
+    ui.perfRate.textContent = 'dial ' + share('lockDial') + ' · card ' + share('findCatch') + ' ms';
   }
 
   function render() {
@@ -5985,8 +6042,8 @@ const SPECIES = [
     var stats = (status && status.stats) || {};
 
     if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
-    else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' held';
-    else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cool';
+    else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' paused';
+    else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cooling';
     else if (phase === 'waiting') ui.mLeft.textContent = 'at ' + state.window.start;
     else ui.mLeft.textContent = minutesText(state.durationMs);
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));

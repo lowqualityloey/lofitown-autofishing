@@ -176,17 +176,19 @@ test('the frame report is on the panel, because a browser may take no console at
   // The Zen tab takes no synthetic keystrokes, so __fish.perf() cannot be read there. The numbers
   // still have to be reachable: on the panel, and from a screenshot.
   assert.ok(src.includes('perfLine: perfLine'), 'the line is registered for render');
-  assert.ok(src.includes('perfBox.append(perfLine, accLine, perfMore, perfJson)'), 'the block is built in the card');
+  assert.ok(src.includes('perfBox.append(perfLine, accLine, accMore, perfMore, perfRate, perfJson)'), 'the block is built in the card');
   const fn = src.slice(src.indexOf('function renderPerf('), src.indexOf('function render()'));
   assert.ok(fn.length > 0, 'renderPerf exists');
   assert.ok(fn.includes('fish().perf()'), 'the numbers are perf()\'s, not re-derived counters');
   assert.ok(fn.includes('p.p50') && fn.includes('p.p95') && fn.includes('p.worst'), 'the frame percentiles are shown');
-  assert.ok(fn.includes("'ms/s: snap '"), 'each detector prints its share of wall time');
+  assert.ok(fn.includes("'per second: scan '"), 'each detector prints its share of wall time');
+  assert.ok(fn.includes('Math.round(r[key].msPerSec)'), 'shares are whole ms, so the line cannot grow past the card');
+  assert.ok(fn.includes('ui.perfRate.textContent') && fn.includes("'dial '"), 'the dial and catch shares take their own line');
   assert.ok(fn.includes("share('lockDial')"), 'the dial search is one of them');
   assert.ok(fn.includes('catch (e) { p = null; }'), 'a missing perf() must not take the panel down');
   assert.ok(fn.includes('byWidth'), 'the rare-dial width report is on the panel');
-  assert.ok(fn.includes("'acc '"), 'the attempt accuracy line is shown');
-  assert.ok(fn.includes("' · hit '"), 'the acc line carries the accepted-press wedge rate');
+  assert.ok(fn.includes("'Caught '"), 'the attempt accuracy line is shown');
+  assert.ok(fn.includes("' presses landed'"), 'the acc line carries the accepted-press wedge rate');
   assert.ok(src.includes('renderPerf();'), 'render() refreshes it on the tick');
   const toggle = src.slice(src.indexOf("perfBox.addEventListener('click'"), src.indexOf('function zoneRect('));
   assert.ok(toggle.length > 0, 'the block is clickable');
@@ -250,8 +252,8 @@ test('reload resume and catch POSTs are opt-in, and resume no longer needs a clo
 test('a stop says what stopped it, and the hidden threshold is configurable', () => {
   assert.ok(src.includes("stopNote = 'last stop: ' + state.stopReason"), 'the reason is shown');
   assert.ok(src.includes("start after '"), 'and when the cooldown ends');
-  assert.ok(src.includes("stepperRow('Hidden stop', 'hidden')"), 'the hidden stop has a stepper');
+  assert.ok(src.includes("stepperRow('Stop when hidden', 'hidden')"), 'the hidden stop has a stepper');
   assert.match(src, /field: 'hiddenStopMs'/, 'the stepper writes the reducer field');
   assert.ok(src.includes('chainToggle: chainToggle'), 'the chain toggle is wired');
-  assert.ok(src.includes('Chain runs'), 'and labelled');
+  assert.ok(src.includes('Auto-start next run'), 'and labelled');
 });
