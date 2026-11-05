@@ -1,13 +1,17 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.29) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.31) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
 diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
 "292 of 300 presses landed"), on top of
 post-render detection over the merged WebGL layer, the stable first-press gate, containment's
 `inside-now` press, an allocation-free WebGL readback, a monotonic session catch clock and press
 verdicts split by evidence. The 3.9.28 two-tier split was rendered against a stub core and 3.9.29
-changes only its strings: neither has been looked at in a live tab yet. Live 3.9.23 baseline:
+changes only its strings. 3.9.29 has since been read in a live tab, which confirms 3.9.28's split: 142.9 fps, p50 6.9 ms,
+p95 11.6 ms, worst 18.4 ms, 3 catches from 3 attempts and 12 of 12 presses landed. That run is where
+3.9.30 comes from - the live per-second line measured 256 px inside the 244 px card and clipped its
+last field, so those detector shares are rounded to whole ms and split over two lines:
+with three-digit shares the single line still measured 241.7 px, leaving no room for a four-digit one. Live 3.9.23 baseline:
 141.1 fps, p50 6.9 ms, p95 11.9 ms, 25/25 presses accepted (that build's counter still mixes
 observed and inferred verdicts).** Read
 [the 2026-10-27 findings](#2026-10-27-findings-verified-against-the-live-game)

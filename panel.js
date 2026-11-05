@@ -710,9 +710,13 @@
     var accLine = el('div', 'perf', 'No attempts yet');
     var accMore = el('div', 'perf', '');
     var perfMore = el('div', 'perf', '');
+    // The four detector shares are split over two lines: at 9.5px the single line reached 241-252 px
+    // in the 244 px card once the shares were three digits wide, and a second line cannot be
+    // outgrown by a digit the way a single one can.
+    var perfRate = el('div', 'perf', '');
     var perfJson = el('pre', 'perfjson hide', '');
     perfBox.title = 'frame budget and fish accuracy; click for the full calibration report';
-    perfBox.append(perfLine, accLine, accMore, perfMore, perfJson);
+    perfBox.append(perfLine, accLine, accMore, perfMore, perfRate, perfJson);
     diagSec.body.appendChild(perfBox);
 
     // Tier 2 lives below the run view, never above it.
@@ -737,7 +741,7 @@
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, lastCatch: lastCatch,
       logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
-      perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfJson: perfJson
+      perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
@@ -1159,12 +1163,14 @@
     }
     var p = null;
     try { p = (fish() && fish().perf) ? fish().perf() : null; } catch (e) { p = null; }
-    if (!p || !p.frames) { ui.perfLine.textContent = 'No frames measured yet'; ui.perfMore.textContent = ''; return; }
+    if (!p || !p.frames) { ui.perfLine.textContent = 'No frames measured yet'; ui.perfMore.textContent = ''; ui.perfRate.textContent = ''; return; }
     ui.perfLine.textContent = p.fps + ' fps · ' + p.p50 + ' ms typical · ' + p.p95 + ' ms slow · ' + p.worst + ' ms worst';
     var r = p.rates || {};
-    function share(key) { return (r[key] && r[key].msPerSec != null) ? r[key].msPerSec : '–'; }
-    ui.perfMore.textContent = 'per second: scan ' + share('snapshot') + ' · bubble ' + share('findBubble') +
-      ' · dial ' + share('lockDial') + ' · card ' + share('findCatch') + ' ms';
+    // Whole ms only: the tenths pushed this line to 256 px in a 244 px card and clipped the last
+    // field on a live run, and at these magnitudes a tenth was never the deciding digit.
+    function share(key) { return (r[key] && r[key].msPerSec != null) ? Math.round(r[key].msPerSec) : '–'; }
+    ui.perfMore.textContent = 'per second: scan ' + share('snapshot') + ' · bubble ' + share('findBubble');
+    ui.perfRate.textContent = 'dial ' + share('lockDial') + ' · card ' + share('findCatch') + ' ms';
   }
 
   function render() {
