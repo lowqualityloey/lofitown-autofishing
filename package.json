@@ -14,6 +14,7 @@
     "test": "node --test",
     "serve": "node fishserve.js",
     "build:userscript": "node build-userscript.js",
-    "release": "node scripts/release.js"
+    "release": "node scripts/release.js",
+    "sync": "node scripts/sync-main.js"
   }
 }
