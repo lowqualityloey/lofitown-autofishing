@@ -23,9 +23,7 @@
  */
 'use strict';
 const { execFileSync } = require('child_process');
-const path = require('path');
 
-const ROOT = path.join(__dirname, '..');
 const MAIN = 'refs/heads/main';
 
 function git(args, cwd) {
@@ -105,4 +103,3 @@ if (holder) {
 
 const changed = git(['diff', '--shortstat', from, target], repo);
 if (changed) console.log(changed);
-void ROOT;
