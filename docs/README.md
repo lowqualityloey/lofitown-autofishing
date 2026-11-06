@@ -16,7 +16,7 @@
 | [reviews/2026-10-27-event-card-freeze.md](reviews/2026-10-27-event-card-freeze.md) | Review of the stuck catch-card bug and its fix. |
 | [reviews/2026-10-28-performance-review.md](reviews/2026-10-28-performance-review.md) | Performance review: where the frame budget actually goes, the findings ranked, and the smallest useful fixes. |
 | [reviews/2026-11-02-lag-and-first-press-review.md](reviews/2026-11-02-lag-and-first-press-review.md) | Two-axis review of the 3.9.10-3.9.12 work, including the snapshot path that silently never ran. |
-| [images/](images/) | README screenshots: the panel in-game and close up, both from the live 3.9.27 build. |
+| [images/](images/) | README screenshots: the panel in-game and close up, both from the live 3.9.31 build. |
 
 The lab notebook is not here: every measurement, fix and retraction lives in
 [AUTOFISH.md](../AUTOFISH.md), in the order it happened. Start at "Measured facts", then read the
