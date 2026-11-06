@@ -28,6 +28,8 @@ Go to <https://app.lofi.town/> and press **F5** so the script runs on a fresh pa
 
 ![The AutoFish panel](docs/images/panel.jpg)
 
+![The panel with both sections folded](docs/images/panel-folded.jpg)
+
 ### 4. Sit on a chair by the water - do this before Start
 
 lofi.town only offers the cast prompt to a **seated** character, so click a chair, bench or stool at the water's edge and wait for the game's own **CAST!** prompt to appear once.
