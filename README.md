@@ -64,7 +64,7 @@ Where each control lives, top to bottom:
 
 | Where | What lives there |
 | :--- | :--- |
-| **On the surface** - the short card in the folded screenshot | The phase chip and build, `Timer`, `catches`, `presses`, `today` against the cap, the catch-history block (all/today toggle, rarity strip, shiny and kept-day lines, last catch) and the **Start / Pause** plus **Stop** pair. Nothing here sets policy; only those two transport buttons act on the run. |
+| **On the surface** - the short card in the folded screenshot | The phase chip and build, `Timer`, `catches`, `presses`, `today` against the cap, the catch-history block around that strip (all/today toggle, shiny and kept-day lines, last catch) and the **Start / Pause** plus **Stop** pair. Nothing here sets policy; only those two transport buttons act on the run. |
 | **Session & guards** - folded | The four steppers (Session, Cooldown, Daily time cap, Stop when hidden), Clock window with its from/to times, Cozier popup, Auto-start next run, Resume after reload, Send catches to CSV, and Profile with its add and reset buttons. Everything decided once, opened once. |
 | **Diagnostics** - folded | fps with typical/slow/worst frame time, caught of attempts, rare dials and presses landed, per-second detector work, per-dial and per-card milliseconds; click the block for the raw frame report. Read-only. |
 
