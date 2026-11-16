@@ -1280,6 +1280,17 @@
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
     var focusNote = focus ? FOCUS_NOTE : '';
+    // A tap landing where no dial follows means a nearby player's name tag or an open
+    // profile is swallowing the cast: pause the clock and say to move spots. A cast that
+    // never lands (no prompt, no dial 90 s after a catch) gets its own retry line.
+    var playerNote = '';
+    if ((status && status.playerBlocked) || state.pauseReason === 'player-block') {
+      if (phase === 'running' || phase === 'paused') playerNote = 'player in the way — move spots or close the profile';
+    }
+    var castNote = '';
+    if (state.pauseReason === 'cast-stall' && (phase === 'running' || phase === 'paused')) {
+      castNote = 'cast stalled — retrying, check for a profile popup';
+    }
     // A stop is the thing the player most needs to understand, and it used to be invisible: the
     // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
     var stopNote = '';
@@ -1292,10 +1303,11 @@
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || seatNote || focusNote || banner || stopNote;
+    var note = stallNote || seatNote || focusNote || playerNote || castNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (seatNote) ui.banner.className = 'banner seat';
+    else if (playerNote) ui.banner.className = 'banner seat';
     else if (focus && !banner) ui.banner.className = 'banner focus';
     else if (stopNote && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
@@ -1308,6 +1320,7 @@
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
+      if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
     }
 
     place();
@@ -1451,7 +1464,12 @@
       // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
       seat: !!(status && status.needsSeat),
       // a stalled core must not be charged for time it never fished
-      stalled: !!(status && status.running && status.stalled)
+      stalled: !!(status && status.running && status.stalled),
+      // cast-stall vs no-bite split + nearby-player guard: the reducer pauses with a named
+      // reason instead of burning the session as a generic no-catch
+      sinceBubbleMs: status && typeof status.sinceBubbleMs === 'number' ? status.sinceBubbleMs : null,
+      sinceDialMs: status && typeof status.sinceDialMs === 'number' ? status.sinceDialMs : null,
+      playerBlocked: !!(status && status.playerBlocked)
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the

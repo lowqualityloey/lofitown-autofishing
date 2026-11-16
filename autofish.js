@@ -614,6 +614,7 @@
         { worstFrameMs: st.worstFrameMs });
     }
     if (st.needsSeat) return o('not-seated', 'warn', 'sit on a chair by the water', {});
+    if (st.playerBlocked) return o('nearby-player', 'warn', 'a tap keeps landing where no dial follows: move spots or close the profile', { playerBlocked: true });
     if ((st.accepted || 0) + (st.rejected || 0) >= 20 &&
         st.acceptRate != null && st.acceptRate < 0.9) {
       return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
@@ -1859,6 +1860,40 @@ const SPECIES = [
    * The order is the point: the shared snapshot answers "is there anything there" for free, and
    * only a yes buys the full-resolution read that refines the centre.
    */
+  /* ---- nearby-player guard -------------------------------------------------
+   * A nearby player's name tag is the same white-with-dark-text shape one size
+   * smaller than CAST!/REEL!. Tapping one opens that player's profile and the
+   * run stalls behind the modal (reported live on BrowserOS-neo: bot beside
+   * another player, tap opened the profile, no prompt, no dial).
+   * Rule: a boxed sighting must repeat at the same spot before it may tap;
+   * an `anywhere` blob never confirms (the Space rung still casts); three
+   * taps on one spot that never produce a dial suppress that spot for 30 s.
+   * One record does both jobs: sightings continue through a block, so the
+   * tap count cannot go stale while taps are held.
+   */
+  var BUBBLE_CONFIRM_PX = 12;
+  var BUBBLE_CONFIRM_MS = 2000;
+  var PLAYER_TAPS = 3;
+  var PLAYER_BLOCK_MS = 30000;
+  function bubbleConfirmed(b, t) {
+    if (!b || b.via === 'anywhere') return false;
+    var p = F.bubblePrev;
+    var same = !!p && Math.abs(p.x - b.cx) <= BUBBLE_CONFIRM_PX &&
+      Math.abs(p.y - b.cy) <= BUBBLE_CONFIRM_PX && (t - p.at) <= BUBBLE_CONFIRM_MS;
+    F.bubblePrev = { x: b.cx, y: b.cy, at: t, n: same ? p.n + 1 : 1,
+      taps: same ? (p.taps || 0) : 0,
+      blockedUntil: same ? (p.blockedUntil || 0) : 0 };
+    var q = F.bubblePrev;
+    if (q.blockedUntil && t < q.blockedUntil) return false;
+    return q.n >= 2;
+  }
+  function noteBubbleTap(t) {
+    var q = F.bubblePrev;
+    if (!q) return;
+    q.taps += 1;
+    if (q.taps >= PLAYER_TAPS) q.blockedUntil = t + PLAYER_BLOCK_MS;
+  }
+
   F.findBubble = function () {
     const t = now();
     if (t - (F.bubbleScanAt || 0) < (F.geo ? 90 : 40)) return null;
@@ -3016,6 +3051,7 @@ const SPECIES = [
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
+    F.bubblePrev = null;
     F.dialAnyFail = 0; F.dialAnyAt = 0;                       // recovery backoff starts fresh each run
     F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
@@ -3097,6 +3133,7 @@ const SPECIES = [
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.ghostGeo = null;
     F.bubbleMiss = 0; F.stallRetry = 0;
+    F.bubblePrev = null;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
     F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
@@ -3369,16 +3406,24 @@ const SPECIES = [
         // SEE, not the last one we happened to click: a rung that no longer taps used to freeze the
         // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
         // never reach a dial 100 px away.
-        F.hint = { x: b.cx, y: b.cy + 53 };
-        F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
+        // Boxed prompts steer the dial hint; an `anywhere` blob never moves it, so a
+        // nearby player's name tag cannot drag the dial search off the widget.
+        var isBox = b.via !== 'anywhere';
+        if (isBox) {
+          F.hint = { x: b.cx, y: b.cy + 53 };
+          F.dialAnyFail = 0; F.dialAnyAt = 0;    // a cast is new evidence: recover promptly again
+        }
         // A blob found by the whole-surface scan is only a hint: it can be a player's name tag,
-        // and clicking one opens that player's profile. The boxed scan is the one allowed to
-        // click; the ladder's Space rung still casts when the hint was all we had.
-        const clickable = b.via !== 'anywhere';
-        if (rec.tap && clickable) tap(b.cx, b.cy);
+        // and clicking one opens that player's profile. bubbleConfirmed is the single tap
+        // gate: it never confirms an `anywhere` blob, and a boxed one only after the same
+        // spot repeats. The ladder's Space rung still casts when the hint was all we had.
+        var confirmed = bubbleConfirmed(b, t);
+        var tapOk = !!(rec.tap && confirmed);
+        if (tapOk) tap(b.cx, b.cy);
+        if (tapOk) noteBubbleTap(t);
         F.lastPress = t;
         F.stats.bubbles++;
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: rec.tap && clickable, space: rec.space });
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: tapOk, space: rec.space, confirmed: confirmed });
         if (rec.space) {
           F.lastSpaceTry = t;
           space(F.opts.spaceTarget);
@@ -3551,6 +3596,7 @@ const SPECIES = [
         F.armed = true;                            // arc travel for this lock
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
+        F.bubblePrev = null;                                    // a dial proves the prompt was real: forget tap suspicion
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
@@ -3706,6 +3752,11 @@ const SPECIES = [
       hint: F.hint,
       pxScale: frame && frame.cw ? +(frame.w / frame.cw).toFixed(3) : null,
       needsSeat: !!F.needsSeat,
+      // inlined (not a helper): status.test.js compiles F.status out of the core
+      // with only F/now in scope, so a closure call would not resolve there.
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && now() < F.bubblePrev.blockedUntil),
+      sinceBubbleMs: F.lastBubbleAt ? Math.round(now() - F.lastBubbleAt) : null,
+      sinceDialMs: F.geoAt ? Math.round(now() - F.geoAt) : null,
       stats: F.stats || {},
       accuracy: {
         attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
@@ -3747,6 +3798,7 @@ const SPECIES = [
       longtasks: p.longtasks,
       worstFrameMs: p.worst,
       needsSeat: !!F.needsSeat,
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && t < F.bubblePrev.blockedUntil),
       sincePromptMs: F.lastBubbleAt ? Math.round(t - F.lastBubbleAt) : null,
       sinceDialMs: F.geoAt ? Math.round(t - F.geoAt) : null,
       accepted: s.pressAccepted || 0,

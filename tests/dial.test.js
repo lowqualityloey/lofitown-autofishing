@@ -138,8 +138,13 @@ test('a prompt found anywhere is a hint, never a click target', () => {
   // included - and tapping one opened that player's profile in the middle of a session.
   assert.match(SRC, /via: 'anywhere'/);
   assert.match(SRC, /via: 'box'/);
-  assert.match(SRC, /const clickable = b\.via !== 'anywhere';/);
-  assert.match(SRC, /if \(rec\.tap && clickable\) tap\(b\.cx, b\.cy\);/);
+  assert.match(SRC, /var confirmed = bubbleConfirmed\(b, t\);/);
+  assert.match(SRC, /var tapOk = !!\(rec\.tap && confirmed\);/);
+  assert.match(SRC, /if \(tapOk\) tap\(b\.cx, b\.cy\);/);
+  assert.match(SRC, /if \(tapOk\) noteBubbleTap\(t\);/);
+  // Boxed prompts steer the hint; an `anywhere` name tag must not drag the dial search.
+  assert.match(SRC, /var isBox = b\.via !== 'anywhere';/);
+  assert.match(SRC, /if \(isBox\) \{[\s\S]*?F\.hint = \{ x: b\.cx, y: b\.cy \+ 53 \};/);
   // A name tag is one size smaller than the prompt: the box scan refuses anything under 28 px tall
   // and anything that is not mostly solid white.
   assert.match(SRC, /bh >= 28 && bh < 95/);

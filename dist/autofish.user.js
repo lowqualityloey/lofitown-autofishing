@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.31
+// @version      3.9.32
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.31" };
+  const F = { version: "3.9.32" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -632,6 +632,7 @@ window.__autofishInstalled = true;
         { worstFrameMs: st.worstFrameMs });
     }
     if (st.needsSeat) return o('not-seated', 'warn', 'sit on a chair by the water', {});
+    if (st.playerBlocked) return o('nearby-player', 'warn', 'a tap keeps landing where no dial follows: move spots or close the profile', { playerBlocked: true });
     if ((st.accepted || 0) + (st.rejected || 0) >= 20 &&
         st.acceptRate != null && st.acceptRate < 0.9) {
       return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
@@ -1877,6 +1878,40 @@ const SPECIES = [
    * The order is the point: the shared snapshot answers "is there anything there" for free, and
    * only a yes buys the full-resolution read that refines the centre.
    */
+  /* ---- nearby-player guard -------------------------------------------------
+   * A nearby player's name tag is the same white-with-dark-text shape one size
+   * smaller than CAST!/REEL!. Tapping one opens that player's profile and the
+   * run stalls behind the modal (reported live on BrowserOS-neo: bot beside
+   * another player, tap opened the profile, no prompt, no dial).
+   * Rule: a boxed sighting must repeat at the same spot before it may tap;
+   * an `anywhere` blob never confirms (the Space rung still casts); three
+   * taps on one spot that never produce a dial suppress that spot for 30 s.
+   * One record does both jobs: sightings continue through a block, so the
+   * tap count cannot go stale while taps are held.
+   */
+  var BUBBLE_CONFIRM_PX = 12;
+  var BUBBLE_CONFIRM_MS = 2000;
+  var PLAYER_TAPS = 3;
+  var PLAYER_BLOCK_MS = 30000;
+  function bubbleConfirmed(b, t) {
+    if (!b || b.via === 'anywhere') return false;
+    var p = F.bubblePrev;
+    var same = !!p && Math.abs(p.x - b.cx) <= BUBBLE_CONFIRM_PX &&
+      Math.abs(p.y - b.cy) <= BUBBLE_CONFIRM_PX && (t - p.at) <= BUBBLE_CONFIRM_MS;
+    F.bubblePrev = { x: b.cx, y: b.cy, at: t, n: same ? p.n + 1 : 1,
+      taps: same ? (p.taps || 0) : 0,
+      blockedUntil: same ? (p.blockedUntil || 0) : 0 };
+    var q = F.bubblePrev;
+    if (q.blockedUntil && t < q.blockedUntil) return false;
+    return q.n >= 2;
+  }
+  function noteBubbleTap(t) {
+    var q = F.bubblePrev;
+    if (!q) return;
+    q.taps += 1;
+    if (q.taps >= PLAYER_TAPS) q.blockedUntil = t + PLAYER_BLOCK_MS;
+  }
+
   F.findBubble = function () {
     const t = now();
     if (t - (F.bubbleScanAt || 0) < (F.geo ? 90 : 40)) return null;
@@ -3034,6 +3069,7 @@ const SPECIES = [
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
+    F.bubblePrev = null;
     F.dialAnyFail = 0; F.dialAnyAt = 0;                       // recovery backoff starts fresh each run
     F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
@@ -3115,6 +3151,7 @@ const SPECIES = [
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.ghostGeo = null;
     F.bubbleMiss = 0; F.stallRetry = 0;
+    F.bubblePrev = null;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
     F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
@@ -3387,16 +3424,24 @@ const SPECIES = [
         // SEE, not the last one we happened to click: a rung that no longer taps used to freeze the
         // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
         // never reach a dial 100 px away.
-        F.hint = { x: b.cx, y: b.cy + 53 };
-        F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
+        // Boxed prompts steer the dial hint; an `anywhere` blob never moves it, so a
+        // nearby player's name tag cannot drag the dial search off the widget.
+        var isBox = b.via !== 'anywhere';
+        if (isBox) {
+          F.hint = { x: b.cx, y: b.cy + 53 };
+          F.dialAnyFail = 0; F.dialAnyAt = 0;    // a cast is new evidence: recover promptly again
+        }
         // A blob found by the whole-surface scan is only a hint: it can be a player's name tag,
-        // and clicking one opens that player's profile. The boxed scan is the one allowed to
-        // click; the ladder's Space rung still casts when the hint was all we had.
-        const clickable = b.via !== 'anywhere';
-        if (rec.tap && clickable) tap(b.cx, b.cy);
+        // and clicking one opens that player's profile. bubbleConfirmed is the single tap
+        // gate: it never confirms an `anywhere` blob, and a boxed one only after the same
+        // spot repeats. The ladder's Space rung still casts when the hint was all we had.
+        var confirmed = bubbleConfirmed(b, t);
+        var tapOk = !!(rec.tap && confirmed);
+        if (tapOk) tap(b.cx, b.cy);
+        if (tapOk) noteBubbleTap(t);
         F.lastPress = t;
         F.stats.bubbles++;
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: rec.tap && clickable, space: rec.space });
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: tapOk, space: rec.space, confirmed: confirmed });
         if (rec.space) {
           F.lastSpaceTry = t;
           space(F.opts.spaceTarget);
@@ -3569,6 +3614,7 @@ const SPECIES = [
         F.armed = true;                            // arc travel for this lock
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
+        F.bubblePrev = null;                                    // a dial proves the prompt was real: forget tap suspicion
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
@@ -3724,6 +3770,11 @@ const SPECIES = [
       hint: F.hint,
       pxScale: frame && frame.cw ? +(frame.w / frame.cw).toFixed(3) : null,
       needsSeat: !!F.needsSeat,
+      // inlined (not a helper): status.test.js compiles F.status out of the core
+      // with only F/now in scope, so a closure call would not resolve there.
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && now() < F.bubblePrev.blockedUntil),
+      sinceBubbleMs: F.lastBubbleAt ? Math.round(now() - F.lastBubbleAt) : null,
+      sinceDialMs: F.geoAt ? Math.round(now() - F.geoAt) : null,
       stats: F.stats || {},
       accuracy: {
         attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
@@ -3765,6 +3816,7 @@ const SPECIES = [
       longtasks: p.longtasks,
       worstFrameMs: p.worst,
       needsSeat: !!F.needsSeat,
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && t < F.bubblePrev.blockedUntil),
       sincePromptMs: F.lastBubbleAt ? Math.round(t - F.lastBubbleAt) : null,
       sinceDialMs: F.geoAt ? Math.round(t - F.geoAt) : null,
       accepted: s.pressAccepted || 0,
@@ -4383,6 +4435,11 @@ const SPECIES = [
   }
 
   var NO_CATCH_MS = 10 * 60 * 1000;   // nothing bites for this long -> check the page
+  var CAST_STALL_MS = 90 * 1000;       // post-catch, no prompt and no dial this long -> the cast never landed
+  // cast-stall and player-block share no-catch's bounded retry: pause, retry, then stop.
+  function retryable(reason) {
+    return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block';
+  }
   var RETRY_DELAY_MS = 60 * 1000;
   var MAX_RETRIES = 3;
   var HIDDEN_PAUSE_MS = 5000;         // the game freezes while the tab is hidden
@@ -4398,7 +4455,7 @@ const SPECIES = [
     s.pauseReason = reason;
     s.lastTickAt = null;
     s.visibleSince = null;
-    if (reason === 'no-catch') s.retryAt = at + RETRY_DELAY_MS;
+    if (retryable(reason)) s.retryAt = at + RETRY_DELAY_MS;
     // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
     // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
     // Keeping it alive is only safe if it cannot ACT while it waits: a cast retry puts a line in the
@@ -4463,9 +4520,9 @@ const SPECIES = [
       }
       return { state: s, actions: [] };
     }
-    if (s.pauseReason === 'no-catch') {
+    if (retryable(s.pauseReason)) {
       if (s.retryAt != null && at >= s.retryAt) {
-        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
+        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, s.pauseReason) };
         s.retries += 1;
         s.lastCatchAt = at;
         return runningAgain(s, at);
@@ -4711,6 +4768,19 @@ const SPECIES = [
 
       // 7. nothing has bitten in a while
       var sinceCatch = at - (s.lastCatchAt == null ? s.startedAt : s.lastCatchAt);
+      // A profile modal open over the game blocks prompts without stopping the clock: pause
+      // with a named reason instead of burning the session as a generic no-catch.
+      if (fact.playerBlocked === true) {
+        return paused(s, at, 'player-block');
+      }
+      // Post-catch, neither a prompt nor a dial for 90 s means the cast never landed
+      // (missed reel, line out, or a modal swallowing inputs) — still short of the 10-minute
+      // no-bite watchdog, so pause early with a distinct reason and the same bounded retry.
+      if (sinceCatch > CAST_STALL_MS && sinceCatch <= NO_CATCH_MS &&
+          typeof fact.sinceBubbleMs === 'number' && typeof fact.sinceDialMs === 'number' &&
+          fact.sinceBubbleMs > CAST_STALL_MS && fact.sinceDialMs > CAST_STALL_MS) {
+        return paused(s, at, 'cast-stall');
+      }
       if (sinceCatch > NO_CATCH_MS) {
         if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
         return paused(s, at, 'no-catch');
@@ -6106,6 +6176,17 @@ const SPECIES = [
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
     var focusNote = focus ? FOCUS_NOTE : '';
+    // A tap landing where no dial follows means a nearby player's name tag or an open
+    // profile is swallowing the cast: pause the clock and say to move spots. A cast that
+    // never lands (no prompt, no dial 90 s after a catch) gets its own retry line.
+    var playerNote = '';
+    if ((status && status.playerBlocked) || state.pauseReason === 'player-block') {
+      if (phase === 'running' || phase === 'paused') playerNote = 'player in the way — move spots or close the profile';
+    }
+    var castNote = '';
+    if (state.pauseReason === 'cast-stall' && (phase === 'running' || phase === 'paused')) {
+      castNote = 'cast stalled — retrying, check for a profile popup';
+    }
     // A stop is the thing the player most needs to understand, and it used to be invisible: the
     // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
     var stopNote = '';
@@ -6118,10 +6199,11 @@ const SPECIES = [
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || seatNote || focusNote || banner || stopNote;
+    var note = stallNote || seatNote || focusNote || playerNote || castNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (seatNote) ui.banner.className = 'banner seat';
+    else if (playerNote) ui.banner.className = 'banner seat';
     else if (focus && !banner) ui.banner.className = 'banner focus';
     else if (stopNote && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
@@ -6134,6 +6216,7 @@ const SPECIES = [
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
+      if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
     }
 
     place();
@@ -6277,7 +6360,12 @@ const SPECIES = [
       // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
       seat: !!(status && status.needsSeat),
       // a stalled core must not be charged for time it never fished
-      stalled: !!(status && status.running && status.stalled)
+      stalled: !!(status && status.running && status.stalled),
+      // cast-stall vs no-bite split + nearby-player guard: the reducer pauses with a named
+      // reason instead of burning the session as a generic no-catch
+      sinceBubbleMs: status && typeof status.sinceBubbleMs === 'number' ? status.sinceBubbleMs : null,
+      sinceDialMs: status && typeof status.sinceDialMs === 'number' ? status.sinceDialMs : null,
+      playerBlocked: !!(status && status.playerBlocked)
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the
