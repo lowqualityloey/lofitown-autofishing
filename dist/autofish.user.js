@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.31
+// @version      3.9.40
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.31" };
+  const F = { version: "3.9.40" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -314,6 +314,23 @@ window.__autofishInstalled = true;
     const maxWidth = cfg.ghostMaxWidthDeg != null ? cfg.ghostMaxWidthDeg : 60;
     const minShrink = cfg.ghostMinShrinkDeg != null ? cfg.ghostMinShrinkDeg : 5;
     return held >= 0 && held < maxHeld && width > 0 && width < maxWidth && shrink >= minShrink;
+  }
+
+  /**
+   * A narrow ring blinks: the rim sampler loses a thin wedge for a few frames while the pin
+   * keeps turning underneath, and the bad-sample branch would call that a ghost and lose the
+   * fish (live: two 40 deg dials, spin 50-140 deg/s, zero presses, both fish gone - the 85%).
+   * A fade - the thing the ghost rule is for - sits still, so a FRESH non-zero spin estimate
+   * tells them apart. The witness is already on the lock: the sampler freezes geo._om/_mt at
+   * the last valid frame, so no new state is kept and staleness expires the hold on its own.
+   * A solved dial never reaches here (it has presses). _om is the midpoint rate; the planner
+   * uses its negation, and only the magnitude matters here.
+   */
+  function spinAlive(geo, t) {
+    if (!geo || !(geo.width > 0 && geo.width < 60)) return false;   // narrow: the gate's own band
+    const om = geo._om;
+    if (om == null || !isFinite(om) || Math.abs(om) <= 20) return false;   // still or unmeasured
+    return (t - (geo._mt || 0)) < 1000;   // blind frames are ms-scale; then the ghost rule decides
   }
 
   /**
@@ -632,6 +649,8 @@ window.__autofishInstalled = true;
         { worstFrameMs: st.worstFrameMs });
     }
     if (st.needsSeat) return o('not-seated', 'warn', 'sit on a chair by the water', {});
+    if (st.profileOpen) return o('profile-open', 'warn', 'a player profile is open over the game: close it to resume', {});
+    if (st.playerBlocked) return o('nearby-player', 'warn', 'a tap keeps landing where no dial follows: move spots or close the profile', { playerBlocked: true });
     if ((st.accepted || 0) + (st.rejected || 0) >= 20 &&
         st.acceptRate != null && st.acceptRate < 0.9) {
       return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
@@ -1591,6 +1610,8 @@ const SPECIES = [
           const fill = n / Math.max(1, bw * bh);
           if (bh >= 28 && bh < 95 && fill >= 0.45 && (!best || n > best.n)) {
             best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n, via: 'box' };
+            var gm = glyphMetrics(d, w, s, x, y0, y1);
+            best.glyph = gm.ok; best.gdark = +gm.dark.toFixed(3); best.gsoft = +gm.soft.toFixed(3);
           }
         }
         s = -1;
@@ -1877,6 +1898,106 @@ const SPECIES = [
    * The order is the point: the shared snapshot answers "is there anything there" for free, and
    * only a yes buys the full-resolution read that refines the centre.
    */
+  // <glyph-core>
+  /*
+   * Prompt glyphs, read off the buffer bubbleInBox already holds - no second readback.
+   * Measured live against real captures (3.9.33 calibration): the prompt's 3-line text is
+   * SOFT (translucent grey, alpha 40-120: 17% of the inset, ~0 opaque-dark cells), while a
+   * name tag's text is OPAQUE dark (26.5% at alpha>120, lum<100). The old tall-run model was
+   * built for opaque caps that do not exist, so the gate is inverted: a boxed blob may tap
+   * unless it carries opaque-dark text. The inset ignores the bubble's own outline.
+   * Measured margins: prompt 0.002, blank pre-text frames 0.004, tag 0.265 - the 0.05 line
+   * stands 10x off both sides. Fail direction is unchanged (a refused prompt still fishes
+   * on the Space rung; a tapped tag opens a profile and stalls the run).
+   */
+  var GLYPH_OPAQUE_MAX = 0.05; // opaque-dark share above this is tag text, never prompt text
+  function glyphMetrics(d, w, s, e, y0, y1) {
+    var m = { ok: false, dark: 0, soft: 0 };
+    var x0 = s + 2, x1 = e - 2, t0 = y0 + 2, t1 = y1 - 2;
+    if (x1 <= x0 || t1 <= t0) return m;
+    var area = (x1 - x0) * (t1 - t0), dark = 0, soft = 0;
+    var stride = (w - (x1 - x0)) * 4;   // consumed inset plus the untouched right margin
+    for (var y = t0, i = (t0 * w + x0) * 4; y < t1; y++, i += stride) {
+      for (var xx = x0; xx < x1; xx++, i += 4) {
+        var l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        if (d[i + 3] > 120 && l < 100) dark++;
+        else if (d[i + 3] > 40 && l < 160) soft++;
+      }
+    }
+    m.dark = dark / area;
+    m.soft = soft / area;
+    m.ok = m.dark <= GLYPH_OPAQUE_MAX;
+    return m;
+  }
+  // </glyph-core>
+
+  /* ---- nearby-player guard -------------------------------------------------
+   * A nearby player's name tag is the same white-with-dark-text shape one size
+   * smaller than CAST!/REEL!. Tapping one opens that player's profile and the
+   * run stalls behind the modal (reported live on BrowserOS-neo: bot beside
+   * another player, tap opened the profile, no prompt, no dial).
+   * Rule: a boxed sighting must repeat at the same spot before it may tap, and
+   * since 3.9.33 it must also carry prompt glyphs (tall dark runs, not tag text);
+   * an `anywhere` blob never confirms (the Space rung still casts); three
+   * taps on one spot that never produce a dial suppress that spot for 30 s.
+   * One record does both jobs: sightings continue through a block, so the
+   * tap count cannot go stale while taps are held.
+   */
+  var BUBBLE_CONFIRM_PX = 12;
+  var BUBBLE_CONFIRM_MS = 2000;
+  var PLAYER_TAPS = 3;
+  var PLAYER_BLOCK_MS = 30000;
+  /** A player profile open over the game swallows inputs and hides prompts. DOM-visible
+   * (the dialog's buttons), so no readback. Our own panel lives in closed shadow DOM,
+   * which this scan cannot see, so no self-exclusion is needed. */
+  F.profileOpen = function () {
+    try {
+      if (typeof document === 'undefined' || !document.querySelectorAll) return false;
+      var bs = document.querySelectorAll('button');
+      for (var i = 0; i < bs.length; i++) {
+        var tx = (bs[i].textContent || '').trim();
+        if (tx === 'Send DM' || tx === 'Burrows') return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+
+  /** Try to dismiss an open player profile. Unverified live: if the game does not bind
+   * Escape, this is a no-op and the session pause holds the clock instead. */
+  function tryEscapeProfile(t) {
+    if (t - (F.lastProfileCheck || 0) <= 2000) return;
+    F.lastProfileCheck = t;
+    if (!F.profileOpen()) return;
+    if (t - (F.lastEscape || 0) <= 5000) return;
+    F.lastEscape = t;
+    try {
+      var escInit = { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true, composed: true };
+      document.dispatchEvent(new KeyboardEvent('keydown', escInit));
+      document.dispatchEvent(new KeyboardEvent('keyup', escInit));
+    } catch (e) {}
+    L('escape profile', {});
+  }
+
+  function bubbleConfirmed(b, t) {
+    if (!b || b.via === 'anywhere') return false;
+    if (b.glyph === false) return false;   // fail closed: a blob carrying opaque tag text never taps
+    var p = F.bubblePrev;
+    var same = !!p && Math.abs(p.x - b.cx) <= BUBBLE_CONFIRM_PX &&
+      Math.abs(p.y - b.cy) <= BUBBLE_CONFIRM_PX && (t - p.at) <= BUBBLE_CONFIRM_MS;
+    F.bubblePrev = { x: b.cx, y: b.cy, at: t, n: same ? p.n + 1 : 1,
+      taps: same ? (p.taps || 0) : 0,
+      blockedUntil: same ? (p.blockedUntil || 0) : 0 };
+    var q = F.bubblePrev;
+    if (q.blockedUntil && t < q.blockedUntil) return false;
+    return q.n >= 2;
+  }
+  function noteBubbleTap(t) {
+    var q = F.bubblePrev;
+    if (!q) return;
+    q.taps += 1;
+    if (q.taps >= PLAYER_TAPS) q.blockedUntil = t + PLAYER_BLOCK_MS;
+  }
+
   F.findBubble = function () {
     const t = now();
     if (t - (F.bubbleScanAt || 0) < (F.geo ? 90 : 40)) return null;
@@ -3029,11 +3150,12 @@ const SPECIES = [
       ? { x: F.lastGeo.cx, y: F.lastGeo.cy }
       : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
           y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
-    F.txtAt = now(); F.cardWait = null;                        // only text drawn from here on counts
+    F.txtAt = now(); F.cardWait = null;                           // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
+    F.bubblePrev = null; F.lastBubbleCause = null; F.lastDialCause = null; F.lastAttemptLoss = null;
     F.dialAnyFail = 0; F.dialAnyAt = 0;                       // recovery backoff starts fresh each run
     F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
@@ -3115,6 +3237,7 @@ const SPECIES = [
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.ghostGeo = null;
     F.bubbleMiss = 0; F.stallRetry = 0;
+    F.bubblePrev = null;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
     F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
@@ -3293,6 +3416,9 @@ const SPECIES = [
     if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
     if (F.paused) return;
     if (t - F.startedAt > F.opts.maxMinutes * 60000) { L('maxMinutes'); F.stop(); return; }
+    // 0a. an open player profile swallows inputs and hides prompts. Try Escape once in a
+    // while; the session pause (profile-open) holds the clock whether or not it lands.
+    tryEscapeProfile(t);
     // A fish that has shown no dial and taken no press for a long time is over; the client's own
     // timer is 15-40 s, so this only fires when the flow itself stalled (a missed re-cast).
     if (F.attempt && F.attempt.pendingLoss && t - F.attempt.pendingLoss > (F.opts.lossGraceMs || 2500)) {
@@ -3387,16 +3513,27 @@ const SPECIES = [
         // SEE, not the last one we happened to click: a rung that no longer taps used to freeze the
         // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
         // never reach a dial 100 px away.
-        F.hint = { x: b.cx, y: b.cy + 53 };
-        F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
+        // Boxed prompts steer the dial hint; an `anywhere` blob never moves it, so a
+        // nearby player's name tag cannot drag the dial search off the widget.
+        var isBox = b.via !== 'anywhere';
+        if (isBox) {
+          F.hint = { x: b.cx, y: b.cy + 53 };
+          F.dialAnyFail = 0; F.dialAnyAt = 0;    // a cast is new evidence: recover promptly again
+        }
         // A blob found by the whole-surface scan is only a hint: it can be a player's name tag,
-        // and clicking one opens that player's profile. The boxed scan is the one allowed to
-        // click; the ladder's Space rung still casts when the hint was all we had.
-        const clickable = b.via !== 'anywhere';
-        if (rec.tap && clickable) tap(b.cx, b.cy);
+        // and clicking one opens that player's profile. bubbleConfirmed is the single tap
+        // gate: it never confirms an `anywhere` blob, and a boxed one only after the same
+        // spot repeats. The ladder's Space rung still casts when the hint was all we had.
+        var confirmed = bubbleConfirmed(b, t);
+        var tapOk = !!(rec.tap && confirmed);
+        if (tapOk) tap(b.cx, b.cy);
+        if (tapOk) noteBubbleTap(t);
+        // The press that summons the dial is decided here; the tail is too short to prove it
+        // later, so the last prompt action persists until the next dial lock reads it.
+        F.lastBubbleCause = { tap: tapOk, space: !!rec.space, glyph: b.glyph === true, at: t };
         F.lastPress = t;
         F.stats.bubbles++;
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: rec.tap && clickable, space: rec.space });
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: tapOk, space: rec.space, confirmed: confirmed, glyph: b.glyph === true, gdark: typeof b.gdark === 'number' ? b.gdark : null, gsoft: typeof b.gsoft === 'number' ? b.gsoft : null });
         if (rec.space) {
           F.lastSpaceTry = t;
           space(F.opts.spaceTarget);
@@ -3415,6 +3552,9 @@ const SPECIES = [
           // appears in the same widget. Dropping the lock there cost a re-lock scan plus a lock
           // on the fading ring, ~300 ms per press. Hold the geometry briefly instead.
           if (F.pressesThisDial > 0 && t - F.lastPress < (F.opts.relockGraceMs || 450)) return;
+          // A narrow unpressed dial with a live spin estimate is blinking, not fading: ride
+          // through the blind frames so the planner can take the arrival it was tracking.
+          if (F.pressesThisDial === 0 && spinAlive(F.geo, t)) { F.stats.narrowHolds = (F.stats.narrowHolds || 0) + 1; return; }
           cancelPend();
           closeDial(t, s && s.ring);
           F.geo = null; F.bad = 0; F.pressesThisDial = 0;
@@ -3568,7 +3708,13 @@ const SPECIES = [
         g._armed0 = !!F.armed;
         F.armed = true;                            // arc travel for this lock
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
+        // Which rung summoned this dial: the last prompt action before the lock. Stale (> one
+        // cast cycle old) means the dial arrived without a prompt press we saw - say so.
+        var bc = F.lastBubbleCause, freshBc = bc && (t - bc.at) < (F.opts.castRungResetMs || 10000);
+        F.lastDialCause = { tap: !!(freshBc && bc.tap), space: !!(freshBc && bc.space), unknown: !freshBc, at: freshBc ? bc.at : 0, dialAt: t };
+        var dcCause = F.lastDialCause.unknown ? 'unknown' : (F.lastDialCause.tap && F.lastDialCause.space ? 'tap+space' : (F.lastDialCause.tap ? 'tap' : (F.lastDialCause.space ? 'space' : 'none')));
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
+        F.bubblePrev = null;                                    // a dial proves the prompt was real: forget tap suspicion
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
@@ -3578,7 +3724,7 @@ const SPECIES = [
         F.attempt.touched = t;
         F.attempt.pendingLoss = null;
         F.needsSeat = false;                                    // a dial means the cast took
-        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0 });
+        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0, cause: dcCause });
         const dialW = Number(g.width) || 0;
         if (dialW > 0) {
           F.attempt.widthSum += dialW;
@@ -3701,6 +3847,9 @@ const SPECIES = [
       arm: a.arm, band, width: a.avgWidth, widthBand: a.widthBand, why: a.why,
       species: a.species || null, rarity: a.rarity || null,
     });
+    // A lost fish must stay attributable after the 8-entry tail expires: the reason, the
+    // attempt number, and the dial score persist on status until the next loss (or start).
+    if (verdict === 'lost') F.lastAttemptLoss = { n: a.n, why: a.why, ms: a.ms, dials: a.dials, presses: a.presses, dialHits: a.dialHits, dialMisses: a.dialMisses, avgWidth: a.avgWidth, at: t };
     return a;
   }
 
@@ -3724,6 +3873,14 @@ const SPECIES = [
       hint: F.hint,
       pxScale: frame && frame.cw ? +(frame.w / frame.cw).toFixed(3) : null,
       needsSeat: !!F.needsSeat,
+      // inlined (not a helper): status.test.js compiles F.status out of the core
+      // with only F/now in scope, so a closure call would not resolve there.
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && now() < F.bubblePrev.blockedUntil),
+      profileOpen: typeof F.profileOpen === 'function' ? !!F.profileOpen() : false,
+      lastDialCause: F.lastDialCause || null,
+      lastAttemptLoss: F.lastAttemptLoss || null,
+      sinceBubbleMs: F.lastBubbleAt ? Math.round(now() - F.lastBubbleAt) : null,
+      sinceDialMs: F.geoAt ? Math.round(now() - F.geoAt) : null,
       stats: F.stats || {},
       accuracy: {
         attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
@@ -3765,6 +3922,8 @@ const SPECIES = [
       longtasks: p.longtasks,
       worstFrameMs: p.worst,
       needsSeat: !!F.needsSeat,
+      profileOpen: typeof F.profileOpen === 'function' ? !!F.profileOpen() : false,
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && t < F.bubblePrev.blockedUntil),
       sincePromptMs: F.lastBubbleAt ? Math.round(t - F.lastBubbleAt) : null,
       sinceDialMs: F.geoAt ? Math.round(t - F.geoAt) : null,
       accepted: s.pressAccepted || 0,
@@ -4115,6 +4274,7 @@ const SPECIES = [
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
+  
   F.probeDial = (x, y) => new Promise((res) => requestAnimationFrame(() => res(F.lockDial(x, y))));
   F.probeDialAnywhere = () => new Promise((res) => requestAnimationFrame(() => res(dialAnywhere())));
   F.spaceTest = (where) => ({ consumed: !space(where || 'window') });
@@ -4383,6 +4543,11 @@ const SPECIES = [
   }
 
   var NO_CATCH_MS = 10 * 60 * 1000;   // nothing bites for this long -> check the page
+  var CAST_STALL_MS = 90 * 1000;       // post-catch, no prompt and no dial this long -> the cast never landed
+  // cast-stall, player-block and profile-open share no-catch's bounded retry: pause, retry, then stop.
+  function retryable(reason) {
+    return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block' || reason === 'profile-open';
+  }
   var RETRY_DELAY_MS = 60 * 1000;
   var MAX_RETRIES = 3;
   var HIDDEN_PAUSE_MS = 5000;         // the game freezes while the tab is hidden
@@ -4398,7 +4563,7 @@ const SPECIES = [
     s.pauseReason = reason;
     s.lastTickAt = null;
     s.visibleSince = null;
-    if (reason === 'no-catch') s.retryAt = at + RETRY_DELAY_MS;
+    if (retryable(reason)) s.retryAt = at + RETRY_DELAY_MS;
     // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
     // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
     // Keeping it alive is only safe if it cannot ACT while it waits: a cast retry puts a line in the
@@ -4463,9 +4628,18 @@ const SPECIES = [
       }
       return { state: s, actions: [] };
     }
-    if (s.pauseReason === 'no-catch') {
+    if (s.pauseReason === 'focus') {
+      // A focus hold ends when the session does, never on a timer: the panel clears the fact.
+      if (fact.focus) return { state: s, actions: [] };
+      return runningAgain(s, at);
+    }
+    // A focus hold is a decision, not a stall. If the hold engages while a guard already has the run
+    // paused (player-block, no-catch), it takes the pause over, so that guard's retry can never slip
+    // a tick of fishing through mid-session. A user pause still outranks it, above.
+    if (fact.focus) return paused(s, at, 'focus');
+    if (retryable(s.pauseReason)) {
       if (s.retryAt != null && at >= s.retryAt) {
-        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
+        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, s.pauseReason) };
         s.retries += 1;
         s.lastCatchAt = at;
         return runningAgain(s, at);
@@ -4549,7 +4723,7 @@ const SPECIES = [
       if (s.phase !== 'running') return { state: s, actions: [] };
       if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
       s.phase = 'paused';
-      s.pauseReason = 'user';
+      s.pauseReason = fact.reason === 'focus' ? 'focus' : 'user';
       s.lastTickAt = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -4645,6 +4819,13 @@ const SPECIES = [
       var visible = fact.visible !== false;
       if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
 
+      // 0. a focus session is a hold the user asked for: credit the time fished so far, then stop
+      // the clock and the core. Not retryable - nothing is broken, the player is focusing.
+      if (fact.focus) {
+        if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+        return paused(s, at, 'focus');
+      }
+
       // 1. the game only runs while the tab is visible: a hidden stretch is not fishing time
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
@@ -4711,6 +4892,24 @@ const SPECIES = [
 
       // 7. nothing has bitten in a while
       var sinceCatch = at - (s.lastCatchAt == null ? s.startedAt : s.lastCatchAt);
+      // A profile modal open over the game blocks prompts without stopping the clock: pause
+      // with a named reason instead of burning the session as a generic no-catch.
+      // a profile modal open over the game blocks prompts and swallows inputs: pause first,
+      // before the tap-suppression backstop below ever gets its three fruitless taps
+      if (fact.profileOpen === true) {
+        return paused(s, at, 'profile-open');
+      }
+      if (fact.playerBlocked === true) {
+        return paused(s, at, 'player-block');
+      }
+      // Post-catch, neither a prompt nor a dial for 90 s means the cast never landed
+      // (missed reel, line out, or a modal swallowing inputs) — still short of the 10-minute
+      // no-bite watchdog, so pause early with a distinct reason and the same bounded retry.
+      if (sinceCatch > CAST_STALL_MS && sinceCatch <= NO_CATCH_MS &&
+          typeof fact.sinceBubbleMs === 'number' && typeof fact.sinceDialMs === 'number' &&
+          fact.sinceBubbleMs > CAST_STALL_MS && fact.sinceDialMs > CAST_STALL_MS) {
+        return paused(s, at, 'cast-stall');
+      }
       if (sinceCatch > NO_CATCH_MS) {
         if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
         return paused(s, at, 'no-catch');
@@ -4919,6 +5118,7 @@ const SPECIES = [
     prefs.resumeAfterReload = !!p.resumeAfterReload;
     prefs.postCatches = !!p.postCatches;
     prefs.hideUpsell = !!p.hideUpsell;
+    prefs.focusMode = !!p.focusMode;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
     prefs.chain = !!p.chain;
     if (p.profile) prefs.profile = String(p.profile);
@@ -4936,6 +5136,7 @@ const SPECIES = [
       resumeAfterReload: !!window.__panel.resumeAfterReload,
       postCatches: !!window.__panel.postCatches,
       hideUpsell: !!window.__panel.hideUpsell,
+      focusMode: !!focusPref,
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
     });
   }
@@ -5065,10 +5266,67 @@ const SPECIES = [
    * The run watchdog already pauses after a run of no catches (pauseReason 'no-catch'), which keeps
    * a gated session from burning the whole budget.
    */
-  var FOCUS_NOTE = 'focus session active — focus fishing needs Cozier, casts are refused';
+  var FOCUS_NOTE = 'focus session active — focus fishing needs Cozier, casts are refused; "Pause in focus sessions" (Session & guards) pauses the run';
 
   function inFocusSession() {
     try { return /\bFOCUS\b/.test(document.title); } catch (e) { return false; }
+  }
+
+  /* ---------------------------------------------- focus mode (3.9.34) ---- */
+  /*
+   * The ask: stop fishing, run a focus session (solo or together), and do not see the REEL!/CAST!
+   * bubble until the session ends. Two halves.
+   *
+   * The pause is exact: a 'focus' pause reason holds the clock and the core, is not retryable, and
+   * only the toggle or the session ending lifts it (session.js).
+   *
+   * The bubble itself cannot be removed from a page script. It is painted into the game's canvas; the
+   * reachable Pixi Graphics is only a hit area (hiding it changed no pixels, measured), and clipping
+   * the UI canvas that carries it could not be verified live and risks the game's compositing. So
+   * focus mode pauses and nothing else: it draws no cover and touches no canvas, and the prompt stays
+   * on screen. A cover was tried and looked bad; an unverified clip is not worth shipping.
+   */
+  var focusOn = false;       // the hold is engaged right now
+  var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
+                             // the hold; it must never change this, or the next session never engages.
+  var focusSawSession = false;
+
+  function renderFocusToggle() {
+    if (!ui.focusToggle) return;
+    ui.focusToggle.textContent = focusOn ? 'on' : 'off';
+    ui.focusToggle.style.color = focusOn ? '#5ad18b' : '#9aa4ae';
+  }
+
+  /**
+   * Engage or release focus mode. opts.session records that the game's own session drove it, which
+   * is what lets its end release the hold; a manual toggle stays until the user turns it off.
+   */
+  function setFocusMode(on, opts) {
+    var o = opts || {};
+    on = !!on;
+    if (on === focusOn) return;
+    focusOn = on;
+    if (window.__panel) window.__panel.focusMode = on;
+    if (on) {
+      focusSawSession = !!o.session;
+      if (state.phase === 'running') dispatch({ type: 'pause', at: Date.now(), reason: 'focus' });
+    } else {
+      focusSawSession = false;
+      if (state.pauseReason === 'focus') dispatch({ type: 'resume', at: Date.now() });
+    }
+    renderFocusToggle();
+    render();
+  }
+
+  /**
+   * Called every tick: with the pref on, a session starting engages the hold; a session-driven hold
+   * releases when it ends. A manual toggle is left alone in both directions.
+   */
+  function focusTick() {
+    var session = inFocusSession();
+    if (focusOn && session) focusSawSession = true;
+    if (focusOn && focusSawSession && !session) setFocusMode(false);
+    else if (!focusOn && session && focusPref) setFocusMode(true, { session: true });
   }
 
   /* ------------------------------------------------------------ server ---- */
@@ -5392,6 +5650,7 @@ const SPECIES = [
     style.textContent = CSS;
     root.appendChild(style);
 
+
     var wrap = el('div', 'wrap');
     var card = el('div', 'card');
 
@@ -5440,6 +5699,15 @@ const SPECIES = [
     upsellToggle.title = 'hide the in-session Cozier upsell (cosmetic: a free account still cannot fish in focus)';
     upsellRow.append(upsellLabel, upsellToggle);
     setSec.body.appendChild(upsellRow);
+
+    // Pause in focus sessions: stop the run while a session is active. It hides nothing - the cast
+    // prompt is the game's own drawing - so the label says exactly what it does.
+    var focusRow = el('div', 'row');
+    var focusLabel = el('div', 'label', 'Pause in focus sessions');
+    var focusToggle = el('button', 'icon', focusOn ? 'on' : 'off');
+    focusToggle.title = 'pause autofish while a focus session is active; the cast prompt is drawn by the game and stays visible';
+    focusRow.append(focusLabel, focusToggle);
+    setSec.body.appendChild(focusRow);
 
     // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
     // window and the cap still bound it.
@@ -5562,6 +5830,7 @@ const SPECIES = [
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
+      focusToggle: focusToggle,
       chainToggle: chainToggle, reloadToggle: reloadToggle, postToggle: postToggle,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
@@ -5617,6 +5886,11 @@ const SPECIES = [
     });
     upsellToggle.addEventListener('click', function () {
       setUpsellHidden(!upsellOn);
+      savePrefs();
+    });
+    focusToggle.addEventListener('click', function () {
+      focusPref = !focusOn;   // the setting, not the live hold
+      setFocusMode(focusPref);
       savePrefs();
     });
     chainToggle.addEventListener('click', function () {
@@ -6020,6 +6294,7 @@ const SPECIES = [
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
     ui.timeRow.style.display = state.window.on ? '' : 'none';
     renderUpsellToggle();
+    renderFocusToggle();
 
     if (!focused(ui.dur.val)) ui.dur.val.value = minutesText(state.durationMs);
     if (!focused(ui.cool.val)) ui.cool.val.value = minutesText(state.cooldownMs);
@@ -6105,7 +6380,20 @@ const SPECIES = [
     // A focus session outranks the log-offline chatter: the run will look alive while the game
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
+    // The bot's own focus hold outranks the notice: this one is a decision, not a warning.
+    var focusModeNote = focusOn ? 'paused for this focus session (toggle off to resume)' : '';
     var focusNote = focus ? FOCUS_NOTE : '';
+    // A tap landing where no dial follows means a nearby player's name tag or an open
+    // profile is swallowing the cast: pause the clock and say to move spots. A cast that
+    // never lands (no prompt, no dial 90 s after a catch) gets its own retry line.
+    var playerNote = '';
+    if ((status && (status.playerBlocked || status.profileOpen)) || state.pauseReason === 'player-block' || state.pauseReason === 'profile-open') {
+      if (phase === 'running' || phase === 'paused') playerNote = 'player in the way — move spots or close the profile';
+    }
+    var castNote = '';
+    if (state.pauseReason === 'cast-stall' && (phase === 'running' || phase === 'paused')) {
+      castNote = 'cast stalled — retrying, check for a profile popup';
+    }
     // A stop is the thing the player most needs to understand, and it used to be invisible: the
     // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
     var stopNote = '';
@@ -6118,11 +6406,12 @@ const SPECIES = [
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || seatNote || focusNote || banner || stopNote;
+    var note = stallNote || seatNote || focusModeNote || focusNote || playerNote || castNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (seatNote) ui.banner.className = 'banner seat';
-    else if (focus && !banner) ui.banner.className = 'banner focus';
+    else if (playerNote) ui.banner.className = 'banner seat';
+    else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
     else if (stopNote && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
@@ -6133,7 +6422,10 @@ const SPECIES = [
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
+      if (focusOn) host.dataset.focusMode = '1'; else delete host.dataset.focusMode;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
+      if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
+      if ((status && status.profileOpen) || state.pauseReason === 'profile-open') host.dataset.profileOpen = '1'; else delete host.dataset.profileOpen;
     }
 
     place();
@@ -6245,6 +6537,8 @@ const SPECIES = [
   /* -------------------------------------------------------------- loop ---- */
 
   function tick() {
+    // A focus session ending releases a hold it started; a manual toggle is never touched here.
+    focusTick();
     // A run that crosses midnight starts the new day at zero, the same way a reload does.
     var dayNow = dayKey();
     if (budgetDay && dayNow !== budgetDay) {
@@ -6259,7 +6553,7 @@ const SPECIES = [
     if (state.phase === 'idle' || state.phase === 'cooldown') {
       // keep wall clocks honest and let a cooldown end on its own
       if (state.phase === 'cooldown' && state.cooldownUntil && Date.now() >= state.cooldownUntil) {
-        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs, seat: false });
+        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs, seat: false, focus: focusOn });
         banner = '';
       } else {
         render();
@@ -6277,7 +6571,16 @@ const SPECIES = [
       // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
       seat: !!(status && status.needsSeat),
       // a stalled core must not be charged for time it never fished
-      stalled: !!(status && status.running && status.stalled)
+      stalled: !!(status && status.running && status.stalled),
+      // cast-stall vs no-bite split + nearby-player guard: the reducer pauses with a named
+      // reason instead of burning the session as a generic no-catch
+      sinceBubbleMs: status && typeof status.sinceBubbleMs === 'number' ? status.sinceBubbleMs : null,
+      sinceDialMs: status && typeof status.sinceDialMs === 'number' ? status.sinceDialMs : null,
+      playerBlocked: !!(status && status.playerBlocked),
+      profileOpen: !!(status && status.profileOpen),
+      // the focus hold: a Start pressed during a session must not fish, and a session ending
+      // is what resumes. The reducer owns the clock; this fact only reports the hold's state.
+      focus: focusOn
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the
@@ -6348,6 +6651,9 @@ const SPECIES = [
 
     build();
     if (prefs.hideUpsell) setUpsellHidden(true); // cosmetic: see setUpsellHidden()
+    // Explicit on purpose: the toggle was on when the page went away, so the hold comes back.
+    focusPref = !!prefs.focusMode;
+    if (focusPref) setFocusMode(true);
     mountAdoption();
     banner = checkInterrupted() || banner;
 
@@ -6362,6 +6668,8 @@ const SPECIES = [
     window.__panel.unmount = unmount;
     window.__panel.captureDiag = captureDiag;
     window.__panel.focus = inFocusSession;
+    window.__panel.focusMode = focusOn;
+    window.__panel.setFocusMode = setFocusMode;
     tick();
   }
 
@@ -6383,6 +6691,7 @@ const SPECIES = [
     if (tickTimer) clearInterval(tickTimer);
     if (placeTimer) clearInterval(placeTimer);
     if (mount.timer) clearInterval(mount.timer);
+
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', onVisible);
     releaseWakeLock();

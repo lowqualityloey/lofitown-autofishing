@@ -299,6 +299,23 @@
   }
 
   /**
+   * A narrow ring blinks: the rim sampler loses a thin wedge for a few frames while the pin
+   * keeps turning underneath, and the bad-sample branch would call that a ghost and lose the
+   * fish (live: two 40 deg dials, spin 50-140 deg/s, zero presses, both fish gone - the 85%).
+   * A fade - the thing the ghost rule is for - sits still, so a FRESH non-zero spin estimate
+   * tells them apart. The witness is already on the lock: the sampler freezes geo._om/_mt at
+   * the last valid frame, so no new state is kept and staleness expires the hold on its own.
+   * A solved dial never reaches here (it has presses). _om is the midpoint rate; the planner
+   * uses its negation, and only the magnitude matters here.
+   */
+  function spinAlive(geo, t) {
+    if (!geo || !(geo.width > 0 && geo.width < 60)) return false;   // narrow: the gate's own band
+    const om = geo._om;
+    if (om == null || !isFinite(om) || Math.abs(om) <= 20) return false;   // still or unmeasured
+    return (t - (geo._mt || 0)) < 1000;   // blind frames are ms-scale; then the ghost rule decides
+  }
+
+  /**
    * Is a lock candidate the same fading circle we just ghosted? A short cooldown stops the memo
    * and the next scan from re-locking the same ring; a real triangle at the same circle widens the
    * arc (live: 30-40 deg ghost, 70 deg real dial), so a width jump is allowed through.
@@ -614,6 +631,8 @@
         { worstFrameMs: st.worstFrameMs });
     }
     if (st.needsSeat) return o('not-seated', 'warn', 'sit on a chair by the water', {});
+    if (st.profileOpen) return o('profile-open', 'warn', 'a player profile is open over the game: close it to resume', {});
+    if (st.playerBlocked) return o('nearby-player', 'warn', 'a tap keeps landing where no dial follows: move spots or close the profile', { playerBlocked: true });
     if ((st.accepted || 0) + (st.rejected || 0) >= 20 &&
         st.acceptRate != null && st.acceptRate < 0.9) {
       return o('press-rejected', 'warn', 'presses are being rejected: read __fish.calibration()',
@@ -1573,6 +1592,8 @@ const SPECIES = [
           const fill = n / Math.max(1, bw * bh);
           if (bh >= 28 && bh < 95 && fill >= 0.45 && (!best || n > best.n)) {
             best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n, via: 'box' };
+            var gm = glyphMetrics(d, w, s, x, y0, y1);
+            best.glyph = gm.ok; best.gdark = +gm.dark.toFixed(3); best.gsoft = +gm.soft.toFixed(3);
           }
         }
         s = -1;
@@ -1859,6 +1880,106 @@ const SPECIES = [
    * The order is the point: the shared snapshot answers "is there anything there" for free, and
    * only a yes buys the full-resolution read that refines the centre.
    */
+  // <glyph-core>
+  /*
+   * Prompt glyphs, read off the buffer bubbleInBox already holds - no second readback.
+   * Measured live against real captures (3.9.33 calibration): the prompt's 3-line text is
+   * SOFT (translucent grey, alpha 40-120: 17% of the inset, ~0 opaque-dark cells), while a
+   * name tag's text is OPAQUE dark (26.5% at alpha>120, lum<100). The old tall-run model was
+   * built for opaque caps that do not exist, so the gate is inverted: a boxed blob may tap
+   * unless it carries opaque-dark text. The inset ignores the bubble's own outline.
+   * Measured margins: prompt 0.002, blank pre-text frames 0.004, tag 0.265 - the 0.05 line
+   * stands 10x off both sides. Fail direction is unchanged (a refused prompt still fishes
+   * on the Space rung; a tapped tag opens a profile and stalls the run).
+   */
+  var GLYPH_OPAQUE_MAX = 0.05; // opaque-dark share above this is tag text, never prompt text
+  function glyphMetrics(d, w, s, e, y0, y1) {
+    var m = { ok: false, dark: 0, soft: 0 };
+    var x0 = s + 2, x1 = e - 2, t0 = y0 + 2, t1 = y1 - 2;
+    if (x1 <= x0 || t1 <= t0) return m;
+    var area = (x1 - x0) * (t1 - t0), dark = 0, soft = 0;
+    var stride = (w - (x1 - x0)) * 4;   // consumed inset plus the untouched right margin
+    for (var y = t0, i = (t0 * w + x0) * 4; y < t1; y++, i += stride) {
+      for (var xx = x0; xx < x1; xx++, i += 4) {
+        var l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        if (d[i + 3] > 120 && l < 100) dark++;
+        else if (d[i + 3] > 40 && l < 160) soft++;
+      }
+    }
+    m.dark = dark / area;
+    m.soft = soft / area;
+    m.ok = m.dark <= GLYPH_OPAQUE_MAX;
+    return m;
+  }
+  // </glyph-core>
+
+  /* ---- nearby-player guard -------------------------------------------------
+   * A nearby player's name tag is the same white-with-dark-text shape one size
+   * smaller than CAST!/REEL!. Tapping one opens that player's profile and the
+   * run stalls behind the modal (reported live on BrowserOS-neo: bot beside
+   * another player, tap opened the profile, no prompt, no dial).
+   * Rule: a boxed sighting must repeat at the same spot before it may tap, and
+   * since 3.9.33 it must also carry prompt glyphs (tall dark runs, not tag text);
+   * an `anywhere` blob never confirms (the Space rung still casts); three
+   * taps on one spot that never produce a dial suppress that spot for 30 s.
+   * One record does both jobs: sightings continue through a block, so the
+   * tap count cannot go stale while taps are held.
+   */
+  var BUBBLE_CONFIRM_PX = 12;
+  var BUBBLE_CONFIRM_MS = 2000;
+  var PLAYER_TAPS = 3;
+  var PLAYER_BLOCK_MS = 30000;
+  /** A player profile open over the game swallows inputs and hides prompts. DOM-visible
+   * (the dialog's buttons), so no readback. Our own panel lives in closed shadow DOM,
+   * which this scan cannot see, so no self-exclusion is needed. */
+  F.profileOpen = function () {
+    try {
+      if (typeof document === 'undefined' || !document.querySelectorAll) return false;
+      var bs = document.querySelectorAll('button');
+      for (var i = 0; i < bs.length; i++) {
+        var tx = (bs[i].textContent || '').trim();
+        if (tx === 'Send DM' || tx === 'Burrows') return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+
+  /** Try to dismiss an open player profile. Unverified live: if the game does not bind
+   * Escape, this is a no-op and the session pause holds the clock instead. */
+  function tryEscapeProfile(t) {
+    if (t - (F.lastProfileCheck || 0) <= 2000) return;
+    F.lastProfileCheck = t;
+    if (!F.profileOpen()) return;
+    if (t - (F.lastEscape || 0) <= 5000) return;
+    F.lastEscape = t;
+    try {
+      var escInit = { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true, composed: true };
+      document.dispatchEvent(new KeyboardEvent('keydown', escInit));
+      document.dispatchEvent(new KeyboardEvent('keyup', escInit));
+    } catch (e) {}
+    L('escape profile', {});
+  }
+
+  function bubbleConfirmed(b, t) {
+    if (!b || b.via === 'anywhere') return false;
+    if (b.glyph === false) return false;   // fail closed: a blob carrying opaque tag text never taps
+    var p = F.bubblePrev;
+    var same = !!p && Math.abs(p.x - b.cx) <= BUBBLE_CONFIRM_PX &&
+      Math.abs(p.y - b.cy) <= BUBBLE_CONFIRM_PX && (t - p.at) <= BUBBLE_CONFIRM_MS;
+    F.bubblePrev = { x: b.cx, y: b.cy, at: t, n: same ? p.n + 1 : 1,
+      taps: same ? (p.taps || 0) : 0,
+      blockedUntil: same ? (p.blockedUntil || 0) : 0 };
+    var q = F.bubblePrev;
+    if (q.blockedUntil && t < q.blockedUntil) return false;
+    return q.n >= 2;
+  }
+  function noteBubbleTap(t) {
+    var q = F.bubblePrev;
+    if (!q) return;
+    q.taps += 1;
+    if (q.taps >= PLAYER_TAPS) q.blockedUntil = t + PLAYER_BLOCK_MS;
+  }
+
   F.findBubble = function () {
     const t = now();
     if (t - (F.bubbleScanAt || 0) < (F.geo ? 90 : 40)) return null;
@@ -3011,11 +3132,12 @@ const SPECIES = [
       ? { x: F.lastGeo.cx, y: F.lastGeo.cy }
       : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
           y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
-    F.txtAt = now(); F.cardWait = null;                        // only text drawn from here on counts
+    F.txtAt = now(); F.cardWait = null;                           // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
+    F.bubblePrev = null; F.lastBubbleCause = null; F.lastDialCause = null; F.lastAttemptLoss = null;
     F.dialAnyFail = 0; F.dialAnyAt = 0;                       // recovery backoff starts fresh each run
     F.castHold = false;
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
@@ -3097,6 +3219,7 @@ const SPECIES = [
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.ghostGeo = null;
     F.bubbleMiss = 0; F.stallRetry = 0;
+    F.bubblePrev = null;
     F.sweep = {};
     F.bands = {}; F.widths = {}; F.rarities = {};
     F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
@@ -3275,6 +3398,9 @@ const SPECIES = [
     if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
     if (F.paused) return;
     if (t - F.startedAt > F.opts.maxMinutes * 60000) { L('maxMinutes'); F.stop(); return; }
+    // 0a. an open player profile swallows inputs and hides prompts. Try Escape once in a
+    // while; the session pause (profile-open) holds the clock whether or not it lands.
+    tryEscapeProfile(t);
     // A fish that has shown no dial and taken no press for a long time is over; the client's own
     // timer is 15-40 s, so this only fires when the flow itself stalled (a missed re-cast).
     if (F.attempt && F.attempt.pendingLoss && t - F.attempt.pendingLoss > (F.opts.lossGraceMs || 2500)) {
@@ -3369,16 +3495,27 @@ const SPECIES = [
         // SEE, not the last one we happened to click: a rung that no longer taps used to freeze the
         // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
         // never reach a dial 100 px away.
-        F.hint = { x: b.cx, y: b.cy + 53 };
-        F.dialAnyFail = 0; F.dialAnyAt = 0;      // a cast is new evidence: recover promptly again
+        // Boxed prompts steer the dial hint; an `anywhere` blob never moves it, so a
+        // nearby player's name tag cannot drag the dial search off the widget.
+        var isBox = b.via !== 'anywhere';
+        if (isBox) {
+          F.hint = { x: b.cx, y: b.cy + 53 };
+          F.dialAnyFail = 0; F.dialAnyAt = 0;    // a cast is new evidence: recover promptly again
+        }
         // A blob found by the whole-surface scan is only a hint: it can be a player's name tag,
-        // and clicking one opens that player's profile. The boxed scan is the one allowed to
-        // click; the ladder's Space rung still casts when the hint was all we had.
-        const clickable = b.via !== 'anywhere';
-        if (rec.tap && clickable) tap(b.cx, b.cy);
+        // and clicking one opens that player's profile. bubbleConfirmed is the single tap
+        // gate: it never confirms an `anywhere` blob, and a boxed one only after the same
+        // spot repeats. The ladder's Space rung still casts when the hint was all we had.
+        var confirmed = bubbleConfirmed(b, t);
+        var tapOk = !!(rec.tap && confirmed);
+        if (tapOk) tap(b.cx, b.cy);
+        if (tapOk) noteBubbleTap(t);
+        // The press that summons the dial is decided here; the tail is too short to prove it
+        // later, so the last prompt action persists until the next dial lock reads it.
+        F.lastBubbleCause = { tap: tapOk, space: !!rec.space, glyph: b.glyph === true, at: t };
         F.lastPress = t;
         F.stats.bubbles++;
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: rec.tap && clickable, space: rec.space });
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: tapOk, space: rec.space, confirmed: confirmed, glyph: b.glyph === true, gdark: typeof b.gdark === 'number' ? b.gdark : null, gsoft: typeof b.gsoft === 'number' ? b.gsoft : null });
         if (rec.space) {
           F.lastSpaceTry = t;
           space(F.opts.spaceTarget);
@@ -3397,6 +3534,9 @@ const SPECIES = [
           // appears in the same widget. Dropping the lock there cost a re-lock scan plus a lock
           // on the fading ring, ~300 ms per press. Hold the geometry briefly instead.
           if (F.pressesThisDial > 0 && t - F.lastPress < (F.opts.relockGraceMs || 450)) return;
+          // A narrow unpressed dial with a live spin estimate is blinking, not fading: ride
+          // through the blind frames so the planner can take the arrival it was tracking.
+          if (F.pressesThisDial === 0 && spinAlive(F.geo, t)) { F.stats.narrowHolds = (F.stats.narrowHolds || 0) + 1; return; }
           cancelPend();
           closeDial(t, s && s.ring);
           F.geo = null; F.bad = 0; F.pressesThisDial = 0;
@@ -3550,7 +3690,13 @@ const SPECIES = [
         g._armed0 = !!F.armed;
         F.armed = true;                            // arc travel for this lock
         F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
+        // Which rung summoned this dial: the last prompt action before the lock. Stale (> one
+        // cast cycle old) means the dial arrived without a prompt press we saw - say so.
+        var bc = F.lastBubbleCause, freshBc = bc && (t - bc.at) < (F.opts.castRungResetMs || 10000);
+        F.lastDialCause = { tap: !!(freshBc && bc.tap), space: !!(freshBc && bc.space), unknown: !freshBc, at: freshBc ? bc.at : 0, dialAt: t };
+        var dcCause = F.lastDialCause.unknown ? 'unknown' : (F.lastDialCause.tap && F.lastDialCause.space ? 'tap+space' : (F.lastDialCause.tap ? 'tap' : (F.lastDialCause.space ? 'space' : 'none')));
         F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
+        F.bubblePrev = null;                                    // a dial proves the prompt was real: forget tap suspicion
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
         F.stats.dials++;
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
@@ -3560,7 +3706,7 @@ const SPECIES = [
         F.attempt.touched = t;
         F.attempt.pendingLoss = null;
         F.needsSeat = false;                                    // a dial means the cast took
-        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0 });
+        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0, cause: dcCause });
         const dialW = Number(g.width) || 0;
         if (dialW > 0) {
           F.attempt.widthSum += dialW;
@@ -3683,6 +3829,9 @@ const SPECIES = [
       arm: a.arm, band, width: a.avgWidth, widthBand: a.widthBand, why: a.why,
       species: a.species || null, rarity: a.rarity || null,
     });
+    // A lost fish must stay attributable after the 8-entry tail expires: the reason, the
+    // attempt number, and the dial score persist on status until the next loss (or start).
+    if (verdict === 'lost') F.lastAttemptLoss = { n: a.n, why: a.why, ms: a.ms, dials: a.dials, presses: a.presses, dialHits: a.dialHits, dialMisses: a.dialMisses, avgWidth: a.avgWidth, at: t };
     return a;
   }
 
@@ -3706,6 +3855,14 @@ const SPECIES = [
       hint: F.hint,
       pxScale: frame && frame.cw ? +(frame.w / frame.cw).toFixed(3) : null,
       needsSeat: !!F.needsSeat,
+      // inlined (not a helper): status.test.js compiles F.status out of the core
+      // with only F/now in scope, so a closure call would not resolve there.
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && now() < F.bubblePrev.blockedUntil),
+      profileOpen: typeof F.profileOpen === 'function' ? !!F.profileOpen() : false,
+      lastDialCause: F.lastDialCause || null,
+      lastAttemptLoss: F.lastAttemptLoss || null,
+      sinceBubbleMs: F.lastBubbleAt ? Math.round(now() - F.lastBubbleAt) : null,
+      sinceDialMs: F.geoAt ? Math.round(now() - F.geoAt) : null,
       stats: F.stats || {},
       accuracy: {
         attempts: s.attempts || 0, caught: s.caught || 0, lost: s.lost || 0,
@@ -3747,6 +3904,8 @@ const SPECIES = [
       longtasks: p.longtasks,
       worstFrameMs: p.worst,
       needsSeat: !!F.needsSeat,
+      profileOpen: typeof F.profileOpen === 'function' ? !!F.profileOpen() : false,
+      playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && t < F.bubblePrev.blockedUntil),
       sincePromptMs: F.lastBubbleAt ? Math.round(t - F.lastBubbleAt) : null,
       sinceDialMs: F.geoAt ? Math.round(t - F.geoAt) : null,
       accepted: s.pressAccepted || 0,
@@ -4097,6 +4256,7 @@ const SPECIES = [
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
+  
   F.probeDial = (x, y) => new Promise((res) => requestAnimationFrame(() => res(F.lockDial(x, y))));
   F.probeDialAnywhere = () => new Promise((res) => requestAnimationFrame(() => res(dialAnywhere())));
   F.spaceTest = (where) => ({ consumed: !space(where || 'window') });

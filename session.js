@@ -119,6 +119,11 @@
   }
 
   var NO_CATCH_MS = 10 * 60 * 1000;   // nothing bites for this long -> check the page
+  var CAST_STALL_MS = 90 * 1000;       // post-catch, no prompt and no dial this long -> the cast never landed
+  // cast-stall, player-block and profile-open share no-catch's bounded retry: pause, retry, then stop.
+  function retryable(reason) {
+    return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block' || reason === 'profile-open';
+  }
   var RETRY_DELAY_MS = 60 * 1000;
   var MAX_RETRIES = 3;
   var HIDDEN_PAUSE_MS = 5000;         // the game freezes while the tab is hidden
@@ -134,7 +139,7 @@
     s.pauseReason = reason;
     s.lastTickAt = null;
     s.visibleSince = null;
-    if (reason === 'no-catch') s.retryAt = at + RETRY_DELAY_MS;
+    if (retryable(reason)) s.retryAt = at + RETRY_DELAY_MS;
     // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
     // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
     // Keeping it alive is only safe if it cannot ACT while it waits: a cast retry puts a line in the
@@ -199,9 +204,18 @@
       }
       return { state: s, actions: [] };
     }
-    if (s.pauseReason === 'no-catch') {
+    if (s.pauseReason === 'focus') {
+      // A focus hold ends when the session does, never on a timer: the panel clears the fact.
+      if (fact.focus) return { state: s, actions: [] };
+      return runningAgain(s, at);
+    }
+    // A focus hold is a decision, not a stall. If the hold engages while a guard already has the run
+    // paused (player-block, no-catch), it takes the pause over, so that guard's retry can never slip
+    // a tick of fishing through mid-session. A user pause still outranks it, above.
+    if (fact.focus) return paused(s, at, 'focus');
+    if (retryable(s.pauseReason)) {
       if (s.retryAt != null && at >= s.retryAt) {
-        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
+        if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, s.pauseReason) };
         s.retries += 1;
         s.lastCatchAt = at;
         return runningAgain(s, at);
@@ -285,7 +299,7 @@
       if (s.phase !== 'running') return { state: s, actions: [] };
       if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
       s.phase = 'paused';
-      s.pauseReason = 'user';
+      s.pauseReason = fact.reason === 'focus' ? 'focus' : 'user';
       s.lastTickAt = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -381,6 +395,13 @@
       var visible = fact.visible !== false;
       if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
 
+      // 0. a focus session is a hold the user asked for: credit the time fished so far, then stop
+      // the clock and the core. Not retryable - nothing is broken, the player is focusing.
+      if (fact.focus) {
+        if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+        return paused(s, at, 'focus');
+      }
+
       // 1. the game only runs while the tab is visible: a hidden stretch is not fishing time
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
@@ -447,6 +468,24 @@
 
       // 7. nothing has bitten in a while
       var sinceCatch = at - (s.lastCatchAt == null ? s.startedAt : s.lastCatchAt);
+      // A profile modal open over the game blocks prompts without stopping the clock: pause
+      // with a named reason instead of burning the session as a generic no-catch.
+      // a profile modal open over the game blocks prompts and swallows inputs: pause first,
+      // before the tap-suppression backstop below ever gets its three fruitless taps
+      if (fact.profileOpen === true) {
+        return paused(s, at, 'profile-open');
+      }
+      if (fact.playerBlocked === true) {
+        return paused(s, at, 'player-block');
+      }
+      // Post-catch, neither a prompt nor a dial for 90 s means the cast never landed
+      // (missed reel, line out, or a modal swallowing inputs) — still short of the 10-minute
+      // no-bite watchdog, so pause early with a distinct reason and the same bounded retry.
+      if (sinceCatch > CAST_STALL_MS && sinceCatch <= NO_CATCH_MS &&
+          typeof fact.sinceBubbleMs === 'number' && typeof fact.sinceDialMs === 'number' &&
+          fact.sinceBubbleMs > CAST_STALL_MS && fact.sinceDialMs > CAST_STALL_MS) {
+        return paused(s, at, 'cast-stall');
+      }
       if (sinceCatch > NO_CATCH_MS) {
         if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, 'no-catch') };
         return paused(s, at, 'no-catch');

@@ -1,18 +1,17 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.31 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.40 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
-  distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist; 3.9.31 is merged to
-  `main` (`dde3e17` for the panel, `ea1d5fc` for the release docs) and published as v3.9.31 on
-  2026-11-05
-- **Target Release / Deadline**: 3.9.31 built 2026-11-05, merged/pushed 2026-11-05 at ea1d5fc,
-  released 2026-11-05
-- **Current Working Branch**: `main` at `ea1d5fc`; the panel and release-docs branches are merged and pushed
-- **Last Updated**: 2026-11-05
+  distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist; **3.9.40** is tagged and
+  published, carrying 3.9.33-3.9.40 (an install on 3.9.32 updates straight to it)
+- **Target Release / Deadline**: 3.9.40 built and measured live 2026-11-17, tag `v3.9.40`, released
+  2026-11-17
+- **Current Working Branch**: `freebuff/ingest-repo-and-explain`; `main` is still at `d0354fb`
+- **Last Updated**: 2026-11-17
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
 ---
@@ -262,6 +261,7 @@ Staging area for rules observed during sessions but not yet approved as invarian
 
 | 2026-11-03 | Fullscreen surface and card gate | Native F11 at 1920x1080 exposed a false catch card: `adoptSurface()` trusted four blank scans and could hand the read surface to the renderer, while the fixed card box read cream world art. Adoption now requires a prompt found twice; resize/fullscreen re-resolves the canvases; the card box scales with the live canvas and a card scan needs a `pendingWin` no older than 30 s. The panel keeps a clear position instead of snapping back. Live 3.9.27 at 1179x821 and native F11 1920x1080: 7 catches/8 attempts, 44/44 accepted presses, `cards: 7`, `textGaps: 0`, and the panel stable at x=12 in fullscreen. | `AUTOFISH.md` 3.9.27; `tests/perf.test.js`; `tests/panel.test.js` |
 | 2026-11-04 | 3.9.27 merge and release prep | `fix/narrow-ghost` fast-forwarded into `main` (`d959ec3` -> `1216258`) and pushed to `origin/main`. A fresh live 3.9.27 session ran 145 attempts / 144 caught (99.3%) with 777/777 accepted presses, 2 ghosts and 144 cards; the only loss was attempt #5 (61.7 deg, 6 presses / 3 hits, cast prompt), not ghost-only. README, state tracker and screenshots refreshed; released 2026-11-04. | `AUTOFISH.md` 3.9.27; `README.md`; `docs/images/` |
+| 2026-11-17 | Focus session hold | A focus session pauses the run instead of hiding anything: `focus` is a session pause reason with no retry, released only by the session ending or the toggle, and it draws nothing over the game. Hiding the CAST!/REEL! prompt was withdrawn after three attempts (3.9.34-3.9.37): it is painted into the game's canvas, the reachable Pixi Graphics is only a hit area (hiding its 85-child container changed zero pixels), the blur cover looked worse than the bubble, and the CSS clip could not be verified. The toggle is therefore named "Pause in focus sessions" and the prompt stays visible. Two defects the live measurement found are fixed: `savePrefs` stores the setting (`focusPref`), never the live hold, because a session-driven release switched the setting off for good; and a focus tick takes the pause over from a guard so that guard's retry cannot fish for a tick mid-session. | `AUTOFISH.md` 3.9.38-3.9.40; `tests/panel.test.js`; `tests/session.test.js` |
 | 2026-11-05 | 3.9.28-3.9.31 panel release | `freebuff/run-impeccable-skill-instructions` merged as PR #20 (`dde3e17`) carrying three panel commits. 3.9.28 split the card into a run surface plus folded `Session & guards` and `Diagnostics`; 3.9.29 rewrote the diagnostics as plain sentences ("Caught 144 of 145", "6.9 ms typical") and renamed the idle meter `Timer`; 3.9.31 rounds each detector share to whole ms and splits the per-second line in two, because the live 3.9.29 line measured 256 px inside the 244 px card and clipped its last field. Live 3.9.31 read on the real game: 142.7 fps, p50 6.9 / p95 11.9 / worst 20.7 ms, 3 caught of 3, 6/6 presses, `per second: scan 61 · bubble 74` and `dial 23 · card 2 ms` with no clipping - a short check run, not a field run. 270 tests. Released as v3.9.31 (`ea1d5fc`): both the source and mirror releases carry 315,296 bytes / sha256 `00f661f5b26b`, and `releases/latest` serves the same bytes anonymously. | `AUTOFISH.md`; `panel.js`; `tests/panel.test.js`; `scripts/release.js` |
 
 ---
@@ -342,6 +342,8 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-02 | lead (DSH session) | 3.9.18: where a press lands | The narrow band could no longer be diagnosed from a catch rate: lost and caught attempts had identical presses, spin and duration. Every press now records its window, prediction and residual in degrees, plus whether the verdict was observed (`settled`) or assumed from the next press. `pressErrorSummary()` gives mean/p50/p95 residual against the mean window - the number that decides between a timing fix, a fit fix, or none. 252 tests. |
 | 2026-11-02 | lead (DSH session) | 3.9.19: the press destroyed its own measurement | The first live read of the 3.9.18 probe reported 76.7 deg mean error on a 40.2 deg window with every press accepted - an artifact: a press spawns a new triangle, so the frame after one shows the spawn. Replaced with a press-free prediction residual (previous frame predicts this one; press frames skipped), reported in degrees and ms, because a narrow window is 62 ms wide at 300 deg/s. The press log keeps `settled` vs `assumed`, which already read 3 of 9 assumed. 253 tests. |
 | 2026-11-02 | lead (DSH session) | The prediction answer: narrow was never timing | 30 minutes on 3.9.19, 86 attempts, **82 caught / 4 lost**: wide 34/34, full 10/10, **narrow 5/5**, mid 33/37. Prediction error p50 **1.9 deg / 9.6 ms**, p95 **6.1 deg / 31.3 ms**, 1% over 50 ms - against a ~62 ms narrow window, so no timing deficit exists and `marginDeg` was never the knob. The probe also counted press verdicts: **192 settled, 108 assumed** of 300, so the zero-rejected claim is two-thirds measured. Remaining gap is the mid band. |
+
+| 2026-11-17 | lead (Freebuff session) | Focus session hold: 3.9.33-3.9.40 | Commits `d65b3e2` (3.9.33 glyph gate + profile-modal guard) and this release commit. Focus mode was reduced to a pause and renamed **Pause in focus sessions**; the blur cover, the live prompt probe and the canvas clip were removed because the prompt is painted into the game's canvas (the reachable Pixi Graphics is a hit area; hiding its 85-child container changed zero pixels) and the CSS clip could not be verified. Measured live on 3.9.40 in a real session, end simulated through the page title: start during the session paused at 64 ms and stayed frozen for 30 s, the simulated end resumed to 2063 ms with the setting still on, the session returning re-engaged (`paused`/`focus`) and froze again at 3064 ms, stop went to cooldown. Two defects found and fixed on the way: `savePrefs` wrote the live hold instead of the setting, so a session-driven release switched it off for good (3.9.39), and a focus tick left a guard's pause reason in place, so that guard's retry could fish a tick (3.9.40). 297 tests; committed `dist/` byte-identical to a fresh build. Released v3.9.40. |
 
 ---
 
