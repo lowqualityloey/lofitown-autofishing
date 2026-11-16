@@ -102,7 +102,7 @@ test('a running session that cannot bite says so: sit down, the game is seat-bas
   assert.ok(fn.length > 0, 'render() exists');
   assert.ok(fn.includes('status.needsSeat'), 'render() reads needsSeat from the core status');
   assert.ok(fn.includes("'paused'"), 'the notice also shows while paused, not only while running');
-  assert.match(fn, /seatNote \|\| focusNote \|\| playerNote \|\| castNote \|\| banner/, 'the seat notice outranks the log-offline banner');
+  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| castNote \|\| banner/, 'the seat notice outranks the log-offline banner');
   assert.ok(fn.includes("'banner seat'"), 'the seat notice gets its own colour, not the amber warning style');
   assert.ok(fn.includes("host.dataset.needsSeat = '1'"), 'needsSeat is observable from outside the shadow root');
   assert.match(src, /\.banner\.seat\{/, 'the seat style exists');
@@ -129,7 +129,7 @@ test('a focus session is announced, because a free account cannot fish in one', 
   assert.match(src, /var FOCUS_NOTE = 'focus session active/, 'the notice names the state');
   assert.ok(src.includes('needs Cozier'), 'and says why fishing will not happen');
   const fn = src.slice(src.indexOf('function render()'), src.indexOf('/* ------------------------------------------------------------ layout'));
-  assert.match(fn, /seatNote \|\| focusNote \|\| playerNote \|\| castNote \|\| banner/, 'the focus notice outranks the log-offline banner');
+  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| castNote \|\| banner/, 'the focus notice outranks the log-offline banner');
   assert.ok(fn.includes("'banner focus'"), 'it gets its own colour, not the amber seat warning');
   assert.ok(fn.includes("host.dataset.focus = '1'"), 'the state is observable from outside the shadow root');
   assert.match(src, /\.banner\.focus\{/, 'the focus style exists');
@@ -140,6 +140,32 @@ test('a focus session is announced, because a free account cannot fish in one', 
   assert.ok(buttons.length > 0 && !buttons.includes('inFocusSession'), 'the notice is not wired into the button states');
   assert.ok(!start.includes('inFocusSession'), 'Start is not blocked in a focus session');
   assert.ok(!/fetch\(/.test(start), 'the start path makes no network call');
+});
+
+test('focus mode pauses the run, draws nothing over the game, and releases only its own hold', () => {
+  assert.match(src, /prefs\.focusMode = !!p\.focusMode/, 'the pref is read');
+  assert.match(src, /focusMode: !!focusPref/, 'the setting is saved, never the live hold');
+  assert.match(src, /focusPref = !focusOn;/, 'the toggle sets the setting');
+
+  assert.ok(src.includes('focusPref = !!prefs.focusMode;'), 'mount adopts the stored setting');
+  assert.ok(src.includes('if (focusPref) setFocusMode(true);'), 'mount honours the setting');
+  const fn = src.slice(src.indexOf('function setFocusMode'), src.indexOf('function focusTick'));
+  assert.match(fn, /type: 'pause', at: Date\.now\(\), reason: 'focus'/, 'engaging pauses with the focus reason');
+  assert.match(fn, /if \(state\.pauseReason === 'focus'\) dispatch\(\{ type: 'resume'/, 'releasing resumes only its own hold');
+  assert.ok(!/cover|clipPath|promptRect|promptCanvas/i.test(fn), 'engaging touches no canvas and paints nothing');
+  assert.ok(!/focusPref\s*=/.test(fn), 'releasing a hold never clears the setting');
+  const auto = src.slice(src.indexOf('function focusTick'), src.indexOf('/* ------------------------------------------------------------ server'));
+  assert.match(auto, /if \(focusOn && focusSawSession && !session\) setFocusMode\(false\)/, 'only a session-driven hold is auto-released');
+  assert.ok(src.includes("host.dataset.focusMode = '1'"), 'the state is observable outside the shadow root');
+  assert.ok(!src.includes("el('div', 'cover')"), 'no cover node is built');
+  assert.ok(!src.includes('applyPromptHole') && !src.includes('clipPath'), 'the game canvas is never clipped');
+  assert.ok(!src.includes('backdrop-filter:blur(7px)'), 'no blur patch is styled');
+  assert.ok(src.includes('var focusModeNote = focusOn ?'), 'the banner says the hold is deliberate');
+  assert.match(src, /profileOpen: !!\(status && status\.profileOpen\),[\s\S]{0,240}?focus: focusOn\r?\n/, 'every tick reports the hold, so Start cannot fish through it');
+  assert.match(src, /var focusModeNote = focusOn \? 'paused for this focus session/, 'the banner says the hold pauses, and promises no hiding');
+  assert.ok(src.includes("'Pause in focus sessions'"), 'the toggle is named for what it does now');
+  assert.ok(!src.includes("'Focus mode'"), 'the old name is gone from the UI');
+  assert.match(auto, /else if \(!focusOn && session && focusPref\) setFocusMode\(true, \{ session: true \}\)/, 'a session starting engages the hold when the setting is on');
 });
 
 test('the Cozier popup hider is opt-in, cosmetic, and tags only what it recognises', () => {

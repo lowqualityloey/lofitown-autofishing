@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.33) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.40) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
 diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
 "292 of 300 presses landed"), on top of
@@ -179,6 +179,66 @@ outside the shadow root (`window.__panel.focus()`, and `data-focus="1"` on the h
 **not** refuse to start, because a Cozier subscriber fishes in sessions normally and the panel cannot
 read the account type; what it removes is the mystery, so a gated run is a decision instead of a
 25-minute wait for the dial that never comes.
+
+**Pause in focus sessions (3.9.34; renamed and reduced to a pause in 3.9.38) — it pauses, and hides nothing.**
+A *Pause in focus sessions* toggle (off by default) pauses the run while a focus session runs, solo or
+together, and releases it when the session ends; since 3.9.38 it draws nothing over the game at all. The pause is exact: `focus` is a session pause reason, so the clock and the core stop and nothing
+retries it; the reducer only lifts it when the session signal clears or the user toggles it off. The hide is
+cosmetic and says so in the toggle's tooltip: the bubble is painted into the Pixi/WebGL canvas, so no CSS can
+remove it. A live probe on 2026-11-17 found `__PIXI_DEVTOOLS__.app` with a two-child stage and no node with
+prompt-sized bounds — no castUI sprite to set `visible = false` on — so the cover is a blurred fixed patch over
+the prompt's own detected rect (`zones().bubble`, CSS pixels). While the core runs that rect is exact; once
+paused it is frozen, which is fine because the prompt reappears in the same spot. The cover never outlives the
+page (`pagehide` clears it) and never swallows a click (`pointer-events: none`). 3.9.34's cover read
+only `zones().bubble`, which is null before the core has ever run - the first live session showed the
+prompt uncovered while idle - so 3.9.35 falls back to `F.promptRect()`, a live probe converted with
+the same canvas-to-CSS math (measured 1:1 at 1179x822, DPR 1). 3.9.36 wraps that probe in
+`probeBubble`'s frame callback: a plain-task read of the renderer's buffer returns null, which is how
+3.9.35 still shipped with no cover while the bot was idle. Three empty probes drop the cover.
+
+In 3.9.37 the blur patch became the fallback instead of the mechanism. Sampling the two full-window canvases
+at the prompt's centre showed the Pixi stage's canvas holding grass and the other canvas holding the bubble's
+cream, and hiding the reachable `Graphics` changed no pixels - so that node is only a hit area, which is why
+the sprite-flag route never worked. The prompt and the lure icon are painted on a separate UI canvas layer
+that is transparent everywhere else, so the toggle then clipped a hole in that layer (outer ring clockwise, inner
+ring counter-clockwise, punched out by the nonzero fill rule) and the world shows through: the buttons vanish
+rather than being covered. The rect is widened by 72 px on the right to take the lure button with the bubble.
+The hole is restored on toggle-off, session end, `pagehide` and unmount, and the blur patch is used only when
+no canvas can be found to clip.
+
+In 3.9.38 the overlay is gone entirely. The clip was accepted by the browser but could not be verified in a
+live tab - the game tab was occluded and never finished loading its world - and clipping the layer the game
+composites is not a risk worth taking blind, so the toggle - now named **Pause in focus sessions** - is a pure
+hold: it pauses the session and draws nothing over the game.
+
+3.9.39 fixes a defect the first live measurement of that hold found. `savePrefs()` wrote the *live* hold
+(`focusMode: !!focusOn`), so the release at session end - which dispatches a resume, and a resume persists -
+stored `focusMode: false` and silently switched the setting off; the next session could never engage. The
+setting now lives in `focusPref` and only the toggle writes it. Measured live on 3.9.38: starting a run during
+a session held it in one tick (`phase: paused`, `pauseReason: focus`, clock frozen at 480 ms for 3.5 s), and
+the simulated end resumed it (clock 480 -> 3481 ms before the nearby-player guard paused it); the missing
+re-engagement on the session coming back was this bug. 3.9.40 closes the ordering gap the second run
+showed: when the hold engaged while a guard already had the run paused, the reason stayed `player-block`,
+so that guard's retry could fish for a tick. A focus tick now takes the pause over (`paused(s, at, 'focus')`)
+whenever the hold is engaged and the run is not user-paused, and a test pins that no `resumeCore` can come
+from it.
+
+Measured again on 3.9.40, live, in a real session (session end simulated by hiding the countdown from the
+panel; the panel reads nothing else):
+
+| sample | phase / reason | fishingMs | setting |
+| --- | --- | --- | --- |
+| idle | idle | 0 | on |
+| start during the session | paused / **focus** | 64 | on |
+| +30 s | paused / focus | **64** (frozen) | on |
+| session ends | **running**, reason null | 2063 (resumed) | on |
+| session returns | paused / **focus** | 3064 (frozen again) | on |
+| stop | cooldown | 0 | on |
+
+The setting survives the whole cycle now, which is what 3.9.39 fixed. The prompt stays visible. That is the honest limit: it cannot be removed by a
+page script, because it is painted into the game's canvas, the reachable Pixi Graphics is only a hit area
+(hiding it changed no pixels, measured), and the blur cover that was tried looked worse than the bubble. The session signal remains the
+page title's `FOCUS`; a solo session that does not set it leaves the manual toggle as the way in.
 
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a

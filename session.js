@@ -204,6 +204,15 @@
       }
       return { state: s, actions: [] };
     }
+    if (s.pauseReason === 'focus') {
+      // A focus hold ends when the session does, never on a timer: the panel clears the fact.
+      if (fact.focus) return { state: s, actions: [] };
+      return runningAgain(s, at);
+    }
+    // A focus hold is a decision, not a stall. If the hold engages while a guard already has the run
+    // paused (player-block, no-catch), it takes the pause over, so that guard's retry can never slip
+    // a tick of fishing through mid-session. A user pause still outranks it, above.
+    if (fact.focus) return paused(s, at, 'focus');
     if (retryable(s.pauseReason)) {
       if (s.retryAt != null && at >= s.retryAt) {
         if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, s.pauseReason) };
@@ -290,7 +299,7 @@
       if (s.phase !== 'running') return { state: s, actions: [] };
       if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
       s.phase = 'paused';
-      s.pauseReason = 'user';
+      s.pauseReason = fact.reason === 'focus' ? 'focus' : 'user';
       s.lastTickAt = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -385,6 +394,13 @@
 
       var visible = fact.visible !== false;
       if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
+
+      // 0. a focus session is a hold the user asked for: credit the time fished so far, then stop
+      // the clock and the core. Not retryable - nothing is broken, the player is focusing.
+      if (fact.focus) {
+        if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+        return paused(s, at, 'focus');
+      }
 
       // 1. the game only runs while the tab is visible: a hidden stretch is not fishing time
       if (!visible) {

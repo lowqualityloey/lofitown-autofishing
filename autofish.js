@@ -4256,6 +4256,7 @@ const SPECIES = [
 
   /** One-shot probes, safe to call from a normal task. */
   F.probeBubble = () => new Promise((res) => requestAnimationFrame(() => res(F.findBubble())));
+  
   F.probeDial = (x, y) => new Promise((res) => requestAnimationFrame(() => res(F.lockDial(x, y))));
   F.probeDialAnywhere = () => new Promise((res) => requestAnimationFrame(() => res(dialAnywhere())));
   F.spaceTest = (where) => ({ consumed: !space(where || 'window') });

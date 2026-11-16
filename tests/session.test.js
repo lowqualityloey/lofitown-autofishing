@@ -40,6 +40,57 @@ test('a stalled loop is not charged for the time it never fished', () => {
   assert.equal(state.stalled, false);
 });
 
+test('a focus session holds the clock and the core, and resumes when it ends', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'tick', at: T0 + 60_000, visible: true, catches: 0, errors: 0, todayMs: 0 }));
+  const r = reduce(state, { type: 'tick', at: T0 + 120_000, visible: true, catches: 0, errors: 0, todayMs: 0, focus: true });
+  assert.equal(r.state.phase, 'paused');
+  assert.equal(r.state.pauseReason, 'focus');
+  assert.equal(r.state.fishingMs, 120_000, 'the stretch fished before the hold is credited');
+  assert.deepEqual(r.actions.map(a => a.type), ['pauseCore', 'persist']);
+  // No retry timer: minutes later it is still held, not stopped as a stall.
+  let s2 = r.state;
+  for (let i = 1; i <= 3; i++) {
+    s2 = reduce(s2, { type: 'tick', at: T0 + 120_000 + i * 61_000, visible: true, catches: 0, errors: 0, todayMs: 0, focus: true }).state;
+  }
+  assert.equal(s2.phase, 'paused');
+  assert.equal(s2.pauseReason, 'focus');
+  // The session ending is the only thing that lifts it.
+  const back = reduce(s2, { type: 'tick', at: T0 + 400_000, visible: true, catches: 0, errors: 0, todayMs: 0, focus: false });
+  assert.equal(back.state.phase, 'running');
+  assert.ok(back.actions.some(a => a.type === 'resumeCore'), 'a session end resumes the core');
+});
+
+test('a focus hold takes over a guard pause, so its retry cannot resume mid-session', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'tick', at: T0 + 60_000, visible: true, catches: 0, errors: 0, todayMs: 0, playerBlocked: true }));
+  assert.ok(['player-block', 'no-catch'].includes(state.pauseReason), 'the guard paused the run');
+  const held = reduce(state, { type: 'tick', at: T0 + 120_000, visible: true, catches: 0, errors: 0, todayMs: 0, focus: true });
+  assert.equal(held.state.phase, 'paused');
+  assert.equal(held.state.pauseReason, 'focus', 'the hold owns the pause now');
+  assert.ok(!held.actions.some(a => a.type === 'resumeCore'), 'nothing resumes it');
+});
+
+test('focus is not retryable and never overwrites an explicit user hold', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'session.js'), 'utf8');
+  const retry = src.slice(src.indexOf('function retryable'), src.indexOf('var RETRY_DELAY_MS'));
+  assert.ok(!/focus/.test(retry), 'a focus hold is a decision, not a stall to retry');
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'pause', at: T0 + 1000 }));
+  assert.equal(state.pauseReason, 'user');
+  const r = reduce(state, { type: 'tick', at: T0 + 2000, visible: true, catches: 0, errors: 0, todayMs: 0, focus: true });
+  assert.equal(r.state.pauseReason, 'user', 'a user hold survives a focus tick');
+  assert.equal(r.state.phase, 'paused');
+});
+
+test('a pause fact carries its reason, so a focus hold is labelled', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  const r = reduce(state, { type: 'pause', at: T0 + 1000, reason: 'focus' });
+  assert.equal(r.state.pauseReason, 'focus');
+  const u = reduce(state, { type: 'pause', at: T0 + 1000 });
+  assert.equal(u.state.pauseReason, 'user', 'no reason still means a user hold');
+});
+
 test('stop enters cooldown and logs the session', () => {
   const { state } = reduce(createState(), { type: 'start', at: T0 });
   const r = reduce(state, { type: 'stop', at: T0 + 600_000, reason: 'user' });

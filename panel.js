@@ -93,6 +93,7 @@
     prefs.resumeAfterReload = !!p.resumeAfterReload;
     prefs.postCatches = !!p.postCatches;
     prefs.hideUpsell = !!p.hideUpsell;
+    prefs.focusMode = !!p.focusMode;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
     prefs.chain = !!p.chain;
     if (p.profile) prefs.profile = String(p.profile);
@@ -110,6 +111,7 @@
       resumeAfterReload: !!window.__panel.resumeAfterReload,
       postCatches: !!window.__panel.postCatches,
       hideUpsell: !!window.__panel.hideUpsell,
+      focusMode: !!focusPref,
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
     });
   }
@@ -239,10 +241,67 @@
    * The run watchdog already pauses after a run of no catches (pauseReason 'no-catch'), which keeps
    * a gated session from burning the whole budget.
    */
-  var FOCUS_NOTE = 'focus session active — focus fishing needs Cozier, casts are refused';
+  var FOCUS_NOTE = 'focus session active — focus fishing needs Cozier, casts are refused; "Pause in focus sessions" (Session & guards) pauses the run';
 
   function inFocusSession() {
     try { return /\bFOCUS\b/.test(document.title); } catch (e) { return false; }
+  }
+
+  /* ---------------------------------------------- focus mode (3.9.34) ---- */
+  /*
+   * The ask: stop fishing, run a focus session (solo or together), and do not see the REEL!/CAST!
+   * bubble until the session ends. Two halves.
+   *
+   * The pause is exact: a 'focus' pause reason holds the clock and the core, is not retryable, and
+   * only the toggle or the session ending lifts it (session.js).
+   *
+   * The bubble itself cannot be removed from a page script. It is painted into the game's canvas; the
+   * reachable Pixi Graphics is only a hit area (hiding it changed no pixels, measured), and clipping
+   * the UI canvas that carries it could not be verified live and risks the game's compositing. So
+   * focus mode pauses and nothing else: it draws no cover and touches no canvas, and the prompt stays
+   * on screen. A cover was tried and looked bad; an unverified clip is not worth shipping.
+   */
+  var focusOn = false;       // the hold is engaged right now
+  var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
+                             // the hold; it must never change this, or the next session never engages.
+  var focusSawSession = false;
+
+  function renderFocusToggle() {
+    if (!ui.focusToggle) return;
+    ui.focusToggle.textContent = focusOn ? 'on' : 'off';
+    ui.focusToggle.style.color = focusOn ? '#5ad18b' : '#9aa4ae';
+  }
+
+  /**
+   * Engage or release focus mode. opts.session records that the game's own session drove it, which
+   * is what lets its end release the hold; a manual toggle stays until the user turns it off.
+   */
+  function setFocusMode(on, opts) {
+    var o = opts || {};
+    on = !!on;
+    if (on === focusOn) return;
+    focusOn = on;
+    if (window.__panel) window.__panel.focusMode = on;
+    if (on) {
+      focusSawSession = !!o.session;
+      if (state.phase === 'running') dispatch({ type: 'pause', at: Date.now(), reason: 'focus' });
+    } else {
+      focusSawSession = false;
+      if (state.pauseReason === 'focus') dispatch({ type: 'resume', at: Date.now() });
+    }
+    renderFocusToggle();
+    render();
+  }
+
+  /**
+   * Called every tick: with the pref on, a session starting engages the hold; a session-driven hold
+   * releases when it ends. A manual toggle is left alone in both directions.
+   */
+  function focusTick() {
+    var session = inFocusSession();
+    if (focusOn && session) focusSawSession = true;
+    if (focusOn && focusSawSession && !session) setFocusMode(false);
+    else if (!focusOn && session && focusPref) setFocusMode(true, { session: true });
   }
 
   /* ------------------------------------------------------------ server ---- */
@@ -566,6 +625,7 @@
     style.textContent = CSS;
     root.appendChild(style);
 
+
     var wrap = el('div', 'wrap');
     var card = el('div', 'card');
 
@@ -614,6 +674,15 @@
     upsellToggle.title = 'hide the in-session Cozier upsell (cosmetic: a free account still cannot fish in focus)';
     upsellRow.append(upsellLabel, upsellToggle);
     setSec.body.appendChild(upsellRow);
+
+    // Pause in focus sessions: stop the run while a session is active. It hides nothing - the cast
+    // prompt is the game's own drawing - so the label says exactly what it does.
+    var focusRow = el('div', 'row');
+    var focusLabel = el('div', 'label', 'Pause in focus sessions');
+    var focusToggle = el('button', 'icon', focusOn ? 'on' : 'off');
+    focusToggle.title = 'pause autofish while a focus session is active; the cast prompt is drawn by the game and stays visible';
+    focusRow.append(focusLabel, focusToggle);
+    setSec.body.appendChild(focusRow);
 
     // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
     // window and the cap still bound it.
@@ -736,6 +805,7 @@
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
+      focusToggle: focusToggle,
       chainToggle: chainToggle, reloadToggle: reloadToggle, postToggle: postToggle,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
@@ -791,6 +861,11 @@
     });
     upsellToggle.addEventListener('click', function () {
       setUpsellHidden(!upsellOn);
+      savePrefs();
+    });
+    focusToggle.addEventListener('click', function () {
+      focusPref = !focusOn;   // the setting, not the live hold
+      setFocusMode(focusPref);
       savePrefs();
     });
     chainToggle.addEventListener('click', function () {
@@ -1194,6 +1269,7 @@
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
     ui.timeRow.style.display = state.window.on ? '' : 'none';
     renderUpsellToggle();
+    renderFocusToggle();
 
     if (!focused(ui.dur.val)) ui.dur.val.value = minutesText(state.durationMs);
     if (!focused(ui.cool.val)) ui.cool.val.value = minutesText(state.cooldownMs);
@@ -1279,6 +1355,8 @@
     // A focus session outranks the log-offline chatter: the run will look alive while the game
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
+    // The bot's own focus hold outranks the notice: this one is a decision, not a warning.
+    var focusModeNote = focusOn ? 'paused for this focus session (toggle off to resume)' : '';
     var focusNote = focus ? FOCUS_NOTE : '';
     // A tap landing where no dial follows means a nearby player's name tag or an open
     // profile is swallowing the cast: pause the clock and say to move spots. A cast that
@@ -1303,12 +1381,12 @@
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || seatNote || focusNote || playerNote || castNote || banner || stopNote;
+    var note = stallNote || seatNote || focusModeNote || focusNote || playerNote || castNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (playerNote) ui.banner.className = 'banner seat';
-    else if (focus && !banner) ui.banner.className = 'banner focus';
+    else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
     else if (stopNote && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
@@ -1319,6 +1397,7 @@
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
+      if (focusOn) host.dataset.focusMode = '1'; else delete host.dataset.focusMode;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
       if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
       if ((status && status.profileOpen) || state.pauseReason === 'profile-open') host.dataset.profileOpen = '1'; else delete host.dataset.profileOpen;
@@ -1433,6 +1512,8 @@
   /* -------------------------------------------------------------- loop ---- */
 
   function tick() {
+    // A focus session ending releases a hold it started; a manual toggle is never touched here.
+    focusTick();
     // A run that crosses midnight starts the new day at zero, the same way a reload does.
     var dayNow = dayKey();
     if (budgetDay && dayNow !== budgetDay) {
@@ -1447,7 +1528,7 @@
     if (state.phase === 'idle' || state.phase === 'cooldown') {
       // keep wall clocks honest and let a cooldown end on its own
       if (state.phase === 'cooldown' && state.cooldownUntil && Date.now() >= state.cooldownUntil) {
-        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs, seat: false });
+        dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs, seat: false, focus: focusOn });
         banner = '';
       } else {
         render();
@@ -1471,7 +1552,10 @@
       sinceBubbleMs: status && typeof status.sinceBubbleMs === 'number' ? status.sinceBubbleMs : null,
       sinceDialMs: status && typeof status.sinceDialMs === 'number' ? status.sinceDialMs : null,
       playerBlocked: !!(status && status.playerBlocked),
-      profileOpen: !!(status && status.profileOpen)
+      profileOpen: !!(status && status.profileOpen),
+      // the focus hold: a Start pressed during a session must not fish, and a session ending
+      // is what resumes. The reducer owns the clock; this fact only reports the hold's state.
+      focus: focusOn
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the
@@ -1542,6 +1626,9 @@
 
     build();
     if (prefs.hideUpsell) setUpsellHidden(true); // cosmetic: see setUpsellHidden()
+    // Explicit on purpose: the toggle was on when the page went away, so the hold comes back.
+    focusPref = !!prefs.focusMode;
+    if (focusPref) setFocusMode(true);
     mountAdoption();
     banner = checkInterrupted() || banner;
 
@@ -1556,6 +1643,8 @@
     window.__panel.unmount = unmount;
     window.__panel.captureDiag = captureDiag;
     window.__panel.focus = inFocusSession;
+    window.__panel.focusMode = focusOn;
+    window.__panel.setFocusMode = setFocusMode;
     tick();
   }
 
@@ -1577,6 +1666,7 @@
     if (tickTimer) clearInterval(tickTimer);
     if (placeTimer) clearInterval(placeTimer);
     if (mount.timer) clearInterval(mount.timer);
+
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', onVisible);
     releaseWakeLock();
