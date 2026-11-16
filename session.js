@@ -120,9 +120,9 @@
 
   var NO_CATCH_MS = 10 * 60 * 1000;   // nothing bites for this long -> check the page
   var CAST_STALL_MS = 90 * 1000;       // post-catch, no prompt and no dial this long -> the cast never landed
-  // cast-stall and player-block share no-catch's bounded retry: pause, retry, then stop.
+  // cast-stall, player-block and profile-open share no-catch's bounded retry: pause, retry, then stop.
   function retryable(reason) {
-    return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block';
+    return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block' || reason === 'profile-open';
   }
   var RETRY_DELAY_MS = 60 * 1000;
   var MAX_RETRIES = 3;
@@ -454,6 +454,11 @@
       var sinceCatch = at - (s.lastCatchAt == null ? s.startedAt : s.lastCatchAt);
       // A profile modal open over the game blocks prompts without stopping the clock: pause
       // with a named reason instead of burning the session as a generic no-catch.
+      // a profile modal open over the game blocks prompts and swallows inputs: pause first,
+      // before the tap-suppression backstop below ever gets its three fruitless taps
+      if (fact.profileOpen === true) {
+        return paused(s, at, 'profile-open');
+      }
       if (fact.playerBlocked === true) {
         return paused(s, at, 'player-block');
       }

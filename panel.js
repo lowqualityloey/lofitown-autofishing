@@ -1284,7 +1284,7 @@
     // profile is swallowing the cast: pause the clock and say to move spots. A cast that
     // never lands (no prompt, no dial 90 s after a catch) gets its own retry line.
     var playerNote = '';
-    if ((status && status.playerBlocked) || state.pauseReason === 'player-block') {
+    if ((status && (status.playerBlocked || status.profileOpen)) || state.pauseReason === 'player-block' || state.pauseReason === 'profile-open') {
       if (phase === 'running' || phase === 'paused') playerNote = 'player in the way — move spots or close the profile';
     }
     var castNote = '';
@@ -1321,6 +1321,7 @@
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
       if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
+      if ((status && status.profileOpen) || state.pauseReason === 'profile-open') host.dataset.profileOpen = '1'; else delete host.dataset.profileOpen;
     }
 
     place();
@@ -1469,7 +1470,8 @@
       // reason instead of burning the session as a generic no-catch
       sinceBubbleMs: status && typeof status.sinceBubbleMs === 'number' ? status.sinceBubbleMs : null,
       sinceDialMs: status && typeof status.sinceDialMs === 'number' ? status.sinceDialMs : null,
-      playerBlocked: !!(status && status.playerBlocked)
+      playerBlocked: !!(status && status.playerBlocked),
+      profileOpen: !!(status && status.profileOpen)
     });
 
     // 20 s running with zero prompts found means the detector is blind; grab one frame so the

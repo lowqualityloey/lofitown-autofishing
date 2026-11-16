@@ -222,7 +222,7 @@ test('a window resize re-resolves the UI surface instead of keeping a cached wor
 test('the bubble branch escalates instead of tapping the same blob forever', () => {
   const btn = CORE.indexOf('const b = F.findBubble();');
   assert.ok(btn > 0, 'the bubble branch is missing');
-  const branch = CORE.slice(btn, btn + 3400);
+  const branch = slice('const b = F.findBubble();', '// 2. a locked dial');
   assert.match(branch, /const rung = \(F\.bubbleMiss = \(F\.bubbleMiss \|\| 0\) \+ 1\);/);
   assert.match(branch, /castRecovery\(rung\)/);
   assert.match(branch, /var tapOk = !!\(rec\.tap && confirmed\);/);
@@ -240,7 +240,7 @@ test('the bubble branch escalates instead of tapping the same blob forever', () 
 
 test('the dial hint follows the prompt it can see, not only the prompt it clicked', () => {
   const btn = CORE.indexOf('const b = F.findBubble();');
-  const branch = CORE.slice(btn, btn + 3400);
+  const branch = slice('const b = F.findBubble();', '// 2. a locked dial');
   const hint = branch.indexOf('F.hint = { x: b.cx, y: b.cy + 53 };');
   const tap = branch.indexOf('if (tapOk) tap(b.cx, b.cy);');
   assert.ok(hint > 0, 'the bubble branch must set the dial hint');

@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait, dialGhost, ghostBlocked };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait, dialGhost, ghostBlocked, spinAlive };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait', 'dialGhost', 'ghostBlocked']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -131,6 +131,21 @@ test('a short shrinking narrow dial is a ghost, not a skipped fish', () => {
   assert.match(SRC, /F\.ghostGeo = \{/);
   assert.match(SRC, /F\.lastLockAt = 0/, 'the memo must be cleared on a ghost');
   assert.match(SRC, /const last = presses > 0 \? F\.dialLastPress : null/, 'zero-press telemetry must not reuse the previous press');
+});
+
+test('a narrow dial with a fresh spin holds the lock through blind frames', () => {
+  // Live 85%: two 40 deg dials, spin 50-140 deg/s, ring lost just before the pin arrived,
+  // zero presses, both fish gone. A fade sits still, so fresh spin tells them apart. The
+  // witness is the sampler's own frozen _om/_mt: no new state, and the certified fade below
+  // (still ring, no spin) still ghosts on schedule because the hold never engages for it.
+  assert.equal(T.spinAlive({ width: 40, _om: 120, _mt: 900 }, 1000), true);
+  assert.equal(T.spinAlive({ width: 40, _om: 0, _mt: 900 }, 1000), false, 'a still fade never holds');
+  assert.equal(T.spinAlive({ width: 40, _om: null, _mt: 900 }, 1000), false, 'unmeasured spin never holds');
+  assert.equal(T.spinAlive({ width: 40, _om: 120, _mt: 0 }, 1000), false, 'stale spin expires on its own');
+  assert.equal(T.spinAlive({ width: 70, _om: 120, _mt: 900 }, 1000), false, 'wide dials keep the old path');
+  assert.equal(T.spinAlive(null, 1000), false);
+  assert.match(SRC, /spinAlive\(F\.geo, t\)/);
+  assert.doesNotMatch(SRC, /lastSpinAt/, 'the witness lives on the lock, not in new state');
 });
 
 test('a ghost cooldown blocks the same fading circle but allows a wider real dial', () => {
