@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.40) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.41) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
 diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
 "292 of 300 presses landed"), on top of
@@ -235,10 +235,28 @@ panel; the panel reads nothing else):
 | session returns | paused / **focus** | 3064 (frozen again) | on |
 | stop | cooldown | 0 | on |
 
-The setting survives the whole cycle now, which is what 3.9.39 fixed. The prompt stays visible. That is the honest limit: it cannot be removed by a
-page script, because it is painted into the game's canvas, the reachable Pixi Graphics is only a hit area
-(hiding it changed no pixels, measured), and the blur cover that was tried looked worse than the bubble. The session signal remains the
-page title's `FOCUS`; a solo session that does not set it leaves the manual toggle as the way in.
+The setting survives the whole cycle now, which is what 3.9.39 fixed. The session signal remains the page
+title's `FOCUS`; a solo session that does not set it leaves the manual toggle as the way in.
+
+3.9.41 tries the one mechanism that is left, and the only one that does not draw anything over the
+game: erase the prompt's pixels after the game has painted them and before the browser composites,
+which is exactly the window the post-render hook already owns. While the hold is engaged the panel
+arms a rect (`zones().bubble`) and the wrapper, for whichever canvas it just drew, applies
+`gl.enable(SCISSOR_TEST)`, `gl.scissor` and `gl.clear(COLOR_BUFFER_BIT)` with a transparent clear
+colour, then puts the game's scissor and clear colour back. Nothing is composited on top of the game:
+the bubble's own pixels are removed, so the layer underneath shows through.
+
+It is deliberately narrow. Only the surface the bot reads is cleared, and never when that surface is
+the world canvas (`maskTarget()` refuses): in the merged layout one buffer holds the scenery and the
+prompt together, so a clear there would leave a hole in the world rather than reveal it - there the
+prompt stays visible. The pause is untouched by all of this; the mask is a visual extra around it.
+Measured live on 3.9.41 (2026-11-17, real session, 1179x822). With the hold engaged and the run paused at
+608 ms, the prompt layer read `[249,247,228,255]` at the bubble centre (588,253) with the mask off and
+`[0,0,0,0]` with it on, while the world canvas under it stayed `[233,236,149,255]` in both cases. The
+clear ran 6,561 times with 0 skips and no GL error, and the pause did not move: 608 ms before and
+1.6 s later, still `paused`/`focus` with the core paused. So the bubble's own pixels are removed from
+the prompt layer and the world shows through - nothing is composited over the game. When the game
+merges the layers, `eligible` is false and the prompt stays visible.
 
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a
