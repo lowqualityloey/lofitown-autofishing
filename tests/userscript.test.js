@@ -24,6 +24,8 @@ test('the userscript version matches package.json, so a bump cannot half-happen'
 test('the header advertises the stable release asset for updates', () => {
   // Must be the PUBLIC dist repository: a private repository's release asset 404s for an
   // unauthenticated Tampermonkey check, which is the whole point of the separate mirror.
+  // The directives stay out of manual pre-release installs (they would downgrade to the
+  // previous mirror build) and are restored before tagging; release.js gates the tag on them.
   const url = 'https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js';
   const dl = src.match(/^\/\/ @downloadURL\s+(\S+)$/m);
   const up = src.match(/^\/\/ @updateURL\s+(\S+)$/m);

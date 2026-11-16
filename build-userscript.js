@@ -31,6 +31,11 @@ const VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 // so its release assets answer an unauthenticated Tampermonkey update check with 404. The dist
 // repository holds no source - just the built file - so both browsers can update without a
 // GitHub session. Publish every release there too, with the asset named autofish.user.js.
+//
+// The mirror serves the newest release under this fixed path, so an installed copy finds its
+// own updates. Restored for the release: the live pass ran the same code without these two
+// lines (a manual install must not silently downgrade while the mirror still serves the
+// previous version), and scripts/release.js refuses a tag whose dist lacks them.
 const UPDATE_URL = 'https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js';
 
 const HEADER = [
