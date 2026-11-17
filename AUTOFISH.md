@@ -334,7 +334,10 @@ pressed for a minute or more while the loop still ticks) and a missed reels left
 
 **Recording a night.** The page keeps only the last 250 attempts (`autofish:run:v1`), so an overnight
 run has to be sampled while it happens or the part that matters rolls off. `scripts/overnight-export.js`
-is pasted into the page console once: it posts `__fish.exportRun()` to fishserve every five minutes
+is loaded into the game page once - pasted into the console, or appended as a `<script src>` tag (the
+server hands out the file at `http://127.0.0.1:8731/overnight.js`, so the running copy is the one on
+disk). It posts `__fish.exportRun()` to fishserve immediately on load - that first file is the proof
+the capture works before the page is left - and then every five minutes
 (`POST /export` -> `data/runs/export-<time>.json`). At the measured ~1.3 attempts/minute five minutes
 is about seven new rows, so consecutive snapshots always overlap and no attempt is lost between them.
 `__overnight.now()` forces a snapshot and `__overnight.stop()` ends the sampler; neither touches the

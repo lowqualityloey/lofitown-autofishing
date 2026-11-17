@@ -52,6 +52,19 @@ test('POST /export stores one snapshot of a run and refuses a body without attem
   } finally { server.close(); }
 });
 
+test('GET /overnight.js serves the sampler to the game page', async () => {
+  const { server, port } = await boot();
+  try {
+    const r = await fetch('http://127.0.0.1:' + port + '/overnight.js', { headers: { Origin: 'https://app.lofi.town' } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type'), /javascript/);
+    assert.equal(r.headers.get('access-control-allow-origin'), 'https://app.lofi.town', 'the page fetches it cross-origin');
+    const body = await r.text();
+    assert.match(body, /window\.__overnight/);
+    assert.match(body, /\/export/);
+  } finally { server.close(); }
+});
+
 test('a foreign Origin cannot write, and only allowed origins get CORS headers', async () => {
   const { server, dir, port } = await boot();
   try {
