@@ -80,6 +80,36 @@ function mirrorFromUpdateUrl(url) {
   return { repo: m[1] + '/' + m[2], asset: m[3] };
 }
 
+/**
+ * The vault record rides on the release commit as a `HeyLoey-Milestone:` trailer, and the repo's
+ * post-commit hook turns it into the daily note. Nothing about publishing depends on it, so a tag
+ * without the trailer still ships - which is how 3.9.12 and then 3.9.43 went unrecorded and had to
+ * be backfilled. The rule lived in an instruction; this makes the tool refuse instead.
+ */
+const TRAILER = /^HeyLoey-Milestone:[ \t]*(\S.*)$/m;
+const TRAILER_EXEMPT = {
+  // Tagged before this check existed; its note was written by hand on 2026-11-17 from the WSL
+  // checkout. The exception is a record, not a silent skip - a new tag has to carry the trailer.
+  'v3.9.43': 'logged by hand 2026-11-17 (commit 56afe89 was already tagged)',
+};
+
+function milestoneText(body) {
+  const m = TRAILER.exec(String(body || ''));
+  return m ? m[1].trim() : '';
+}
+
+function milestoneFor(tag, body) {
+  const text = milestoneText(body);
+  if (text) return { text, exempt: false, reason: null };
+  if (TRAILER_EXEMPT[tag]) return { text: '', exempt: true, reason: TRAILER_EXEMPT[tag] };
+  throw new Error(
+    tag + ' has no HeyLoey-Milestone: trailer, so the vault record for this release would not be written.\n' +
+    '  log it:    heyloey done "<one line, the concrete outcome>"\n' +
+    '  then put it on the tag commit: git commit --amend -m "<subject>" -m "HeyLoey-Milestone: <one line>"\n' +
+    '  and move the tag:          git tag -f ' + tag
+  );
+}
+
 function sourceRepo() {
   const remote = git(['remote', 'get-url', 'origin']).trim();
   const m = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?$/.exec(remote);
@@ -195,6 +225,9 @@ async function main() {
   } catch (err) {
     throw new Error('no local tag ' + tag + ' — tag the release commit first');
   }
+  // Before anything is read from GitHub or published: a release that cannot be recorded is a
+  // release this tool will not publish.
+  const milestone = milestoneFor(tag, git(['log', '-1', '--format=%B', tagCommit]));
   const head = git(['rev-parse', 'HEAD']).trim();
 
   const tagged = JSON.parse(git(['show', tag + ':package.json']));
@@ -234,6 +267,7 @@ async function main() {
   }
 
   console.log('  tag            ' + tag + ' → ' + tagCommit.slice(0, 7) + (tagCommit === head ? '' : ' (HEAD ' + head.slice(0, 7) + ')'));
+  console.log('  milestone      ' + (milestone.text || 'none recorded — exempt: ' + milestone.reason));
   console.log('  committed dist ' + size(committed) + ' · sha256 ' + hash(committed).slice(0, 12));
   if (fresh) console.log('  fresh build    ' + size(fresh) + ' · sha256 ' + hash(fresh).slice(0, 12) + ' · match');
   else if (dirty.length) console.log('  fresh build    skipped (' + dirty.join(', ') + ' modified)');
@@ -305,4 +339,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { mirrorFromUpdateUrl, expectPublic };
+module.exports = { mirrorFromUpdateUrl, expectPublic, milestoneText, milestoneFor };

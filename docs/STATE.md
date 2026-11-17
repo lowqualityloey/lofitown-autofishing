@@ -212,6 +212,11 @@ Staging area for rules observed during sessions but not yet approved as invarian
     404 for `/panel.js`. The browser talks to whatever listens there, not to the WSL instance. Use
     `FISHSERVE_PORT=8741` (or stop the old process) — the panel derives its API origin from its own
     script URL, so any port works.
+  - **Stale worktree index.** `main` is also checked out in the WSL worktree at
+    `//wsl.localhost/Ubuntu/home/heyloey/personal/lofitown-autofishing`. Merge commits made from the
+    Windows worktree move the ref but not that tree, so it reads a large diff until a
+    `git reset --hard` is run there; the Windows worktree is the one that writes. (The `heyloey` CLI
+    lives only on the WSL side - run milestone writes through `wsl.exe -e bash -lc '...'`.)
   - **Ban risk** sits entirely with the user's account; the bot does client-side input only and
     refuses to run while the tab is not visible.
 
@@ -286,7 +291,11 @@ Staging area for rules observed during sessions but not yet approved as invarian
 6. Carry `HeyLoey-Milestone: <summary>` on the release commit (see README "Releasing") and read the
    daily note back afterwards. Logging on agent judgement failed once - 3.9.12 shipped in a session
    that had not loaded the vault rule and went unrecorded until it was backfilled - and the trailer is
-   the only path that does not depend on an agent remembering.
+   the only path that does not depend on an agent remembering. It failed again on 3.9.43 (its release
+   merge `56afe89` had no trailer; the note was written by hand on 2026-11-17), so the rule is now in
+   the tool: `scripts/release.js` refuses to publish - and `--check` refuses to pass - when the tagged
+   commit carries no non-empty trailer. `v3.9.43` is the only named exemption, and a new tag has to
+   carry it.
 
 7. **Done in 3.9.27:** `adoptSurface()` requires a **found prompt** twice instead of a blank count;
    a dense renderer is considered only when the current surface has already read blank, which keeps
