@@ -1,19 +1,20 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.43 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.44 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
-  distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist; **3.9.41** is tagged and
-  published, carrying 3.9.33-3.9.41 (an install on 3.9.32 updates straight to it); 3.9.42 was built and
-  installed but **never tagged** — superseded before release by 3.9.43, which is built and committed
-  and **not tagged yet**: its tag waits on the installed build being checked on screen
-- **Target Release / Deadline**: 3.9.43 hides the whole prompt layer at the sprites' own bounds, built
-  2026-11-17; tag `v3.9.43` and its release follow the on-screen check, not before it
-- **Current Working Branch**: `proto/focus-prompt-mask` (3.9.43); `main` at the v3.9.41 merge
-  `a75100e`; 3.9.40 tagged `def2b7a`
+  distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist; **3.9.43** is tagged and
+  published (345,976 bytes, sha256 `97f482af…`), carrying 3.9.33-3.9.43; 3.9.42 was built and installed
+  but **never tagged** — superseded by 3.9.43 before release. **3.9.44** is the current build: it fixes
+  a page-load focus hold (panel.js), ships with the overnight capture tooling, and is being prepared
+  for tag
+- **Target Release / Deadline**: 3.9.44 fixes the mount-time focus hold and carries the overnight
+  export/report tooling, built 2026-11-17
+- **Current Working Branch**: `proto/focus-prompt-mask` (3.9.44); `main` at the 3.9.43 tooling merge
+  `94911be`; 3.9.43 tagged `56afe89`
 - **Last Updated**: 2026-11-17
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
@@ -368,6 +369,8 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-17 | lead (Freebuff session) | Focus prompt mask: 3.9.41 | Commit `62a7b76` plus the probe commit, merged into `main` from `proto/focus-prompt-mask`. The mask draws nothing: it erases the prompt's own pixels in the post-render hook, on the prompt's canvas only, and refuses the merged/world surface. `probePromptRect` resolves the rect from the frame when no run has detected one, so the toggle works in a focus session the bot has never fished in; the first answer survives the panel's re-arm, because a cleared prompt cannot be found again. Measured on the installed build (341,353-byte `dist/`): mask on `[0,0,0,0]` for 93/93 frames, releasing the hold put `[249,247,228,255]` back for 88 frames, ending the session (title signal) for 93 frames with the setting still on, then re-engaged and hid it again when the session returned. 311 tests; committed `dist/` byte-identical to a fresh build. Released v3.9.41: asset 341,473 bytes / sha256 `aa54b002e542`. |
 | 2026-11-17 | lead (Freebuff session) | Focus mask setup: 3.9.42 | This release commit on `proto/focus-prompt-mask`. The mask could not arm on a page that had never fished: `uiCanvas` and the render hook are set up by the fishing loop, which a core paused from mount never runs, so every arm was refused and no frame reached the clear - measured live after a reload with the hold engaged, **108 refusals, 0 probes, prompt visible**. The arm path now calls `ensureMaskLive()` (`surfaces()` when the read surface is missing or stale, `installPostRender()` when the hook is absent) before `maskTarget()`. 313 tests, including a behaviour test that arms on a sandboxed never-scanned page and checks the overlay becomes the read surface and the prototype render is wrapped (it fails with the setup call commented out). Never tagged: superseded by 3.9.43 before release, when the on-screen check showed the cleared box was smaller than the sprite. |
 | 2026-11-17 | lead (Freebuff session) | Mask covers the whole UI layer: 3.9.43 | `proto/focus-prompt-mask`. 3.9.42 was built and installed but never tagged: on screen a 6 px sliver of the bubble's bottom border survived and the lure button was untouched, because the mask cleared one detector box (`528,223,120,54`) while the sprites are `{531,225,114,60}` and `{651,234,48,48}`. The mask now derives every rect from the frame (`uiRects()`: blobs of the quarter-scale snapshot, each refined to its own connected component through `readUI`), re-probes every 300 ms and clears each rect per draw; the panel only says "hide". The component scoping is pinned by a regression test that feeds the measured quarter-scale blobs through the refinement and asserts exactly `{531,225,114,60}` and `{651,234,48,48}` - it fails against the earlier window-wide bbox, which returned `{531,225,130,60}`. The probe allocates nothing per pass: both scratch buffers (component marks and flood stack) are sized once and reused, and the arm keeps its probe clock so the 300 ms throttle is not reset by the panel's once-a-second re-arm. Two probes in a row that read the layer and find nothing drop the armed rects, so a stale rect cannot erase an element that paints in that spot later; an unreadable probe (`null`) holds them instead, since it proves nothing. 318 tests. Shipped as `v3.9.43`: tag on the merge `56afe89`, source release and public mirror byte-identical (345,976 bytes, sha256 `97f482afd48a`), `release.js --check` green. The check that had been pending was made on the installed build at 1179x886 - probe `{531,258,114,60}` and `{651,267,48,48}`, masked frame with both gone and no sliver, released frame with both back, re-arm hidden again (168 probes, 121 resolved, 32 drops, 10,432 clears, no errors). |
+
+| 2026-11-17 | lead (Freebuff session) | A page load no longer leaves the focus hold on: 3.9.44 | Reported live from Neo: "not doing dial mode catch ... its just hidden even when im not on focus mode". `autofish.prefs` held `focusMode: true` from the mask work, and `mount()` engaged the hold itself (`if (focusPref) setFocusMode(true)`); `focusTick` only auto-releases a hold it saw a session drive, so with the title plain `lofi.town` the page sat `running: true, paused: true` with one rect `{534,258,114,60}` masked, and `session.js` re-paused on every tick's `fact.focus`. Mount now adopts only the setting, and `focusTick()` engages when `inFocusSession()` is true. Pinned by the panel source guard, which fails against the old mount. 325 tests. |
 
 ---
 
