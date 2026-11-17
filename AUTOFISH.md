@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.42) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.43) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
 diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
 "292 of 300 presses landed"), on top of
@@ -287,6 +287,25 @@ scan - two canvases, a renderer whose `render()` sits on its prototype, no `uiCa
 the mask on it, and asserts the overlay becomes the read surface, the prototype is wrapped, a draw
 reaches `maskTick`, and a re-arm does not wrap twice. Commenting the setup call out fails that test. The 3.9.41 measurements above were taken on a page that had
 already fished once, which is why they did not expose it.
+
+3.9.43 replaces that box with the sprites' own bounds. The hold cleared one rect taken from the detector,
+and the UI layer does not match it: measured live at 1179x822 the prompt sprite is
+`{531,225,114,60}` and the lure button `{651,234,48,48}`, while the cleared rect was
+`{528,223,120,54}` - 6 px short of the bubble's bottom border, which showed as a thin sliver, and the
+lure button stayed visible. The mask now finds every non-transparent blob on the sparse UI layer from
+the shared quarter-scale snapshot and measures each one at full resolution (`readUI`), re-reading
+every 300 ms because the game repaints the layer every frame, and clears each rect on every draw. The
+layer holds only the prompt and the lure button, so the hold hides its content rather than one
+guessed box; the panel passes no geometry at all. Each blob is refined to its own connected
+component, because the padded windows overlap the neighbouring element - a window-wide box measured
+`{531,225,130,60}` by bridging the 6 px gap - so the padding can never stretch a rect. A regression
+test feeds the measured quarter-scale blobs through that refinement and asserts exactly
+`{531,225,114,60}` and `{651,234,48,48}`. The probe allocates nothing per pass: the component marks
+and the flood stack are sized once to the window and reused, and the ink threshold is a single
+`INK_ALPHA`, so a retuned blob finder cannot hand the refinement a component it is unable to seed.
+Two probes in a row that read the layer fine and find nothing drop the armed rects, so a rect left
+over from a dismissed prompt can never erase an element that paints there next; a probe that cannot
+read the layer reports `null` instead and holds them, because a failed read is not evidence.
 
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a
