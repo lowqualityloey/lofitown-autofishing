@@ -2,7 +2,9 @@
 catches.csv
 sessions.csv
 fishserve.log
+.fishserve.log
 shots/
+data/
 
 # deps
 node_modules/

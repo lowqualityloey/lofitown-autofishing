@@ -10,6 +10,7 @@ function boot() {
   process.env.FISHSERVE_CATCHES = join(dir, 'catches.csv');
   process.env.FISHSERVE_SESSIONS = join(dir, 'sessions.csv');
   process.env.FISHSERVE_SHOTS = join(dir, 'shots');
+  process.env.FISHSERVE_RUNS = join(dir, 'runs');
   delete require.cache[require.resolve('../fishserve.js')];
   const { createServer } = require('../fishserve.js');
   const server = createServer();
@@ -30,6 +31,24 @@ test('POST /session appends a row and GET /sessions totals the day', async () =>
     assert.equal(body.minutes, 12);
     assert.equal(body.rows.length, 1);
     assert.match(readFileSync(join(dir, 'sessions.csv'), 'utf8'), /,12,5,duration/);
+  } finally { server.close(); }
+});
+
+test('POST /export stores one snapshot of a run and refuses a body without attempts', async () => {
+  const { server, dir, port } = await boot();
+  try {
+    const ok = await post(port, '/export', { version: '3.9.43', profile: 'default', attempts: [{ id: 'a-1', n: 1, v: 'caught', t: 1700000000000 }] });
+    assert.equal(ok.status, 200);
+    const body = await ok.json();
+    assert.match(body.file, /^export-.*\.json$/);
+    const saved = JSON.parse(readFileSync(join(dir, 'runs', body.file), 'utf8'));
+    assert.equal(saved.attempts.length, 1);
+    assert.equal(saved.version, '3.9.43');
+
+    const bad = await post(port, '/export', { version: '3.9.43' });
+    assert.equal(bad.status, 400);
+    assert.match((await bad.json()).e, /attempts array/);
+    assert.equal(readdirSync(join(dir, 'runs')).length, 1, 'a refused export writes no file');
   } finally { server.close(); }
 });
 

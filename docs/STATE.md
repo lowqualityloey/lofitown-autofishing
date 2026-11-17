@@ -279,7 +279,11 @@ Staging area for rules observed during sessions but not yet approved as invarian
 
 ## 7. Next Immediate Actions (Queued)
 1. Watch a real overnight run: the 30-minute seat cap, the clock-window stop and the daily-cap stop
-   have never fired in the field, and only a night shows whether a stall costs hours or nothing.
+   have never fired in the field, and only a night shows whether a stall costs hours or nothing. The
+   capture exists: `scripts/overnight-export.js` samples `__fish.exportRun()` to fishserve's
+   `POST /export` (`data/runs/`) every five minutes, because the page store holds only 250 attempts,
+   and `scripts/overnight-report.js` merges the snapshots into one night (gaps, cuts, bands, doctor,
+   perf, sessions).
 2. Extend the 112-attempt run to 200 catches if a long seated session is available; 103/112 is a real
    sample and the README now quotes it, so a larger one is worth having.
 3. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
