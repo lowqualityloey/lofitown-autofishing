@@ -317,12 +317,9 @@
    * clear there would punch a hole in the scenery rather than reveal it.
    */
   function applyPromptMask() {
-    var z = null;
-    try { z = window.__fish.zones(); } catch (e) { z = null; }
-    // No detected prompt is not "nothing to hide": the bot may never have run in this session, and
-    // the core can resolve the rect from the frame itself. Without that, the toggle would do
-    // nothing until a run had fished at least once.
-    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : { resolve: true }); } catch (e) {}
+    // The core finds every element on the UI layer itself - the prompt bubble and the lure button -
+    // so the panel only says "hide it while the hold is engaged", never where it is.
+    try { window.__fish.setPromptMask({ resolve: true }); } catch (e) {}
   }
 
   function clearPromptMask() {

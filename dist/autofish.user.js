@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.41
+// @version      3.9.43
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.41" };
+  const F = { version: "3.9.43" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -3377,7 +3377,18 @@ const SPECIES = [
    * reason this feature can be dropped without touching the pause.
    */
   F._mask = null;
-  F.maskStats = { on: false, clears: 0, skips: 0, probes: 0, resolved: 0, path: 'none', lastError: null };
+  F.maskStats = { on: false, clears: 0, skips: 0, probes: 0, resolved: 0, rects: 0, dropped: 0, path: 'none', lastError: null };
+
+  /**
+   * The mask needs two things a paused core never sets up by itself: a resolved read surface and the
+   * post-render hook. A page that has never fished has neither, so an arm would be refused and no
+   * frame would ever reach maskTick (measured live 2026-11-17: 108 refusals, 0 probes after a reload
+   * with the hold engaged at mount). Both calls are idempotent and cheap.
+   */
+  function ensureMaskLive() {
+    if (!uiCanvas || !uiCanvas.isConnected || !uiCanvas.width) surfaces();
+    if (!F._postRender) installPostRender();
+  }
 
   /** The canvas the mask may clear, or null when clearing it would damage the world layer. */
   function maskTarget() {
@@ -3423,50 +3434,133 @@ const SPECIES = [
 
   /**
    * Called by the render wrapper for every canvas it draws. Only the prompt surface is cleared, and
-   * only while a rect is armed, so an idle game pays one comparison a draw.
+   * only while rects are armed, so an idle game pays one comparison a draw.
    */
   function maskTick(canvas) {
     const m = F._mask;
     if (!m) return;
     if (canvas !== uiCanvas) return;
-    if (!m.rect && m.resolve) {
-      // No run has ever detected the prompt here, so resolve it from the frame itself. This read has
-      // to happen before the clear: after one clear the prompt is gone from the buffer and the probe
-      // would only ever find its own hole.
+    if (m.resolve) {
+      // The game repaints this layer every frame, so the probe always reads the prompt and the lure
+      // button before this tick clears them. Re-reading - not resolving once - is what keeps the
+      // clear on a bubble that changes size or on an element that has just appeared.
       const t = now();
       if (t - (m.probeAt || 0) >= 300) {
         m.probeAt = t;
         F.maskStats.probes++;
-        m.rect = probePromptRect();
-        if (m.rect) F.maskStats.resolved++;
+        const rects = uiRects();
+        if (rects && rects.length) {
+          m.rects = rects;
+          m.empty = 0;
+          F.maskStats.rects = rects.length;
+          F.maskStats.resolved++;
+        } else if (rects) {
+          // Read fine, nothing on the layer: the prompt was dismissed or the view changed. Keep the
+          // rects for one more probe - the layer is repainted every frame, so a single miss is a
+          // timing artefact - then drop them. A stale rect left armed would erase whatever paints
+          // there next, which is not a pixel of this feature.
+          m.empty = (m.empty || 0) + 1;
+          if (m.empty >= 2) {
+            m.rects = null;
+            F.maskStats.rects = 0;
+            F.maskStats.dropped = (F.maskStats.dropped || 0) + 1;
+          }
+        }
       }
     }
-    if (!m.rect) return;
+    if (!m.rects || !m.rects.length) return;
     const gl = webglFor(canvas);
     if (!gl) { F.maskStats.skips++; F.maskStats.path = 'no-gl'; return; }
     F.maskStats.path = 'gl';
-    clearPromptRect(gl, canvas, m.rect);
+    for (let i = 0; i < m.rects.length; i++) clearPromptRect(gl, canvas, m.rects[i]);
   }
 
+  /** Any pixel the game actually painted on the UI layer. One threshold for the blob finder and the
+   * full-resolution refinement: two copies of 24 would drift apart and leave a component unreachable. */
+  const INK_ALPHA = 24;
+  const ANY_INK = (d, i) => d[i + 3] > INK_ALPHA;
+
   /**
-   * Find the prompt on the frame the game just drew. The bot's own detector owns this during a run,
-   * but a hold can be engaged in a session the bot has never run in - there the mask has to resolve
-   * the rect itself, or the toggle would hide nothing. The shared quarter-scale snapshot answers
-   * first, so the full-resolution box read is paid only when something is actually there.
+   * Every element on the UI layer, at its own pixel bounds.
+   *
+   * The layer is sparse: it holds the prompt bubble and the lure button side by side, transparent
+   * everywhere else. Hiding the whole layer's content is what the hold promises, and a rect from the
+   * detector's text box does not do it - measured live 2026-11-17, the bubble was 531,225,114,60 and
+   * the lure button 651,234,48,48, while the cleared rect was 528,223,120,54: 6 px short of the
+   * bubble's bottom border, and the button untouched. The shared quarter-scale snapshot finds the
+   * blobs; each is then measured at full resolution through readUI, so the clear ends exactly on the
+   * sprite's own edge instead of a rounded quarter-scale box.
    */
-  function probePromptRect() {
+  // Both scratch buffers grow once to the largest window and are reused on every probe: this runs
+  // while the core is paused, on a page the owner is using, so a fresh buffer per pass is not free.
+  let rectSeen = null, rectStack = null;
+  function uiRects() {
     if (!uiCanvas || !uiCanvas.width) return null;
     if (!snapshot()) return null;
-    if (!bubbleGate()) return null;
-    const b = bubbleInBox();
-    if (!b) return null;
-    return { x: b.cx - b.w / 2, y: b.cy - b.h / 2, w: b.w, h: b.h };
+    // null means the probe could not read the layer; [] means it read it and found nothing. The
+    // caller acts on the difference: an unreadable layer keeps its rects, an empty one drops them.
+    const found = blobs(ANY_INK, 6);
+    if (!found.length) return [];
+    const out = [];
+    for (let i = 0; i < found.length; i++) {
+      const b = found[i];
+      const qx = b.x0 * SDOWN, qy = b.y0 * SDOWN;
+      const qw = (b.x1 - b.x0 + 1) * SDOWN, qh = (b.y1 - b.y0 + 1) * SDOWN;
+      const pad = SDOWN * 3;
+      const wx = Math.max(0, qx - pad), wy = Math.max(0, qy - pad);
+      const wr = readUI(wx, wy, Math.min(uiCanvas.width, qx + qw + pad) - wx, Math.min(uiCanvas.height, qy + qh + pad) - wy);
+      const fallback = { x: qx, y: qy, w: qw, h: qh };
+      if (!wr) { out.push(fallback); continue; }
+      // Only this blob's own component may set the bounds. The padded window overlaps the next
+      // element (the prompt and the lure button sit 6 px apart), so a plain window bbox would bridge
+      // the gap and stop being the sprite's bounds.
+      const sx0 = Math.max(0, b.x0 * SDOWN - wr.x), sx1 = Math.min(wr.w - 1, (b.x1 + 1) * SDOWN - 1 - wr.x);
+      const sy0 = Math.max(0, b.y0 * SDOWN - wr.y), sy1 = Math.min(wr.h - 1, (b.y1 + 1) * SDOWN - 1 - wr.y);
+      let seed = -1;
+      for (let y = sy0; y <= sy1 && seed < 0; y++) {
+        for (let x = sx0; x <= sx1; x++) {
+          if (wr.d[(y * wr.w + x) * 4 + 3] > INK_ALPHA) { seed = y * wr.w + x; break; }
+        }
+      }
+      if (seed < 0) { out.push(fallback); continue; }
+      const n = wr.w * wr.h;
+      if (!rectSeen || rectSeen.length < n) {
+        rectSeen = new Uint8Array(n);
+        rectStack = new Int32Array(n);   // each pixel is pushed at most once, so n entries suffice
+      }
+      const seen = rectSeen;
+      seen.fill(0, 0, n);
+      const stack = rectStack;
+      let top = 0;
+      stack[top++] = seed;
+      seen[seed] = 1;
+      let x0 = wr.w, y0 = wr.h, x1 = -1, y1 = -1;
+      while (top > 0) {
+        const q = stack[--top], px = q % wr.w, py = (q / wr.w) | 0;
+        if (px < x0) x0 = px;
+        if (px > x1) x1 = px;
+        if (py < y0) y0 = py;
+        if (py > y1) y1 = py;
+        near4[0] = px > 0 ? q - 1 : -1;
+        near4[1] = px < wr.w - 1 ? q + 1 : -1;
+        near4[2] = py > 0 ? q - wr.w : -1;
+        near4[3] = py < wr.h - 1 ? q + wr.w : -1;
+        for (let k = 0; k < 4; k++) {
+          const nb = near4[k];
+          if (nb < 0 || seen[nb] || wr.d[nb * 4 + 3] <= INK_ALPHA) continue;
+          seen[nb] = 1;
+          stack[top++] = nb;
+        }
+      }
+      out.push({ x: wr.x + x0, y: wr.y + y0, w: x1 - x0 + 1, h: y1 - y0 + 1 });
+    }
+    return out;
   }
 
   /**
-   * Arm or disarm the mask. A rect (the canvas pixels `zones().bubble` reports) hides that rect;
-   * `{ resolve: true }` arms it with no rect and lets the next frames find the prompt themselves;
-   * null disarms. Returns whether the mask can act on this surface at all.
+   * Arm or disarm the mask. Any truthy spec arms it; null disarms. The geometry always comes from
+   * the frame (uiRects), never from a caller's box: a detector box is the text, not the sprite.
+   * Returns whether the mask can act on this surface at all.
    */
   F.setPromptMask = function (spec) {
     if (!spec) {
@@ -3474,30 +3568,29 @@ const SPECIES = [
       F.maskStats.on = false;
       return false;
     }
-    const target = maskTarget();
-    if (!target) {
+    ensureMaskLive();
+    if (!maskTarget()) {
       F._mask = null;
       F.maskStats.on = false;
       F.maskStats.skips++;
       return false;
     }
-    const haveRect = spec.w > 0 && spec.h > 0;
-    // A probe-armed mask keeps the rect it already resolved: the panel re-arms on every tick, and a
-    // cleared prompt cannot be found again, so throwing the answer away would leave it unhidden.
-    const rect = haveRect
-      ? { x: spec.x, y: spec.y, w: spec.w, h: spec.h }
-      : (spec.resolve && F._mask && F._mask.rect) ? F._mask.rect : null;
-    F._mask = { resolve: !!spec.resolve || !haveRect, rect: rect, probeAt: 0 };
+    // A re-arm (the panel arms once a second) keeps the last rects, so the clear never blinks off,
+    // and keeps probeAt, so the throttle still spaces the probes instead of forcing one per arm.
+    const keep = F._mask;
+    F._mask = { resolve: true, rects: (keep && keep.rects) || null, probeAt: (keep && keep.probeAt) || 0 };
     F.maskStats.on = true;
     return true;
   };
 
   /** What the mask is doing, for the panel and for a live probe. */
   F.promptMask = function () {
+    const rects = F._mask && F._mask.rects;
     return {
-      on: !!(F._mask && F._mask.rect),
+      on: !!(rects && rects.length),
       eligible: !!maskTarget(),
-      rect: F._mask ? F._mask.rect : null,
+      rect: rects ? rects[0] : null,
+      rects: rects || null,
       stats: F.maskStats,
     };
   };
@@ -5491,12 +5584,9 @@ const SPECIES = [
    * clear there would punch a hole in the scenery rather than reveal it.
    */
   function applyPromptMask() {
-    var z = null;
-    try { z = window.__fish.zones(); } catch (e) { z = null; }
-    // No detected prompt is not "nothing to hide": the bot may never have run in this session, and
-    // the core can resolve the rect from the frame itself. Without that, the toggle would do
-    // nothing until a run had fished at least once.
-    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : { resolve: true }); } catch (e) {}
+    // The core finds every element on the UI layer itself - the prompt bubble and the lure button -
+    // so the panel only says "hide it while the hold is engaged", never where it is.
+    try { window.__fish.setPromptMask({ resolve: true }); } catch (e) {}
   }
 
   function clearPromptMask() {
