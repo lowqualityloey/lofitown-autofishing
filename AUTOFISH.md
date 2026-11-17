@@ -250,6 +250,13 @@ It is deliberately narrow. Only the surface the bot reads is cleared, and never 
 the world canvas (`maskTarget()` refuses): in the merged layout one buffer holds the scenery and the
 prompt together, so a clear there would leave a hole in the world rather than reveal it - there the
 prompt stays visible. The pause is untouched by all of this; the mask is a visual extra around it.
+
+When no run has detected the prompt yet - a focus session the bot has never fished in - the mask
+resolves the rect itself (`probePromptRect()`): the shared quarter-scale snapshot answers first, and
+only if something is there does it pay the full-resolution box read, at most every 300 ms. The first
+answer is kept, because a cleared prompt cannot be found again; the panel's re-arm would otherwise
+throw it away. That is what makes the toggle hide the prompt in any focus session, not only after a
+run has fished.
 Measured live on 3.9.41 (2026-11-17, real session, 1179x822). With the hold engaged and the run paused at
 608 ms, the prompt layer read `[249,247,228,255]` at the bubble centre (588,253) with the mask off and
 `[0,0,0,0]` with it on, while the world canvas under it stayed `[233,236,149,255]` in both cases. The
@@ -257,6 +264,15 @@ clear ran 6,561 times with 0 skips and no GL error, and the pause did not move: 
 1.6 s later, still `paused`/`focus` with the core paused. So the bubble's own pixels are removed from
 the prompt layer and the world shows through - nothing is composited over the game. When the game
 merges the layers, `eligible` is false and the prompt stays visible.
+
+Then measured with the bot never started, so `zones().bubble` was null: the mask resolved
+`{x:534,y:228,w:108,h:50}` on its own after 12 probes, and the prompt layer read `[0,0,0,0]` in all 93
+sampled frames. Releasing the hold - the toggle's off branch - put `[249,247,228,255]` back in 88
+consecutive frames; ending the session (the title signal) did the same in 93 frames, with the stored
+pref still on, and the returning session re-engaged and hid it again. The cream is byte-identical to
+the pre-feature read, so the prompt comes back untouched in both directions, and a toggle-off stays
+off because the click clears the pref before the release (a release alone is re-engaged by the next
+tick while the pref still says "pause here" - seen live while measuring).
 
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a

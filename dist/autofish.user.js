@@ -3377,7 +3377,7 @@ const SPECIES = [
    * reason this feature can be dropped without touching the pause.
    */
   F._mask = null;
-  F.maskStats = { on: false, clears: 0, skips: 0, path: 'none', lastError: null };
+  F.maskStats = { on: false, clears: 0, skips: 0, probes: 0, resolved: 0, path: 'none', lastError: null };
 
   /** The canvas the mask may clear, or null when clearing it would damage the world layer. */
   function maskTarget() {
@@ -3427,8 +3427,21 @@ const SPECIES = [
    */
   function maskTick(canvas) {
     const m = F._mask;
-    if (!m || !m.rect) return;
+    if (!m) return;
     if (canvas !== uiCanvas) return;
+    if (!m.rect && m.resolve) {
+      // No run has ever detected the prompt here, so resolve it from the frame itself. This read has
+      // to happen before the clear: after one clear the prompt is gone from the buffer and the probe
+      // would only ever find its own hole.
+      const t = now();
+      if (t - (m.probeAt || 0) >= 300) {
+        m.probeAt = t;
+        F.maskStats.probes++;
+        m.rect = probePromptRect();
+        if (m.rect) F.maskStats.resolved++;
+      }
+    }
+    if (!m.rect) return;
     const gl = webglFor(canvas);
     if (!gl) { F.maskStats.skips++; F.maskStats.path = 'no-gl'; return; }
     F.maskStats.path = 'gl';
@@ -3436,20 +3449,47 @@ const SPECIES = [
   }
 
   /**
-   * Arm or disarm the mask. `rect` is in the canvas pixels the detectors already report
-   * (`zones().bubble`); null disarms. Returns whether the mask can act on this surface at all.
+   * Find the prompt on the frame the game just drew. The bot's own detector owns this during a run,
+   * but a hold can be engaged in a session the bot has never run in - there the mask has to resolve
+   * the rect itself, or the toggle would hide nothing. The shared quarter-scale snapshot answers
+   * first, so the full-resolution box read is paid only when something is actually there.
    */
-  F.setPromptMask = function (rect) {
-    if (!rect || !(rect.w > 0) || !(rect.h > 0)) {
+  function probePromptRect() {
+    if (!uiCanvas || !uiCanvas.width) return null;
+    if (!snapshot()) return null;
+    if (!bubbleGate()) return null;
+    const b = bubbleInBox();
+    if (!b) return null;
+    return { x: b.cx - b.w / 2, y: b.cy - b.h / 2, w: b.w, h: b.h };
+  }
+
+  /**
+   * Arm or disarm the mask. A rect (the canvas pixels `zones().bubble` reports) hides that rect;
+   * `{ resolve: true }` arms it with no rect and lets the next frames find the prompt themselves;
+   * null disarms. Returns whether the mask can act on this surface at all.
+   */
+  F.setPromptMask = function (spec) {
+    if (!spec) {
       F._mask = null;
       F.maskStats.on = false;
       return false;
     }
     const target = maskTarget();
-    F._mask = target ? { rect: { x: rect.x, y: rect.y, w: rect.w, h: rect.h } } : null;
-    F.maskStats.on = !!target;
-    if (!target) F.maskStats.skips++;
-    return !!target;
+    if (!target) {
+      F._mask = null;
+      F.maskStats.on = false;
+      F.maskStats.skips++;
+      return false;
+    }
+    const haveRect = spec.w > 0 && spec.h > 0;
+    // A probe-armed mask keeps the rect it already resolved: the panel re-arms on every tick, and a
+    // cleared prompt cannot be found again, so throwing the answer away would leave it unhidden.
+    const rect = haveRect
+      ? { x: spec.x, y: spec.y, w: spec.w, h: spec.h }
+      : (spec.resolve && F._mask && F._mask.rect) ? F._mask.rect : null;
+    F._mask = { resolve: !!spec.resolve || !haveRect, rect: rect, probeAt: 0 };
+    F.maskStats.on = true;
+    return true;
   };
 
   /** What the mask is doing, for the panel and for a live probe. */
@@ -5453,7 +5493,10 @@ const SPECIES = [
   function applyPromptMask() {
     var z = null;
     try { z = window.__fish.zones(); } catch (e) { z = null; }
-    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : null); } catch (e) {}
+    // No detected prompt is not "nothing to hide": the bot may never have run in this session, and
+    // the core can resolve the rect from the frame itself. Without that, the toggle would do
+    // nothing until a run had fished at least once.
+    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : { resolve: true }); } catch (e) {}
   }
 
   function clearPromptMask() {

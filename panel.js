@@ -319,7 +319,10 @@
   function applyPromptMask() {
     var z = null;
     try { z = window.__fish.zones(); } catch (e) { z = null; }
-    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : null); } catch (e) {}
+    // No detected prompt is not "nothing to hide": the bot may never have run in this session, and
+    // the core can resolve the rect from the frame itself. Without that, the toggle would do
+    // nothing until a run had fished at least once.
+    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : { resolve: true }); } catch (e) {}
   }
 
   function clearPromptMask() {

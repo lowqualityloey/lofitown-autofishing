@@ -106,17 +106,41 @@ test('both install paths hand the wrapper a mask tick', () => {
   assert.equal((CORE.match(/F\._maskTick = maskTick;/g) || []).length, 2, 'adoption and a fresh wrap');
 });
 
-test('arming needs a real rect, and disarming always works', () => {
-  const api = slice(CORE, 'F.setPromptMask = function (rect) {', 'F.promptMask = function () {');
-  assert.match(api, /if \(!rect \|\| !\(rect\.w > 0\)/, 'a missing rect disarms instead of clearing the screen');
+test('null disarms, and a probe arm keeps the rect it already resolved', () => {
+  const api = slice(CORE, 'F.setPromptMask = function (spec) {', 'F.promptMask = function () {');
+  assert.match(api, /if \(!spec\) \{/, 'null disarms');
   assert.match(api, /F\._mask = null;/, 'disarm drops the rect');
   assert.match(api, /const target = maskTarget\(\);/, 'arming asks whether the surface is safe');
+  assert.match(api, /spec\.resolve && F\._mask && F\._mask\.rect/, 'a resolved rect survives a re-arm');
+});
+
+test('with no rect the mask finds the prompt itself, before it clears', () => {
+  const tick = slice(CORE, 'function maskTick(', 'F.setPromptMask =');
+  assert.match(tick, /if \(!m\.rect && m\.resolve\)/, 'only a missing rect is probed for');
+  assert.match(tick, /m\.probeAt/, 'the probe is throttled');
+  const probeAt = tick.indexOf('probePromptRect()');
+  const clearAt = tick.indexOf('clearPromptRect(gl');
+  assert.ok(probeAt > 0 && clearAt > probeAt, 'the read happens before the clear, never after it');
+  const probe = slice(CORE, 'function probePromptRect(', 'F.setPromptMask =');
+  assert.match(probe, /snapshot\(\)/, 'the cheap quarter-scale gate answers first');
+  assert.match(probe, /bubbleGate\(\)/);
+  assert.match(probe, /bubbleInBox\(\)/);
+  assert.match(probe, /return \{ x: b\.cx - b\.w \/ 2/, 'the rect is the prompt box, like zones().bubble');
+});
+
+test('the toggle flips the setting before the hold, or the next tick re-engages it', () => {
+  const btn = slice(PANEL, "focusToggle.addEventListener('click'", '});');
+  const prefAt = btn.indexOf('focusPref = !focusOn;');
+  const armAt = btn.indexOf('setFocusMode(focusPref);');
+  assert.ok(prefAt > 0 && armAt > prefAt, 'the setting changes before the hold, or focusTick re-engages it');
+  assert.match(btn, /savePrefs\(\);/, 'the setting is persisted');
 });
 
 test('the focus hold arms and clears the mask, and its pause is untouched', () => {
   const set = slice(PANEL, 'function setFocusMode(', 'function focusTick(');
   assert.match(set, /applyPromptMask\(\);/, 'engaging arms the mask');
   assert.match(set, /clearPromptMask\(\);/, 'releasing disarms it');
+  assert.match(set, /if \(state\.phase === 'running'\) dispatch/, 'engaging pauses a live run');
   assert.equal((set.match(/dispatch\(/g) || []).length, 2, 'still exactly a pause and a resume');
   assert.match(set, /dispatch\(\{ type: 'pause', at: Date\.now\(\), reason: 'focus' \}\);/);
   assert.match(set, /if \(state\.pauseReason === 'focus'\) dispatch\(\{ type: 'resume', at: Date\.now\(\) \}\);/);
@@ -127,7 +151,7 @@ test('the rect is refreshed while the hold is engaged, and never invented', () =
   assert.match(tick, /if \(focusOn\) applyPromptMask\(\);/);
   const apply = slice(PANEL, 'function applyPromptMask()', 'function clearPromptMask()');
   assert.match(apply, /window\.__fish\.zones\(\)/, 'the rect comes from the detector');
-  assert.match(apply, /z && z\.bubble \? z\.bubble : null/, 'no detected prompt means no mask');
+  assert.match(apply, /z && z\.bubble \? z\.bubble : \{ resolve: true \}/, 'no detected prompt means the core resolves it');
 });
 
 test('unmounting the panel removes the mask from the page', () => {
