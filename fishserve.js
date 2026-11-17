@@ -8,6 +8,8 @@
  *   GET  /autofish.user.js the standalone userscript (dist/, no server needed after install)
  *   GET  /panel.user.js    the loader userscript: mounts panel.js from this server
  *   GET  /install          the bookmarklet page          (text/html)
+ *   GET  /overnight.js     the overnight export sampler, so it can be loaded with one <script> tag
+ *                          instead of pasted (it posts exportRun() to /export every five minutes)
  *   POST /catch            { t, species, rarity, quality, weight, value } -> a catches.csv row
  *   POST /session          { started_at, minutes, catches, reason }      -> a sessions.csv row
  *   POST /diag             { png: data:image/png;base64,... , note, stats } -> shots/diag/ui-<time>.png
@@ -65,7 +67,8 @@ const STATIC = {
   // this split removes.
   '/autofish.user.js': 'dist/autofish.user.js',
   '/panel.user.js': 'autofish.user.js',
-  '/install': 'install.html'
+  '/install': 'install.html',
+  '/overnight.js': 'scripts/overnight-export.js'
 };
 
 const cell = (v) => {
