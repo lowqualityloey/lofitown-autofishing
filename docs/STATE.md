@@ -295,7 +295,9 @@ Staging area for rules observed during sessions but not yet approved as invarian
    merge `56afe89` had no trailer; the note was written by hand on 2026-11-17), so the rule is now in
    the tool: `scripts/release.js` refuses to publish - and `--check` refuses to pass - when the tagged
    commit carries no non-empty trailer. `v3.9.43` is the only named exemption, and a new tag has to
-   carry it.
+   carry it. The refusal never suggests moving a published tag: it names `heyloey done` alone unless
+   the release does not exist yet, in which case amending the commit and `git tag -f` are safe and
+   are offered (`published` is read before the refusal, and an unknown state gives the safe advice).
 
 7. **Done in 3.9.27:** `adoptSurface()` requires a **found prompt** twice instead of a blank count;
    a dense renderer is considered only when the current surface has already read blank, which keeps
