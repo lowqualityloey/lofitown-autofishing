@@ -322,6 +322,17 @@ overnight run means the window stays open and visible, the display stays awake, 
 to sleep. Two known ways a long run can quietly stop: the after-catch cast stall (no cast prompt is
 pressed for a minute or more while the loop still ticks) and a missed reels left waiting for a bite.
 
+**Recording a night.** The page keeps only the last 250 attempts (`autofish:run:v1`), so an overnight
+run has to be sampled while it happens or the part that matters rolls off. `scripts/overnight-export.js`
+is pasted into the page console once: it posts `__fish.exportRun()` to fishserve every five minutes
+(`POST /export` -> `data/runs/export-<time>.json`). At the measured ~1.3 attempts/minute five minutes
+is about seven new rows, so consecutive snapshots always overlap and no attempt is lost between them.
+`__overnight.now()` forces a snapshot and `__overnight.stop()` ends the sampler; neither touches the
+fishing run. Afterwards `node scripts/overnight-report.js` merges the snapshots by attempt id and
+prints the night: catch rate with its Wilson interval, the width bands, the losses, every gap over ten
+minutes (the shape of a stall), the cut reasons each snapshot recorded, the doctor verdicts, the last
+perf line, and the sessions fishserve logged for the same window.
+
 The panel never draws over the play area: it asks the core for the live bubble/dial/card rectangles
 (`__fish.zones()`) and slides to a free corner every 250 ms, collapsing to a pill if there is no
 room. It also keeps the screen awake while it is fishing (the game freezes when the tab is hidden),

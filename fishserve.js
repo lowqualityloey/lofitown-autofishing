@@ -12,6 +12,8 @@
  *   POST /session          { started_at, minutes, catches, reason }      -> a sessions.csv row
  *   POST /diag             { png: data:image/png;base64,... , note, stats } -> shots/diag/ui-<time>.png
  *                          (a run that never sees a prompt uploads one frame so the detector can be fixed)
+ *   POST /export           __fish.exportRun() JSON -> data/runs/export-<time>.json, one snapshot per post
+ *                          (the page store holds 250 attempts, so an overnight run has to be sampled)
  *   GET  /sessions?day=    { day, rows, minutes }        minutes = total logged that day
  *   GET  /recent?n=5       the last n catches as JSON
  *
@@ -49,6 +51,7 @@ const fileOf = (env, fallback) => process.env[env] || path.join(__dirname, fallb
 const CATCHES = () => fileOf('FISHSERVE_CATCHES', 'catches.csv');
 const SESSIONS = () => fileOf('FISHSERVE_SESSIONS', 'sessions.csv');
 const SHOTS = () => fileOf('FISHSERVE_SHOTS', 'shots');
+const RUNS = () => fileOf('FISHSERVE_RUNS', path.join('data', 'runs'));
 
 // url -> file on disk, all siblings of this script
 const STATIC = {
@@ -215,6 +218,26 @@ function createServer() {
           const rel = path.relative(__dirname, file);
           console.log('diag  saved ' + rel + (rec.note ? '  (' + rec.note + ')' : ''));
           json(res, 200, { ok: true, file: rel });
+        } catch (e) {
+          json(res, 400, { ok: false, e: String((e && e.message) || e) });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && route === '/export') {
+      readBigBody(req, (body) => {
+        if (!body) return json(res, 413, { ok: false, e: 'payload too large or unreadable' });
+        try {
+          const rec = JSON.parse(body);
+          if (!rec || !Array.isArray(rec.attempts)) throw new Error('an export must carry an attempts array');
+          const dir = RUNS();
+          fs.mkdirSync(dir, { recursive: true });
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const name = 'export-' + stamp + '.json';
+          fs.writeFileSync(path.join(dir, name), JSON.stringify(rec));
+          console.log(['export', rec.attempts.length + ' attempts', rec.profile || '-', name].join('  '));
+          json(res, 200, { ok: true, file: name });
         } catch (e) {
           json(res, 400, { ok: false, e: String((e && e.message) || e) });
         }
