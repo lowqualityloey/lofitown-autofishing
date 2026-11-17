@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.41
+// @version      3.9.42
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.41" };
+  const F = { version: "3.9.42" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -3379,6 +3379,17 @@ const SPECIES = [
   F._mask = null;
   F.maskStats = { on: false, clears: 0, skips: 0, probes: 0, resolved: 0, path: 'none', lastError: null };
 
+  /**
+   * The mask needs two things a paused core never sets up by itself: a resolved read surface and the
+   * post-render hook. A page that has never fished has neither, so an arm would be refused and no
+   * frame would ever reach maskTick (measured live 2026-11-17: 108 refusals, 0 probes after a reload
+   * with the hold engaged at mount). Both calls are idempotent and cheap.
+   */
+  function ensureMaskLive() {
+    if (!uiCanvas || !uiCanvas.isConnected || !uiCanvas.width) surfaces();
+    if (!F._postRender) installPostRender();
+  }
+
   /** The canvas the mask may clear, or null when clearing it would damage the world layer. */
   function maskTarget() {
     if (!uiCanvas || !uiCanvas.isConnected || !uiCanvas.width) return null;
@@ -3474,6 +3485,7 @@ const SPECIES = [
       F.maskStats.on = false;
       return false;
     }
+    ensureMaskLive();
     const target = maskTarget();
     if (!target) {
       F._mask = null;

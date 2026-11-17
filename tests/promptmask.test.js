@@ -114,6 +114,76 @@ test('null disarms, and a probe arm keeps the rect it already resolved', () => {
   assert.match(api, /spec\.resolve && F\._mask && F\._mask\.rect/, 'a resolved rect survives a re-arm');
 });
 
+test('arming sets up the surface and the hook a paused core never installs', () => {
+  const api = slice(CORE, 'F.setPromptMask = function (spec) {', 'F.promptMask = function () {');
+  const liveAt = api.indexOf('ensureMaskLive();');
+  const targetAt = api.indexOf('const target = maskTarget();');
+  assert.ok(liveAt > 0 && targetAt > liveAt, 'the setup runs before the surface is judged');
+  const fn = slice(CORE, 'function ensureMaskLive()', 'function maskTarget(');
+  assert.match(fn, /if \(!uiCanvas \|\| !uiCanvas\.isConnected \|\| !uiCanvas\.width\) surfaces\(\);/, 'a page that never fished has no read surface');
+  assert.match(fn, /if \(!F\._postRender\) installPostRender\(\);/, 'and no render hook to run the clear from');
+});
+
+/**
+ * A page that has never fished, built from the real core: two canvases (the Pixi renderer's world and
+ * the prompt overlay), a renderer whose render() lives on its prototype, and no scan yet - so the
+ * read surface is unresolved and no hook exists. The functions under test are the core's own, not
+ * copies, so this exercises the setup instead of the text that asks for it.
+ */
+function maskSandbox() {
+  const world = { width: 1179, height: 822, isConnected: true };
+  const overlay = {
+    width: 1179, height: 822, isConnected: true,
+    parentElement: { className: 'absolute inset-0 pointer-events-none' },
+  };
+  const proto = { render() { return 'drawn'; } };
+  const renderer = Object.create(proto);
+  renderer.canvas = world;
+  const win = { __PIXI_DEVTOOLS__: { app: { renderer: renderer } } };
+  const doc = { querySelectorAll() { return [world, overlay]; } };
+  const ticks = [];
+  const events = [];
+  const body = [
+    'let uiCanvas = null, gameCanvas = null, snapAt = 0;',
+    'const now = function () { return 1; };',
+    'const L = function (name) { events.push(name); };',
+    'const postRenderTick = function () {};',
+    'const maskTick = function (canvas) { ticks.push(canvas); };',
+    'const F = { _mask: null, maskStats: { on: false, clears: 0, skips: 0, probes: 0, resolved: 0, path: "none", lastError: null } };',
+    slice(CORE, 'function surfaces()', 'function inkStats('),
+    slice(CORE, 'function renderProto()', 'function installPostRender('),
+    slice(CORE, 'function installPostRender()', '/* ------------------------------------------- focus prompt mask'),
+    slice(CORE, 'function ensureMaskLive()', 'function maskTarget('),
+    slice(CORE, 'function maskTarget()', 'function clearPromptRect('),
+    slice(CORE, 'F.setPromptMask = function (spec) {', 'F.promptMask = function () {'),
+    'return { F: F, ticks: ticks, events: events, proto: proto, world: world, overlay: overlay, target: maskTarget, arm: F.setPromptMask, surface: function () { return uiCanvas; } };',
+  ].join('\n');
+  return new Function('window', 'document', 'events', 'ticks', 'proto', 'world', 'overlay', body)(
+    win, doc, events, ticks, proto, world, overlay);
+}
+
+test('arming on a page that never scanned resolves the surface and installs the hook', () => {
+  const box = maskSandbox();
+  assert.equal(box.surface(), null, 'a page that has never fished has no read surface yet');
+  assert.equal(box.target(), null, 'so there is nothing safe to clear');
+
+  assert.equal(box.arm({ resolve: true }), true, 'the arm itself succeeds');
+  assert.equal(box.surface(), box.overlay, 'the prompt overlay became the read surface');
+  assert.equal(box.target(), box.overlay, 'and the mask may clear it');
+  assert.equal(box.F._mask && box.F._mask.resolve, true, 'the mask is armed to resolve its own rect');
+
+  assert.equal(box.F._postRender, true, 'the post-render hook is installed, not merely remembered');
+  assert.equal(typeof box.proto.render.__autofishHook, 'object', 'the renderer prototype is wrapped');
+  assert.ok(box.events.indexOf('post-render hook') >= 0, 'the install is recorded like every other hook');
+
+  box.proto.render.call({ canvas: box.overlay });
+  assert.deepEqual(box.ticks, [box.overlay], 'a draw reaches the mask with the canvas it just drew');
+
+  const wrapped = box.proto.render;
+  box.arm({ resolve: true });
+  assert.equal(box.proto.render, wrapped, 'a re-arm does not wrap the prototype twice');
+});
+
 test('with no rect the mask finds the prompt itself, before it clears', () => {
   const tick = slice(CORE, 'function maskTick(', 'F.setPromptMask =');
   assert.match(tick, /if \(!m\.rect && m\.resolve\)/, 'only a missing rect is probed for');

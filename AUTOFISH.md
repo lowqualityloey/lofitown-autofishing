@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.41) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.42) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
 diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
 "292 of 300 presses landed"), on top of
@@ -273,6 +273,20 @@ pref still on, and the returning session re-engaged and hid it again. The cream 
 the pre-feature read, so the prompt comes back untouched in both directions, and a toggle-off stays
 off because the click clears the pref before the release (a release alone is re-engaged by the next
 tick while the pref still says "pause here" - seen live while measuring).
+
+3.9.42 fixes a hole in 3.9.41 that only appears on a page that has never fished. The mask needs two
+things the fishing loop sets up: a resolved read surface (`surfaces()`) and the post-render hook the
+clear runs from (`installPostRender()`). A core that is paused from mount - which is what the focus
+hold does when the setting is on - never runs that loop, so both were missing. Measured live after a
+reload with the hold engaged: `setPromptMask` refused 108 arms (`maskStats.skips`), `probes` stayed 0,
+`eligible` read false and the prompt stayed visible. The arm path now performs that setup itself
+(`ensureMaskLive()`: `surfaces()` when the read surface is missing or stale, `installPostRender()`
+when the hook is absent), both calls idempotent and cheap. Two tests hold it: a guard pins the order
+(the setup runs before `maskTarget()` judges the surface), and a behaviour test builds a page with no
+scan - two canvases, a renderer whose `render()` sits on its prototype, no `uiCanvas`, no hook - arms
+the mask on it, and asserts the overlay becomes the read surface, the prototype is wrapped, a draw
+reaches `maskTick`, and a re-arm does not wrap twice. Commenting the setup call out fails that test. The 3.9.41 measurements above were taken on a page that had
+already fished once, which is why they did not expose it.
 
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a

@@ -3361,6 +3361,17 @@ const SPECIES = [
   F._mask = null;
   F.maskStats = { on: false, clears: 0, skips: 0, probes: 0, resolved: 0, path: 'none', lastError: null };
 
+  /**
+   * The mask needs two things a paused core never sets up by itself: a resolved read surface and the
+   * post-render hook. A page that has never fished has neither, so an arm would be refused and no
+   * frame would ever reach maskTick (measured live 2026-11-17: 108 refusals, 0 probes after a reload
+   * with the hold engaged at mount). Both calls are idempotent and cheap.
+   */
+  function ensureMaskLive() {
+    if (!uiCanvas || !uiCanvas.isConnected || !uiCanvas.width) surfaces();
+    if (!F._postRender) installPostRender();
+  }
+
   /** The canvas the mask may clear, or null when clearing it would damage the world layer. */
   function maskTarget() {
     if (!uiCanvas || !uiCanvas.isConnected || !uiCanvas.width) return null;
@@ -3456,6 +3467,7 @@ const SPECIES = [
       F.maskStats.on = false;
       return false;
     }
+    ensureMaskLive();
     const target = maskTarget();
     if (!target) {
       F._mask = null;
