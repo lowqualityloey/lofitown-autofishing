@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.40
+// @version      3.9.41
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.40" };
+  const F = { version: "3.9.41" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -3161,6 +3161,7 @@ const SPECIES = [
     F.geoTrace = []; F.geoReasons = {}; F.planReason = null;
     clearPendingWin();
     F.paused = false; F.lastBubble = null; F.lastBubbleAt = 0; F.lastCardRect = null;
+    F._mask = null; F.maskStats.on = false;
     F.lastCard = 0; F.cardCheckAt = 0; F.cardScan = 0;
     F.pressesThisDial = 0;
     F.running = true; F.startedAt = now(); F.hiddenPauses = 0;
@@ -3327,6 +3328,7 @@ const SPECIES = [
       // so a wrapper still owned by the stopped copy would report a live hook and never step.
       prev.owner = F;
       F._postTick = F._postTick || postRenderTick;
+      F._maskTick = maskTick;
       F._postRender = true;
       F._postAt = now();
       return true;
@@ -3335,9 +3337,13 @@ const SPECIES = [
     const hook = { owner: F };
     const wrapped = function () {
       const out = orig.apply(this, arguments);
+      const owner = hook.owner;
+      // 3.9.41: the focus mask is a clear of the prompt's own canvas, so it has to run for whichever
+      // canvas this call drew - the prompt layer is not the app canvas. It is a no-op unless the
+      // panel has armed a rect, and a plain property read otherwise.
+      if (owner && this && this.canvas && typeof owner._maskTick === 'function') owner._maskTick(this.canvas);
       const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
       if (this && app && (this.canvas === app.renderer.canvas || this === app.renderer)) {
-        const owner = hook.owner;
         if (owner && typeof owner._postTick === 'function') owner._postTick();
       }
       return out;
@@ -3347,11 +3353,154 @@ const SPECIES = [
     try { proto.render = wrapped; } catch (e) { return false; }
     if (proto.render !== wrapped) return false;   // a frozen prototype must not look installed
     F._postTick = postRenderTick;
+    F._maskTick = maskTick;
     F._postRender = true;
     F._postAt = now();
     L('post-render hook', { canvas: !!(uiCanvas && uiCanvas.width) });
     return true;
   }
+
+  /* ------------------------------------------- focus prompt mask (3.9.41) ---- */
+  /*
+   * Clear the CAST!/REEL! bubble while a focus session holds the run.
+   *
+   * The prompt is painted into the game's canvas, so a page script cannot hide the sprite. It can
+   * erase the pixels after the game has drawn them and before the browser composites, which is the
+   * window this hook already owns. The erase is a scissor plus a colour clear on the canvas that
+   * carries the prompt: nothing is drawn over the game, the bubble's pixels are simply removed and
+   * the world layer underneath shows through.
+   *
+   * The scope is deliberately narrow. Only the surface the bot reads is ever cleared, and never
+   * when that surface is the world canvas: in the merged layout one buffer holds the scenery and the
+   * prompt together, so a clear there would leave a hole in the world instead of revealing it. In
+   * that layout maskTarget() refuses and the prompt stays visible - the honest fallback, and the
+   * reason this feature can be dropped without touching the pause.
+   */
+  F._mask = null;
+  F.maskStats = { on: false, clears: 0, skips: 0, probes: 0, resolved: 0, path: 'none', lastError: null };
+
+  /** The canvas the mask may clear, or null when clearing it would damage the world layer. */
+  function maskTarget() {
+    if (!uiCanvas || !uiCanvas.isConnected || !uiCanvas.width) return null;
+    const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
+    const world = app && app.renderer && app.renderer.canvas;
+    if (world && world === uiCanvas) return null;
+    return uiCanvas;
+  }
+
+  /** Erase one rect (canvas pixels, top-down) from a WebGL canvas, leaving the GL state as it was. */
+  function clearPromptRect(gl, canvas, r) {
+    const bw = gl.drawingBufferWidth || canvas.width;
+    const bh = gl.drawingBufferHeight || canvas.height;
+    const sx = bw / (canvas.width || bw);
+    const sy = bh / (canvas.height || bh);
+    const w = Math.max(1, Math.round(r.w * sx));
+    const h = Math.max(1, Math.round(r.h * sy));
+    const x = Math.round(r.x * sx);
+    const y = Math.round(bh - (r.y + r.h) * sy);   // GL's origin is bottom-left
+    if (x < 0 || y < 0 || x + w > bw || y + h > bh) { F.maskStats.skips++; return false; }
+    const hadScissor = gl.isEnabled(gl.SCISSOR_TEST);
+    const box = hadScissor ? gl.getParameter(gl.SCISSOR_BOX) : null;
+    const cc = gl.getParameter(gl.COLOR_CLEAR_VALUE);
+    try {
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(x, y, w, h);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      F.maskStats.clears++;
+      return true;
+    } catch (e) {
+      F.maskStats.lastError = String((e && e.message) || e);
+      return false;
+    } finally {
+      // The game owns this context: it must not inherit our scissor or our clear colour.
+      try {
+        gl.clearColor(cc[0], cc[1], cc[2], cc[3]);
+        if (hadScissor && box) gl.scissor(box[0], box[1], box[2], box[3]); else gl.disable(gl.SCISSOR_TEST);
+      } catch (e) { F.maskStats.lastError = String((e && e.message) || e); }
+    }
+  }
+
+  /**
+   * Called by the render wrapper for every canvas it draws. Only the prompt surface is cleared, and
+   * only while a rect is armed, so an idle game pays one comparison a draw.
+   */
+  function maskTick(canvas) {
+    const m = F._mask;
+    if (!m) return;
+    if (canvas !== uiCanvas) return;
+    if (!m.rect && m.resolve) {
+      // No run has ever detected the prompt here, so resolve it from the frame itself. This read has
+      // to happen before the clear: after one clear the prompt is gone from the buffer and the probe
+      // would only ever find its own hole.
+      const t = now();
+      if (t - (m.probeAt || 0) >= 300) {
+        m.probeAt = t;
+        F.maskStats.probes++;
+        m.rect = probePromptRect();
+        if (m.rect) F.maskStats.resolved++;
+      }
+    }
+    if (!m.rect) return;
+    const gl = webglFor(canvas);
+    if (!gl) { F.maskStats.skips++; F.maskStats.path = 'no-gl'; return; }
+    F.maskStats.path = 'gl';
+    clearPromptRect(gl, canvas, m.rect);
+  }
+
+  /**
+   * Find the prompt on the frame the game just drew. The bot's own detector owns this during a run,
+   * but a hold can be engaged in a session the bot has never run in - there the mask has to resolve
+   * the rect itself, or the toggle would hide nothing. The shared quarter-scale snapshot answers
+   * first, so the full-resolution box read is paid only when something is actually there.
+   */
+  function probePromptRect() {
+    if (!uiCanvas || !uiCanvas.width) return null;
+    if (!snapshot()) return null;
+    if (!bubbleGate()) return null;
+    const b = bubbleInBox();
+    if (!b) return null;
+    return { x: b.cx - b.w / 2, y: b.cy - b.h / 2, w: b.w, h: b.h };
+  }
+
+  /**
+   * Arm or disarm the mask. A rect (the canvas pixels `zones().bubble` reports) hides that rect;
+   * `{ resolve: true }` arms it with no rect and lets the next frames find the prompt themselves;
+   * null disarms. Returns whether the mask can act on this surface at all.
+   */
+  F.setPromptMask = function (spec) {
+    if (!spec) {
+      F._mask = null;
+      F.maskStats.on = false;
+      return false;
+    }
+    const target = maskTarget();
+    if (!target) {
+      F._mask = null;
+      F.maskStats.on = false;
+      F.maskStats.skips++;
+      return false;
+    }
+    const haveRect = spec.w > 0 && spec.h > 0;
+    // A probe-armed mask keeps the rect it already resolved: the panel re-arms on every tick, and a
+    // cleared prompt cannot be found again, so throwing the answer away would leave it unhidden.
+    const rect = haveRect
+      ? { x: spec.x, y: spec.y, w: spec.w, h: spec.h }
+      : (spec.resolve && F._mask && F._mask.rect) ? F._mask.rect : null;
+    F._mask = { resolve: !!spec.resolve || !haveRect, rect: rect, probeAt: 0 };
+    F.maskStats.on = true;
+    return true;
+  };
+
+  /** What the mask is doing, for the panel and for a live probe. */
+  F.promptMask = function () {
+    return {
+      on: !!(F._mask && F._mask.rect),
+      eligible: !!maskTarget(),
+      rect: F._mask ? F._mask.rect : null,
+      stats: F.maskStats,
+    };
+  };
 
   function loop() {
     if (!F.running) { F._raf = null; return; }
@@ -5280,11 +5429,13 @@ const SPECIES = [
    * The pause is exact: a 'focus' pause reason holds the clock and the core, is not retryable, and
    * only the toggle or the session ending lifts it (session.js).
    *
-   * The bubble itself cannot be removed from a page script. It is painted into the game's canvas; the
-   * reachable Pixi Graphics is only a hit area (hiding it changed no pixels, measured), and clipping
-   * the UI canvas that carries it could not be verified live and risks the game's compositing. So
-   * focus mode pauses and nothing else: it draws no cover and touches no canvas, and the prompt stays
-   * on screen. A cover was tried and looked bad; an unverified clip is not worth shipping.
+   * The bubble is painted into the game's canvas, so the only way to hide it is to erase its pixels
+   * after the game draws them. 3.9.41 tries exactly that: while the hold is engaged the core clears
+   * the prompt's rect in its post-render hook (gl scissor + clear), on the prompt's own canvas only.
+   * Nothing is drawn over the game. Where the game merges the prompt into the world canvas the core
+   * refuses - a clear there would leave a hole in the scenery - and the prompt stays visible, which
+   * is the fallback. The hold itself is unchanged by any of this: it pauses, and the mask is only a
+   * visual extra that can be dropped without touching the pause.
    */
   var focusOn = false;       // the hold is engaged right now
   var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
@@ -5310,8 +5461,10 @@ const SPECIES = [
     if (on) {
       focusSawSession = !!o.session;
       if (state.phase === 'running') dispatch({ type: 'pause', at: Date.now(), reason: 'focus' });
+      applyPromptMask();
     } else {
       focusSawSession = false;
+      clearPromptMask();
       if (state.pauseReason === 'focus') dispatch({ type: 'resume', at: Date.now() });
     }
     renderFocusToggle();
@@ -5327,6 +5480,27 @@ const SPECIES = [
     if (focusOn && session) focusSawSession = true;
     if (focusOn && focusSawSession && !session) setFocusMode(false);
     else if (!focusOn && session && focusPref) setFocusMode(true, { session: true });
+    // The prompt can appear somewhere else between sessions, so the rect is refreshed every tick
+    // while the hold is engaged. No rect (the detector has not seen one) means no mask at all.
+    if (focusOn) applyPromptMask();
+  }
+
+  /**
+   * Ask the core to erase the CAST!/REEL! bubble while the hold is engaged. The rect is the one the
+   * detector already reports; the core refuses when the prompt shares the world canvas, because a
+   * clear there would punch a hole in the scenery rather than reveal it.
+   */
+  function applyPromptMask() {
+    var z = null;
+    try { z = window.__fish.zones(); } catch (e) { z = null; }
+    // No detected prompt is not "nothing to hide": the bot may never have run in this session, and
+    // the core can resolve the rect from the frame itself. Without that, the toggle would do
+    // nothing until a run had fished at least once.
+    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : { resolve: true }); } catch (e) {}
+  }
+
+  function clearPromptMask() {
+    try { if (window.__fish.setPromptMask) window.__fish.setPromptMask(null); } catch (e) {}
   }
 
   /* ------------------------------------------------------------ server ---- */
@@ -6688,6 +6862,7 @@ const SPECIES = [
   }
 
   function unmount() {
+    clearPromptMask();
     if (tickTimer) clearInterval(tickTimer);
     if (placeTimer) clearInterval(placeTimer);
     if (mount.timer) clearInterval(mount.timer);

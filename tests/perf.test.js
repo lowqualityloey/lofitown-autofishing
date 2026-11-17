@@ -179,7 +179,9 @@ test('a full-resolution read is spent only on something the snapshot already saw
   assert.ok(cGate > 0 && cBox > cGate, 'the card box read must sit behind the snapshot gate');
   // one definition plus one call site: nothing else may spend the readback directly
   // definition + the gated box read + the throttled other-canvas probe (only on a miss, >= 300 ms)
-  assert.equal((CORE.match(/bubbleInBox\(\)/g) || []).length, 3, 'a third bubble box read came back');
+  // + the focus mask's own probe (3.9.41: a session the bot has never run in), which is gated the
+  // same way and guarded in tests/promptmask.test.js
+  assert.equal((CORE.match(/bubbleInBox\(\)/g) || []).length, 4, 'a fourth bubble box read came back');
   assert.equal((CORE.match(/cardInBox\(\)/g) || []).length, 2, 'a second card box read came back');
   assert.match(fnBody('function bubbleGate()'), /BUBBLE_GATE_PX/);
   assert.match(fnBody('function cardGate()'), /hit \/ n >= 0\.08/);

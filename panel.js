@@ -255,11 +255,13 @@
    * The pause is exact: a 'focus' pause reason holds the clock and the core, is not retryable, and
    * only the toggle or the session ending lifts it (session.js).
    *
-   * The bubble itself cannot be removed from a page script. It is painted into the game's canvas; the
-   * reachable Pixi Graphics is only a hit area (hiding it changed no pixels, measured), and clipping
-   * the UI canvas that carries it could not be verified live and risks the game's compositing. So
-   * focus mode pauses and nothing else: it draws no cover and touches no canvas, and the prompt stays
-   * on screen. A cover was tried and looked bad; an unverified clip is not worth shipping.
+   * The bubble is painted into the game's canvas, so the only way to hide it is to erase its pixels
+   * after the game draws them. 3.9.41 tries exactly that: while the hold is engaged the core clears
+   * the prompt's rect in its post-render hook (gl scissor + clear), on the prompt's own canvas only.
+   * Nothing is drawn over the game. Where the game merges the prompt into the world canvas the core
+   * refuses - a clear there would leave a hole in the scenery - and the prompt stays visible, which
+   * is the fallback. The hold itself is unchanged by any of this: it pauses, and the mask is only a
+   * visual extra that can be dropped without touching the pause.
    */
   var focusOn = false;       // the hold is engaged right now
   var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
@@ -285,8 +287,10 @@
     if (on) {
       focusSawSession = !!o.session;
       if (state.phase === 'running') dispatch({ type: 'pause', at: Date.now(), reason: 'focus' });
+      applyPromptMask();
     } else {
       focusSawSession = false;
+      clearPromptMask();
       if (state.pauseReason === 'focus') dispatch({ type: 'resume', at: Date.now() });
     }
     renderFocusToggle();
@@ -302,6 +306,27 @@
     if (focusOn && session) focusSawSession = true;
     if (focusOn && focusSawSession && !session) setFocusMode(false);
     else if (!focusOn && session && focusPref) setFocusMode(true, { session: true });
+    // The prompt can appear somewhere else between sessions, so the rect is refreshed every tick
+    // while the hold is engaged. No rect (the detector has not seen one) means no mask at all.
+    if (focusOn) applyPromptMask();
+  }
+
+  /**
+   * Ask the core to erase the CAST!/REEL! bubble while the hold is engaged. The rect is the one the
+   * detector already reports; the core refuses when the prompt shares the world canvas, because a
+   * clear there would punch a hole in the scenery rather than reveal it.
+   */
+  function applyPromptMask() {
+    var z = null;
+    try { z = window.__fish.zones(); } catch (e) { z = null; }
+    // No detected prompt is not "nothing to hide": the bot may never have run in this session, and
+    // the core can resolve the rect from the frame itself. Without that, the toggle would do
+    // nothing until a run had fished at least once.
+    try { window.__fish.setPromptMask(z && z.bubble ? z.bubble : { resolve: true }); } catch (e) {}
+  }
+
+  function clearPromptMask() {
+    try { if (window.__fish.setPromptMask) window.__fish.setPromptMask(null); } catch (e) {}
   }
 
   /* ------------------------------------------------------------ server ---- */
@@ -1663,6 +1688,7 @@
   }
 
   function unmount() {
+    clearPromptMask();
     if (tickTimer) clearInterval(tickTimer);
     if (placeTimer) clearInterval(placeTimer);
     if (mount.timer) clearInterval(mount.timer);
