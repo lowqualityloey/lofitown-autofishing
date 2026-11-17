@@ -10,6 +10,15 @@ const { spawnSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'release.js');
 const { expectPublic, milestoneText, milestoneFor } = require(SCRIPT);
+
+function milestoneError(tag, body, options) {
+  try {
+    milestoneFor(tag, body, options);
+  } catch (err) {
+    return err;
+  }
+  return assert.fail('expected ' + tag + ' to be refused');
+}
 const STUB = path.join(__dirname, 'fixtures', 'release-guard-stub.js');
 const MIRROR = 'lowqualityloey/lofitown-autofishing-dist';
 const MIRROR_RE = MIRROR.replace('/', '\\/');
@@ -24,7 +33,24 @@ test('a tag with no vault trailer is refused, so a release cannot publish unreco
 
   assert.throws(() => milestoneFor('v9.9.9', 'fix: nothing here\n'), /no HeyLoey-Milestone: trailer/);
   assert.throws(() => milestoneFor('v9.9.9', 'fix: nothing here\n'), /heyloey done/, 'it says how to fix it');
-  assert.throws(() => milestoneFor('v9.9.9', 'fix: nothing here\n'), /git tag -f v9\.9\.9/, 'and how to attach it to the tag it is blocking');
+
+  // A published tag must never be doctored: a moved tag leaves installed copies and the mirror on
+  // a commit it no longer names. The default - and the only advice with an unknown state - is the
+  // note alone.
+  const publishedErr = milestoneError('v9.9.9', 'fix: nothing here\n', { published: true });
+  assert.match(publishedErr.message, /already published, so its tag must not move/);
+  assert.match(publishedErr.message, /heyloey done/);
+  assert.doesNotMatch(publishedErr.message, /--amend/, 'never suggests rewriting a published commit');
+  assert.doesNotMatch(publishedErr.message, /git tag -f/, 'never suggests moving a published tag');
+
+  const unknownState = milestoneError('v9.9.9', 'fix: nothing here\n');
+  assert.doesNotMatch(unknownState.message, /git tag -f/, 'an unknown publish state gets the safe advice');
+
+  const unpublishedErr = milestoneError('v9.9.9', 'fix: nothing here\n', { published: false });
+  assert.match(unpublishedErr.message, /Nothing is published for it yet/);
+  assert.match(unpublishedErr.message, /git commit --amend/, 'an unpublished commit can still carry it');
+  assert.match(unpublishedErr.message, /git tag -f v9\.9\.9/, 'and its tag can still move');
+  assert.match(unpublishedErr.message, /heyloey done/, 'both messages name the note that has to be written');
 
   assert.deepEqual(
     milestoneFor('v9.9.9', 'fix: x\n\nHeyLoey-Milestone: 9.9.9 - ships\n'),
@@ -34,12 +60,12 @@ test('a tag with no vault trailer is refused, so a release cannot publish unreco
   assert.equal(legacy.exempt, true, 'the one hand-logged tag stays verifiable');
   assert.match(legacy.reason, /logged by hand/);
 
-  // The gate has to run before the publish path reads GitHub, not after it: a release the tool
-  // refuses must not have had its source release read or its mirror touched first.
+  // The gate reads the source release first only to know which repair is safe, so the invariant is
+  // that it stands before the publish path - a refused release must never reach the mirror.
   const src = fs.readFileSync(SCRIPT, 'utf8');
-  const at = src.indexOf('milestoneFor(tag');
-  const sourceRead = src.indexOf('releaseInfo(source, tag)');
-  assert.ok(at > 0 && sourceRead > 0 && at < sourceRead, 'the trailer gate runs before the source release is read');
+  const at = src.indexOf('milestoneFor(tag, git(');
+  const publishAt = src.indexOf('publishMirror(mirror.repo');
+  assert.ok(at > 0 && publishAt > 0 && at < publishAt, 'the trailer gate runs before anything is published');
   assert.equal((src.match(/milestoneFor\(tag, git\(/g) || []).length, 1, 'exactly one gate, on the tag commit');
 });
 

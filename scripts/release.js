@@ -98,15 +98,32 @@ function milestoneText(body) {
   return m ? m[1].trim() : '';
 }
 
-function milestoneFor(tag, body) {
+/**
+ * Which repair to offer depends on whether the release is already out. A tag that is published must
+ * not move - installed copies and the mirror point at the commit it already names - so the default
+ * (and the only thing `--check` can safely say about an existing release) is to log the note and
+ * leave git alone. Amending and re-tagging is offered only while nothing has been published.
+ * `published` defaults to true: an unknown state has to give the safe advice.
+ */
+function milestoneFor(tag, body, options) {
+  const published = !options || options.published !== false;
   const text = milestoneText(body);
   if (text) return { text, exempt: false, reason: null };
   if (TRAILER_EXEMPT[tag]) return { text: '', exempt: true, reason: TRAILER_EXEMPT[tag] };
+  const logIt = '  log it:    heyloey done "<one line, the concrete outcome>"';
+  if (published) {
+    throw new Error(
+      tag + ' has no HeyLoey-Milestone: trailer, so this release has no vault record.\n' +
+      '  It is already published, so its tag must not move - writing the note is the fix:\n' +
+      logIt
+    );
+  }
   throw new Error(
     tag + ' has no HeyLoey-Milestone: trailer, so the vault record for this release would not be written.\n' +
-    '  log it:    heyloey done "<one line, the concrete outcome>"\n' +
-    '  then put it on the tag commit: git commit --amend -m "<subject>" -m "HeyLoey-Milestone: <one line>"\n' +
-    '  and move the tag:          git tag -f ' + tag
+    '  Nothing is published for it yet, so the commit can still carry it:\n' +
+    logIt + '\n' +
+    '  then:      git commit --amend -m "<subject>" -m "HeyLoey-Milestone: <one line>"\n' +
+    '  and move the tag: git tag -f ' + tag
   );
 }
 
@@ -225,9 +242,10 @@ async function main() {
   } catch (err) {
     throw new Error('no local tag ' + tag + ' — tag the release commit first');
   }
-  // Before anything is read from GitHub or published: a release that cannot be recorded is a
-  // release this tool will not publish.
-  const milestone = milestoneFor(tag, git(['log', '-1', '--format=%B', tagCommit]));
+  // Whether the release already exists decides which repair the refusal may suggest, so this read
+  // comes first - it is a read, and the gate still stands before any publish.
+  const src = releaseInfo(source, tag);
+  const milestone = milestoneFor(tag, git(['log', '-1', '--format=%B', tagCommit]), { published: !!src });
   const head = git(['rev-parse', 'HEAD']).trim();
 
   const tagged = JSON.parse(git(['show', tag + ':package.json']));
@@ -272,7 +290,6 @@ async function main() {
   if (fresh) console.log('  fresh build    ' + size(fresh) + ' · sha256 ' + hash(fresh).slice(0, 12) + ' · match');
   else if (dirty.length) console.log('  fresh build    skipped (' + dirty.join(', ') + ' modified)');
 
-  const src = releaseInfo(source, tag);
   if (!src) throw new Error('no source release ' + tag + ' in ' + source + ' — create it before mirroring');
   if (src.isDraft) throw new Error('source release ' + tag + ' is a draft — publish it before mirroring');
   if (!src.assets.some((asset) => asset.name === mirror.asset)) {
