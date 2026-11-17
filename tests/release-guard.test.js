@@ -9,10 +9,39 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 const SCRIPT = path.join(ROOT, 'scripts', 'release.js');
-const { expectPublic } = require(SCRIPT);
+const { expectPublic, milestoneText, milestoneFor } = require(SCRIPT);
 const STUB = path.join(__dirname, 'fixtures', 'release-guard-stub.js');
 const MIRROR = 'lowqualityloey/lofitown-autofishing-dist';
 const MIRROR_RE = MIRROR.replace('/', '\\/');
+
+test('a tag with no vault trailer is refused, so a release cannot publish unrecorded', () => {
+  assert.equal(
+    milestoneText('fix: x\n\nHeyLoey-Milestone: 3.9.44 - the mask clears both elements\n'),
+    '3.9.44 - the mask clears both elements'
+  );
+  assert.equal(milestoneText('fix: x\n\nHeyLoey-Milestone:   \n'), '', 'an empty trailer is not an opt-in');
+  assert.equal(milestoneText('feat: HeyLoey-Milestone: mid-line\n'), '', 'the trailer must start a line');
+
+  assert.throws(() => milestoneFor('v9.9.9', 'fix: nothing here\n'), /no HeyLoey-Milestone: trailer/);
+  assert.throws(() => milestoneFor('v9.9.9', 'fix: nothing here\n'), /heyloey done/, 'it says how to fix it');
+  assert.throws(() => milestoneFor('v9.9.9', 'fix: nothing here\n'), /git tag -f v9\.9\.9/, 'and how to attach it to the tag it is blocking');
+
+  assert.deepEqual(
+    milestoneFor('v9.9.9', 'fix: x\n\nHeyLoey-Milestone: 9.9.9 - ships\n'),
+    { text: '9.9.9 - ships', exempt: false, reason: null }
+  );
+  const legacy = milestoneFor('v3.9.43', '3.9.43: mask\n');
+  assert.equal(legacy.exempt, true, 'the one hand-logged tag stays verifiable');
+  assert.match(legacy.reason, /logged by hand/);
+
+  // The gate has to run before the publish path reads GitHub, not after it: a release the tool
+  // refuses must not have had its source release read or its mirror touched first.
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  const at = src.indexOf('milestoneFor(tag');
+  const sourceRead = src.indexOf('releaseInfo(source, tag)');
+  assert.ok(at > 0 && sourceRead > 0 && at < sourceRead, 'the trailer gate runs before the source release is read');
+  assert.equal((src.match(/milestoneFor\(tag, git\(/g) || []).length, 1, 'exactly one gate, on the tag commit');
+});
 
 for (const visibility of ['private', 'internal']) {
   test(visibility + ' mirror: refused before any release command', () => {
