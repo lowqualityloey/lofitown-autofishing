@@ -307,6 +307,12 @@ Two probes in a row that read the layer fine and find nothing drop the armed rec
 over from a dismissed prompt can never erase an element that paints there next; a probe that cannot
 read the layer reports `null` instead and holds them, because a failed read is not evidence.
 
+Verified on screen with the shipped build at 1179x886: the live probe returned `{531,258,114,60}` and
+`{651,267,48,48}` (the same sprite sizes, at the places the layer puts them now), the masked frame
+showed both elements gone with the world behind them untouched and no sliver anywhere, the released
+frame brought the CAST! bubble and the lure button back, and the re-arm hid them again - 168 probes,
+121 resolved, 32 empty-layer drops, 10,432 clears, no errors.
+
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a
 backgrounded or minimised tab freezes both, and the panel stops the session when it sees the page
