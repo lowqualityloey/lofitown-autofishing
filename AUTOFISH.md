@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.43) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.44) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
 diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
 "292 of 300 presses landed"), on top of
@@ -312,6 +312,16 @@ Verified on screen with the shipped build at 1179x886: the live probe returned `
 showed both elements gone with the world behind them untouched and no sliver anywhere, the released
 frame brought the CAST! bubble and the lure button back, and the re-arm hid them again - 168 probes,
 121 resolved, 32 empty-layer drops, 10,432 clears, no errors.
+
+3.9.44 fixes a hold that had nothing to end it. `mount()` adopted the stored setting by engaging the
+hold itself (`if (focusPref) setFocusMode(true)`), and `focusTick` only auto-releases a hold it has
+seen a session drive - a page-load hold never is one - so a page opened outside a focus session with
+"Pause in focus sessions" on stayed paused with the prompt masked, while `session.js` re-paused on
+every tick because `fact.focus` was true. Measured live on 3.9.43 in Neo: title `lofi.town` (no
+session), `running: true`, `paused: true`, `promptMask().on` with one rect `{534,258,114,60}` and no
+dial pressed until the toggle was clicked. Mount now adopts only the setting; `focusTick()` engages
+the hold when `inFocusSession()` is true, which is what the toggle promises, and the prompt mask
+follows the hold rather than the page load.
 
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a

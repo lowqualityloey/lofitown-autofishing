@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.43
+// @version      3.9.44
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.43" };
+  const F = { version: "3.9.44" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -6915,9 +6915,13 @@ const SPECIES = [
 
     build();
     if (prefs.hideUpsell) setUpsellHidden(true); // cosmetic: see setUpsellHidden()
-    // Explicit on purpose: the toggle was on when the page went away, so the hold comes back.
+    // The setting is adopted; the hold is not. Engaging it here paused a page that has no focus
+    // session and armed the prompt mask, and nothing could lift it: focusTick only auto-releases a
+    // hold it saw a session drive (`focusSawSession`), which a page-load hold never is. Measured
+    // live 2026-11-17 (3.9.43): title `lofi.town`, running:true, paused:true, one rect masked and
+    // zero dial presses until the toggle was clicked. focusTick() engages the hold when a session
+    // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
-    if (focusPref) setFocusMode(true);
     mountAdoption();
     banner = checkInterrupted() || banner;
 

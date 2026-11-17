@@ -148,7 +148,13 @@ test('focus mode pauses the run, draws nothing over the game, and releases only 
   assert.match(src, /focusPref = !focusOn;/, 'the toggle sets the setting');
 
   assert.ok(src.includes('focusPref = !!prefs.focusMode;'), 'mount adopts the stored setting');
-  assert.ok(src.includes('if (focusPref) setFocusMode(true);'), 'mount honours the setting');
+  // 3.9.44: adopting the setting must not engage the hold. A page-load hold has focusSawSession
+  // false and focusTick only auto-releases a session-driven hold, so a page with no focus session
+  // stayed paused with the prompt masked (measured live 2026-11-17: title `lofi.town`,
+  // running:true, paused:true, one rect armed, zero dial presses).
+  assert.ok(!src.includes('if (focusPref) setFocusMode(true);'), 'mount does not turn the setting into a hold');
+  const mountFn = src.slice(src.indexOf('focusPref = !!prefs.focusMode;'), src.indexOf('mountAdoption();'));
+  assert.ok(mountFn.length > 0 && !/setFocusMode\(/.test(mountFn), 'nothing in mount engages the hold; focusTick does when a session exists');
   const fn = src.slice(src.indexOf('function setFocusMode'), src.indexOf('function focusTick'));
   assert.match(fn, /type: 'pause', at: Date\.now\(\), reason: 'focus'/, 'engaging pauses with the focus reason');
   assert.match(fn, /if \(state\.pauseReason === 'focus'\) dispatch\(\{ type: 'resume'/, 'releasing resumes only its own hold');
