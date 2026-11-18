@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.48) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.49) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, the diagnostics
 written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical", "292 of 300 presses
 landed"), and an overnight capture the panel loads again after every page load, retries on its own
@@ -421,6 +421,10 @@ tooltip reads `log().worklist` and has the no-gap wording; `tests/userscript.tes
 `log()` attaches the field. Because the field is derived on the read path, a tab still running an
 older build shows it only after its next page load - the overnight tab was left running during this
 change.
+
+**Released as 3.9.49.** 348 tests pass, the built userscript is 366,910 bytes (sha256
+`820c91061e41`), and the tag sits on the release commit. The live overnight tab still runs 3.9.47 and
+is not reloaded until the night is read.
 
 ## 2026-11-18 live verification - 3.9.47 in the real game
 
