@@ -1,6 +1,6 @@
 # Spec: overnight capture and the morning report (3.9.45-3.9.47)
 
-Status: implemented and live-verified 2026-11-18 · release pending · Level 2
+Status: implemented, live-verified and released as v3.9.47 on 2026-11-18 · Level 2
 
 ## Problem
 

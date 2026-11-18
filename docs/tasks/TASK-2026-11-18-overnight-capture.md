@@ -1,7 +1,7 @@
 # Task: overnight capture you can trust (3.9.45-3.9.47)
 
-Level: 2 (Controlled) · Owner: lead · Started: 2026-11-17 · Status: implementation complete,
-release pending
+Level: 2 (Controlled) · Owner: lead · Started: 2026-11-17 · Status: released; overnight acceptance
+in progress
 
 ## Objective
 
@@ -64,6 +64,12 @@ The full contract is `docs/specs/2026-11-18-overnight-capture.md`.
   - repeated the stale/fix cycle once to capture both states.
 - The live check found and fixed the `PORT` bug; a regression test now fails without the origin in
   the failure message.
+- Released later on 2026-11-18: tag `v3.9.47` on `6dfbbab`, source and public mirror byte-identical
+  at 360,594 bytes / sha256 `b2c072b5e4a2`. Tampermonkey lists 3.9.47 and a reload leaves
+  `__fish.version` and the panel header at 3.9.47.
+- Acceptance run started at 06:39:13Z with fishserve on 8731: first snapshot 250 attempts
+  (`export-2026-11-18T06-39-13-390Z.json`), capture line green, panel running; the first new attempt
+  caught an Alligator Gar. The morning `## Coverage` report is still pending.
 
 ## Verify
 
@@ -82,6 +88,8 @@ The full contract is `docs/specs/2026-11-18-overnight-capture.md`.
 
 ## Release
 
-v3.9.47 is not tagged or published at the time this record was written. The release carries
-3.9.45-3.9.47 together; the public mirror is verified by `scripts/release.js --check`. The overnight
-acceptance run and its morning report are still to be recorded.
+Released 2026-11-18 as **v3.9.47** (tag on commit `6dfbbab`), carrying 3.9.45-3.9.47 together. The
+source release and public mirror are identical at 360,594 bytes / sha256 `b2c072b5e4a2`, and
+`node scripts/release.js --check` passes. Installed in Tampermonkey and confirmed after a reload.
+The overnight acceptance run started at 06:39:13Z; its morning `## Coverage` verdict and exit status
+are still to be recorded.

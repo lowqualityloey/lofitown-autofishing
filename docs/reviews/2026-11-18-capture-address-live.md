@@ -61,10 +61,24 @@ against a rejecting `fetch` and asserts `lastError` contains the origin and the 
 and that `now()` reports again without throwing. This is why the live check existed: the 339-test
 suite at the time did not cover the failed-post message.
 
+## After the live check: released, installed and running
+
+- Released v3.9.47 (tag on `6dfbbab`): the source release and public mirror are both the
+  360,594-byte build, sha256 `b2c072b5e4a2`, and `node scripts/release.js --check` passes.
+- Tampermonkey was updated from the public mirror; its dashboard listed 3.9.47 / 360 KB, and after a
+  reload of the game `__fish.version === "3.9.47"` and the panel header read `v3.9.47`.
+- The installed panel still had `overnightBase: http://127.0.0.1:8732`; clicking the amber line and
+  accepting 8731 corrected it (the same path the live check exercised). Fishserve was started on
+  8731, the first snapshot posted at 06:39:13Z (`export-2026-11-18T06-39-13-390Z.json`, 250
+  attempts), and the line is green.
+- The run was started from the panel at the same time: phase `running`, the first new attempt caught
+  an Alligator Gar, and the capture timer is live. The morning report is still pending.
+
 ## Limitations and cleanup
 
-- This was a **page injection**, not a Tampermonkey install. The open tab runs 3.9.47; a reload
-  restores 3.9.46 until the release is installed.
+- The 2026-11-18 live check itself was a **page injection**, not a Tampermonkey install. The open tab
+  ran 3.9.47; a reload restored 3.9.46 until the release was installed. That limitation was cleared
+  after the release (above).
 - The test left `overnightBase` at `http://127.0.0.1:8732` with `overnight:false`; the capture was
   toggled off and the temporary fishserve processes were stopped. The three test exports remain in
   `data/runs`.
@@ -85,6 +99,7 @@ suite at the time did not cover the failed-post message.
 
 ## Next
 
-1. Release 3.9.47 and install it in Tampermonkey; reload and confirm the version persists.
-2. Run one real night with fishserve on a stable port, then read `## Coverage` and record the result
-   in this review and the task.
+1. ~~Release 3.9.47 and install it in Tampermonkey; reload and confirm the version persists.~~ Done
+   after the check: tag `v3.9.47` is public, the mirror matches, and the reloaded panel reads 3.9.47.
+2. Read the first real night with fishserve on 8731 (started 06:39:13Z), then record the `## Coverage`
+   verdict and exit status here and in the task.
