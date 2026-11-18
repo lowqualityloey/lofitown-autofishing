@@ -208,6 +208,17 @@ test('a catch outside the catalogue is visible: an UNK cell and an honest last l
   assert.ok(src.includes('not in the built-in catalogue'), 'the tooltip explains the catalogue miss');
 });
 
+test('the UNK tooltip reads the worklist, including the no-gap case', () => {
+  assert.ok(src.includes('unknownCell: unknownCell'), 'the UNK cell is registered for the render pass');
+  assert.ok(src.includes('unknownTitle(book && book.worklist)'), 'the tooltip reads log()\'s worklist');
+  const fn = src.slice(src.indexOf('function unknownTitle('), src.indexOf('function renderLog('));
+  assert.ok(fn.length > 0, 'unknownTitle exists');
+  assert.ok(fn.includes("'1 open gap · '"), 'a single open name is called one gap');
+  assert.ok(fn.includes("'no open gaps - all '"), 'a fully explained map says there is no gap');
+  assert.ok(fn.includes('historical names are resolved, fragments or non-fish'),
+    'the rest of the map is explained rather than counted as gaps');
+});
+
 test('the frame report is on the panel, because a browser may take no console at all', () => {
   // The Zen tab takes no synthetic keystrokes, so __fish.perf() cannot be read there. The numbers
   // still have to be reachable: on the panel, and from a screenshot.

@@ -975,6 +975,21 @@ const SPECIES = [
   const SPECIES_BY_NAME = {};
   for (const row of SPECIES) SPECIES_BY_NAME[row[0].toLowerCase()] = row;
 
+  // Display names the game prints that are not names in its own fish table. Both are hard-coded
+  // in the bundle: 'Pharooh Cuddlefish' prints as 'Pharaoh Cuttlefish', and a special 'Pink Canny'
+  // prints as 'Golden Canny' rather than 'Golden Pink Canny'. Each alias names the catalogue row
+  // whose tier and weights apply, the species the card's name really means, and the variant its
+  // prefix reports. Kept out of SPECIES so the embedded table stays the bundle's 232 rows.
+  const DISPLAY_ALIASES = [
+    { name: 'Pharaoh Cuttlefish', base: 'Pharaoh Cuttlefish', row: 'Pharooh Cuddlefish', variant: '' },
+    { name: 'Golden Canny', base: 'Pink Canny', row: 'Pink Canny', variant: 'Golden' },
+  ];
+  const DISPLAY_ALIASES_BY_LOWER = {};
+  for (const alias of DISPLAY_ALIASES) DISPLAY_ALIASES_BY_LOWER[alias.name.toLowerCase()] = alias;
+  // Every name the worklist can explain: the catalogue rows plus the display renames. Built once,
+  // because log() may be called every panel tick and this list never changes.
+  const KNOWN_NAMES = SPECIES.map((row) => row[0]).concat(DISPLAY_ALIASES.map((alias) => alias.name));
+
   function tidyName(s) {
     return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
   }
@@ -1014,11 +1029,18 @@ const SPECIES = [
   /** {name, base, variant, shiny, golden, rarity, minWeight, maxWeight, baseGold, known} */
   function speciesInfo(name) {
     const full = tidyName(name);
+    const lower = full.toLowerCase();
     // Some catalogue names start with Shiny/Golden themselves (Golden Shiner, Golden Goldfish).
-    // An exact catalogue hit wins; only an unmatched name is treated as a variant.
-    const exact = SPECIES_BY_NAME[full.toLowerCase()] || null;
-    const parts = exact ? { variant: '', base: full } : splitVariant(full);
-    const row = exact || SPECIES_BY_NAME[parts.base.toLowerCase()] || null;
+    // An exact catalogue hit wins; only an unmatched name is treated as a variant or alias.
+    const exact = SPECIES_BY_NAME[lower] || null;
+    let parts = exact ? { variant: '', base: full } : splitVariant(full);
+    // A display rename can be the whole name ('Pharaoh Cuttlefish') or the base under a prefix
+    // ('Shiny Pharaoh Cuttlefish'); its row supplies the tier and weights the card never prints.
+    const alias = exact ? null
+      : DISPLAY_ALIASES_BY_LOWER[lower] || DISPLAY_ALIASES_BY_LOWER[parts.base.toLowerCase()] || null;
+    if (alias) parts = { variant: parts.variant || alias.variant, base: alias.base };
+    const row = exact || (alias ? SPECIES_BY_NAME[alias.row.toLowerCase()] : null) ||
+      SPECIES_BY_NAME[parts.base.toLowerCase()] || null;
     return {
       name: full,
       base: parts.base,
@@ -1153,6 +1175,70 @@ const SPECIES = [
       updatedAt: book.updatedAt || null,
       since: book.createdAt || null,
       days: Object.keys(book.days || {}).length,
+    };
+  }
+
+  // Card text that can land in the species slot without being a species: inventory/reward items
+  // (Town Keys unlock regions) and quality words printed on the card. Kept explicit and small -
+  // anything new is not guessed at, it surfaces as 'open' so a real gap stays visible.
+  const NON_SPECIES_TEXT = ['town key', 'volcanic rod', 'decent', 'exquisite'];
+
+  /**
+   * The unknown worklist, derived from the ledger at read time. `unknown` is a cumulative count of
+   * catches the build could not name: when the catalogue later learns a name, the old count stays,
+   * so the raw map overstates today's gaps. This classifies every name against the current
+   * catalogue and never writes to the record:
+   *   resolved  - the catalogue knows the name now (a Shiny/Golden variant of one counts)
+   *   fragment  - a piece of a catalogue or display name, which is how a two-line card used to land
+   *   nonFish   - item or quality text that is not a species
+   *   open      - nothing explains it; this is the real worklist
+   * `counts` sums the catches behind each kind and `total` every unknown catch. Entries carry the
+   * ledger's last-seen stamp and, for a fragment, the known names it could be part of.
+   */
+  function unknownWorklist(book, t) {
+    const log = book && book.v === 1 ? book : emptyLog(t);
+    const unknown = log.unknown || {};
+    const seen = log.species || {};
+    const names = Object.keys(unknown);
+    const kinds = { resolved: [], fragment: [], nonFish: [], open: [] };
+    for (const name of names) {
+      const info = speciesInfo(name);
+      const base = tidyName(info.base || name);
+      const lower = base.toLowerCase();
+      const candidates = [];
+      if (!info.known && lower) {
+        for (const row of KNOWN_NAMES) {
+          const low = row.toLowerCase();
+          if (low.indexOf(lower + ' ') === 0 || low.slice(-(lower.length + 1)) === ' ' + lower) {
+            candidates.push(row);
+          }
+        }
+      }
+      const kind = info.known ? 'resolved'
+        : NON_SPECIES_TEXT.indexOf(lower) >= 0 ? 'nonFish'
+          : candidates.length ? 'fragment'
+            : 'open';
+      const record = seen[name] || {};
+      kinds[kind].push({
+        name, n: unknown[name] || 0,
+        last: record.last || null,
+        candidates,
+      });
+    }
+    const sort = (a, b) => b.n - a.n || (a.name < b.name ? -1 : 1);
+    const counts = {};
+    for (const kind of ['resolved', 'fragment', 'nonFish', 'open']) {
+      kinds[kind].sort(sort);
+      counts[kind] = kinds[kind].reduce((sum, e) => sum + e.n, 0);
+    }
+    return {
+      total: counts.resolved + counts.fragment + counts.nonFish + counts.open,
+      names: names.length,
+      counts,
+      resolved: kinds.resolved,
+      fragment: kinds.fragment,
+      nonFish: kinds.nonFish,
+      open: kinds.open,
     };
   }
 
@@ -4337,7 +4423,11 @@ const SPECIES = [
    * localStorage, and it needs no server.
    */
   F.log = function () {
-    return logSummary(loadLedger(), Date.now());
+    const book = loadLedger();
+    const summary = logSummary(book, Date.now());
+    // The raw unknown map is cumulative history; the worklist says what is still a gap today.
+    summary.worklist = unknownWorklist(book);
+    return summary;
   };
   /** Which catch history the panel reads and writes. No argument reads it. */
   F.logProfile = function (name) {
