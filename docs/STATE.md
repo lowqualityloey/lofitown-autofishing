@@ -1,7 +1,7 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.47 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.48 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
@@ -18,11 +18,16 @@
   installed but never tagged**; **3.9.47 is released and published** (tag `v3.9.47`, commit
   `6dfbbab`, 2026-11-18), carrying 3.9.45-3.9.47 together: 340 tests, live-verified, and both the
   source release and the public mirror carry the 360,594-byte build (sha256 `b2c072b5e4a2`).
-  Tampermonkey now runs 3.9.47 after a reload (`__fish.version` and the panel header both agree).
-- **Target Release / Deadline**: v3.9.47 shipped 2026-11-18. The real overnight acceptance run is
-  in progress: fishserve on 8731, first snapshot at 06:39:13Z, panel running.
-- **Current Working Branch**: `proto/focus-prompt-mask` at the release commit `6dfbbab`; `main` at
-  the merge `946a36b`; tag `v3.9.47`; 3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
+  Tampermonkey runs 3.9.47 (`__fish.version` and the panel header both agree). **3.9.48** is the
+  current build and release: a catalogue name that begins with `Golden` is a species, not a variant,
+  so `Golden Shiner` (Common) and `Golden Goldfish` (Legendary) no longer log as `Unknown` or take
+  the wrong tier. It is **not installed** while the overnight run is live - the tab keeps executing
+  the 3.9.47 it loaded, and no install or reload happens until the night is read.
+- **Target Release / Deadline**: v3.9.48 shipped 2026-11-18 (the Golden-prefix species lookup);
+  v3.9.47 is the night's installed build. The real overnight acceptance run is in progress:
+  fishserve on 8731, first snapshot at 06:39:13Z, panel running.
+- **Current Working Branch**: `proto/focus-prompt-mask` at the 3.9.48 release commit; `main` at
+  the Golden-prefix merge `be89cb3`; tag `v3.9.48`; 3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
   modification and stays out of every commit.
 - **Last Updated**: 2026-11-18
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
