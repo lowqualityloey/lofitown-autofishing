@@ -44,12 +44,15 @@ exactly that.
 - [ ] `__fish.status().stats`: `pressRejected` is 0 and `misses` is 0.
 - [ ] Over slow dials in `__fish.report().outcomes`, mean presses is above 1.44 (3.9.49: 61% got
       one). `const s = __fish.report().outcomes.filter(d => Math.abs(d.omega || 0) < 150); s.reduce((a, d) => a + d.presses, 0) / s.length`
-- [ ] First-press gate: `firstPressHeld` is rare and `holdPassesMax` stays under one rotation;
-      `firstPressForced` is below 3.9.49's 37. Do **not** compare forced with held: `firstPressForced`
-      counts budget expiry, can increment without a hold, and can exceed held. The 3.9.51 run showed
-      6 held / 21 forced with `holdPassesMax` 0.799; a raw forced > held ratio is expected on
-      fast/narrow dials and is not a regression. The sharper future check is a counter for dials
-      that held and then forced.
+- [ ] First-press gate: `firstPressHeld` is rare by the explicit cap
+      **`firstPressHeld / dials <= 0.20`** - held first presses on at most one in five closed dials -
+      and `holdPassesMax` stays under one rotation; `firstPressForced` is below 3.9.49's 37.
+      Do **not** compare forced with held: `firstPressForced` counts budget expiry, can increment
+      without a hold, and can exceed held. Calibration: 3.9.49 was 37/456 = 8.1%; the completed
+      3.9.51 run was 6/57 = 10.5%; the larger live 3.9.51 sample was 17/98 = 17.35% at the
+      2026-11-19 09:34 read. The cap still catches the all-held 37/37 failure while leaving headroom.
+      The sharper future check is a per-dial held-then-forced counter; until it exists, use this cap
+      with `holdPassesMax`.
 
 ## If it regresses
 
