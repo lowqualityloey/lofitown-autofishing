@@ -383,7 +383,7 @@ BrowserOS neo's real input bridge; a window listener logged every one as `isTrus
   `PORT`, so the handler threw inside its own `catch`, `lastError` stayed null, and the amber
   post-failure state was unreachable. It now names the resolved `ORIGIN`; a VM test runs a rejecting
   `fetch` and asserts `lastError` carries the origin and the error. That took the suite to **340
-  tests** (0 fail) and rebuilt the 360,459-byte dist.
+  tests** (0 fail) and rebuilt the 360,594-byte dist.
 - Full evidence, exact click coordinates, observed-versus-not-observed and the limitations are in
   [docs/reviews/2026-11-18-capture-address-live.md](docs/reviews/2026-11-18-capture-address-live.md);
   the contract is [docs/specs/2026-11-18-overnight-capture.md](docs/specs/2026-11-18-overnight-capture.md).
