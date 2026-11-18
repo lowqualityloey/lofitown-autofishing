@@ -1,7 +1,8 @@
 # 3.9.51 post-night install checklist
 
-Install only after the morning report has been read and saved. The live tab is still running
-3.9.49; reloading ends the night's run.
+Install only after the morning report has been read and saved. At the start of this install the
+live tab was on 3.9.49; it was reloaded at 08:13 and now runs 3.9.51. Reloading ends the night's
+run.
 
 ## Before the reload
 
@@ -11,15 +12,24 @@ Install only after the morning report has been read and saved. The live tab is s
 - [ ] Leave the night's session live if you want the reload to post its row; if it was already
       stopped, the night stays unbounded. The 3.9.51 reload posts the interrupted session as a
       `reload` row under `nepchur`, and re-running the report afterwards bounds the night (the gap
-      since the last snapshot reads as unaccounted).
-- [ ] Merge PR #28 into `main`, then pull it in the checkout fishserve runs from and restart the
-      server **before** the userscript:
-      `systemctl --user restart fishserve`
-      `systemctl --user is-active fishserve`
-      `curl -s "http://127.0.0.1:8731/sessions?profile=nepchur"`
-      The endpoint defaults to the server's local day; `&day=$(date +%F)` is equivalent. After the
-      restart expect `"profile":"nepchur"` and a six-column header in `sessions.csv`. An old server
-      ignores `profile` and writes five-column rows, so this order matters.
+      since the last snapshot reads as unaccounted) - but only after the gate below has passed.
+- [ ] The reload row is a bound, not a catch record: it carries the interrupted session's
+      `minutes` but **0 catches** (the heartbeat stores no catch count), and its `started_at` is the
+      reload time rather than the session start. Use it to bound coverage, never to total catches.
+
+## Pre-install gate - blocking
+
+Do not install or reload the userscript until every box below is checked. A reload before this
+gate writes the reload row five-column: it reads back as `default`, the named night stays
+unbounded, and restarting later cannot recover the lost profile. The 2026-11-19 08:13 reload did
+exactly that.
+
+- [ ] PR #28 is merged and the checkout fishserve runs from is fast-forwarded to it.
+- [ ] `systemctl --user restart fishserve` has run; `MainPID` and the start timestamp changed.
+- [ ] `head -1 sessions.csv` reads `time,started_at,minutes,catches,reason,profile`.
+- [ ] `curl -s "http://127.0.0.1:8731/sessions?profile=nepchur"` returns the **local** day and
+      `"profile":"nepchur"`.
+- [ ] Only then replace the userscript and reload the tab.
 
 ## Install
 
