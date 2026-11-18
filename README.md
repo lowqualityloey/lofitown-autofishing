@@ -188,10 +188,11 @@ session and a distro restart:
   another worktree writes its snapshots there instead, and the morning report in this one will not
   see them.
 - **Reboot caveat**: the unit starts when the WSL distro starts, and a Windows reboot does not start
-  the distro by itself. After a reboot, capture stays dead until something runs a WSL command (a
-  terminal, or a logon Task Scheduler entry such as `wsl.exe -d Ubuntu -u heyloey -- true`); the
-  panel then heals within its 30 s to 5 min backoff. If the line is amber after a reboot, start WSL
-  before changing the address in the panel.
+  the distro by itself. There is deliberately **no logon autostart**: keeping WSL resident around
+  the clock costs RAM for a server that is only needed while fishing. After a reboot, start WSL once
+  by hand (`wsl.exe -d Ubuntu -u heyloey -- true`, or any WSL terminal); the unit comes up with the
+  distro and the panel heals within its 30 s to 5 min backoff. If the line is amber after a reboot,
+  start WSL before changing the address in the panel.
 
 In the morning:
 
