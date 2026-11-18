@@ -368,6 +368,60 @@ keep the old path (`Golden Tuna` is still a Golden `Tuna`, `Shiny Boxfish` a Shi
 regression test pins both catalogue species and both variant forms; the ledger's existing `Unknown`
 rows are left alone and only future catches use the corrected lookup.
 
+## 2026-11-18 the unknown worklist: 38 names, no open gap
+
+The live ledger held **15,870 catches, 356 of them `Unknown`, behind 38 names** - and by the game's
+own display map, none of those names is a gap any more. `unknown` is cumulative by design: it counts the catches the build of
+the day could not name, so when the catalogue later learns a name its old count stays. On the
+panel's `UNK` cell that read as one unresolved pile. The worklist now derives the answer at read
+time from that same record and never writes to it - no migration, no rename, no backfill - so ledger
+history is exactly what the earlier builds wrote, truncated two-line names included.
+
+Every name lands in exactly one kind, tested in that order:
+
+| kind | rule | live ledger |
+|---|---|---|
+| `resolved` | `speciesInfo(name)` knows it now; a `Shiny`/`Golden` variant of a catalogue species counts | 22 names / 270 catches |
+| `fragment` | the name is a whole-word prefix or suffix of a catalogue name or display alias - a two-line card read before 3.9.1 | 12 names / 79 catches |
+| `nonFish` | item or quality text, not a species: `town key`, `volcanic rod`, `decent`, `exquisite` | 4 names / 7 catches |
+| `open` | nothing explains it - the real worklist | none on the live ledger |
+
+**`__fish.log().worklist`.** The field is
+`{total, names, counts: {resolved, fragment, nonFish, open}, resolved: [...], fragment: [...], nonFish: [...], open: [...]}`.
+`total` is the catches behind every unknown name and `names` the names themselves, so "how many fish"
+and "how many gaps" no longer share one number. Each entry is `{name, n, last, candidates}`: `n` and
+`last` are copied from the ledger's species record (ISO stamp or null), and `candidates` lists the
+catalogue names a fragment could be part of, empty for the other kinds. Entries sort by count, then
+name, inside each kind. It is derived only when `log()` is called, so nothing pays for it per frame.
+
+**The bundle's display renames.** The fish table and the card do not always use the same name. The
+bundle hard-codes two: `Pharooh Cuddlefish` prints as `Pharaoh Cuttlefish`, and a special `Pink Canny`
+prints as `Golden Canny` rather than `Golden Pink Canny`. Both are display aliases in
+`speciesInfo()` - `Pharaoh Cuttlefish` to the Epic `Pharooh Cuddlefish` row (1-10 kg, 140 gold), and
+`Golden Canny` to the Legendary `Pink Canny` row (50-300 kg, 60 gold) with the `Golden` variant kept.
+The aliases live beside the table, not in it, so `SPECIES` stays the bundle's 232 rows and
+`__fish.catalogue().count` does not move. This is what turns the 24 historical `Pharaoh` catches into
+fragments of `Pharaoh Cuttlefish` (open drops to 0) and stops a future catch of either fish from being
+logged `Unknown`.
+
+**The panel.** The `UNK` cell's tooltip is the worklist's one-line reading, in four shapes - no
+ledger, no open gaps, one open gap, several - so the cell never claims a gap it cannot see. Today's
+data prints
+
+`no open gaps - all 38 historical unknown names are resolved, fragments or non-fish`
+
+The 24 `Pharaoh` catches are the card's first line of `Pharaoh Cuttlefish`; with the display alias
+known they are fragments, so the tooltip names no gap, while the old ledger rows stay exactly as
+written and a new catch of that fish resolves as Epic.
+
+**Tests.** `node --test` = 348 pass / 0 fail. `tests/catchlog.test.js` pins the live 38-name ledger as
+a fixture and checks each kind, the counts, the fragment candidates and the empty ledger, plus both
+display aliases and that neither grows the 232-row table; `tests/panel.test.js` guards that the
+tooltip reads `log().worklist` and has the no-gap wording; `tests/userscript.test.js` guards that
+`log()` attaches the field. Because the field is derived on the read path, a tab still running an
+older build shows it only after its next page load - the overnight tab was left running during this
+change.
+
 ## 2026-11-18 live verification - 3.9.47 in the real game
 
 The built 3.9.47 was loaded into the real `app.lofi.town` tab in BrowserOS neo. Tampermonkey still
@@ -1062,8 +1116,10 @@ Volcanic half, which is how a live Volcanic catch became `Unknown`. The `Empty` 
 Secret 9, Halloween 6, Christmas 6.
 
 **API.** `__fish.log()` (summary: totals, `byRarity` for all eight tiers, `top` five, `best`,
-`today: {day,n,shiny,golden,byRarity}`, `since`, `days`, `last`), `__fish.logCsv()` (one row per
-species: `species,rarity,derived,shiny,count,best_kg,first_seen,last_seen`), `__fish.logReset()`,
+`today: {day,n,shiny,golden,byRarity}`, `since`, `days`, `last`, `worklist` - the read-time
+classification of every name ever logged `Unknown`, see
+[the unknown worklist](#2026-11-18-the-unknown-worklist-38-names-no-open-gap)), `__fish.logCsv()`
+(one row per species: `species,rarity,derived,shiny,count,best_kg,first_seen,last_seen`), `__fish.logReset()`,
 `__fish.status().ledger` (`{total, species, shiny}`), `__fish.report().catchLog`. The daily budget
 and cooldown are per profile (`autofish:budget:v1:<profile>`; `default` keeps the old key), so a
 second profile does not inherit the first profile's spent cap. Nothing else reads the ledger, so it

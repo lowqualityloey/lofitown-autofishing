@@ -16,6 +16,10 @@ test('it installs itself on the game page only, with no grants', () => {
   assert.match(src, /^\/\/ @noframes$/m);
 });
 
+test('__fish.log() carries the unknown worklist, not just the cumulative map', () => {
+  assert.ok(src.includes('summary.worklist = unknownWorklist(book)'), 'log() attaches the read-time worklist');
+});
+
 test('the userscript version matches package.json, so a bump cannot half-happen', () => {
   const pkg = require('../package.json');
   assert.match(src, new RegExp('^// @version\\s+' + pkg.version.replace(/\./g, '\\.') + '$', 'm'));

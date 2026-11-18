@@ -19,7 +19,7 @@ const CODE = SRC.slice(a + OPEN.length, b);
 const EXPORTS = [
   'SPECIES', 'TIER_ORDER', 'LOG_KEY', 'TIER_BY_LOWER', 'SPECIES_BY_NAME', 'tidyName',
   'normTier', 'parseWeightKg', 'splitVariant', 'speciesInfo', 'describeCatch', 'logDay',
-  'emptyLog', 'addToLog', 'trimLog', 'logSummary', 'csvCell', 'logCsv', 'loadLedger', 'saveLedger',
+  'emptyLog', 'addToLog', 'trimLog', 'logSummary', 'unknownWorklist', 'csvCell', 'logCsv', 'loadLedger', 'saveLedger',
   'logProfiles', 'logKey'
 ].join(', ');
 
@@ -174,6 +174,119 @@ test('a catalogue species whose name starts with Golden stays a species', () => 
   assert.equal(boxfish.base, 'Boxfish');
   assert.equal(boxfish.variant, 'Shiny');
   assert.equal(boxfish.rarity, 'Common');
+});
+
+test('the two display renames in the game resolve to their catalogue rows', () => {
+  // The bundle prints these names but stores them under different ones: a card that says
+  // "Pharaoh Cuttlefish" is the Epic "Pharooh Cuddlefish", and a special "Pink Canny" prints as
+  // "Golden Canny" rather than "Golden Pink Canny". Neither display name is a catalogue row.
+  const pharaoh = T.speciesInfo('Pharaoh Cuttlefish');
+  assert.equal(pharaoh.known, true);
+  assert.equal(pharaoh.rarity, 'Epic');
+  assert.equal(pharaoh.minWeight, 1);
+  assert.equal(pharaoh.maxWeight, 10);
+  assert.equal(pharaoh.baseGold, 140);
+  assert.equal(pharaoh.base, 'Pharaoh Cuttlefish', 'the card name stays the species the player saw');
+  assert.equal(pharaoh.variant, '');
+
+  const canny = T.speciesInfo('Golden Canny');
+  assert.equal(canny.known, true);
+  assert.equal(canny.rarity, 'Legendary');
+  assert.equal(canny.minWeight, 50);
+  assert.equal(canny.maxWeight, 300);
+  assert.equal(canny.baseGold, 60);
+  assert.equal(canny.base, 'Pink Canny');
+  assert.equal(canny.golden, true);
+  const cannyCatch = catchOf('Golden Canny', '', '120 kg');
+  assert.equal(cannyCatch.species, 'Golden Canny');
+  assert.equal(cannyCatch.rarity, 'Legendary');
+  assert.equal(cannyCatch.golden, true);
+  assert.equal(cannyCatch.derived, true);
+
+  // A variant of a renamed species keeps its prefix through the alias.
+  const shiny = T.speciesInfo('Shiny Pharaoh Cuttlefish');
+  assert.equal(shiny.shiny, true);
+  assert.equal(shiny.base, 'Pharaoh Cuttlefish');
+  assert.equal(shiny.rarity, 'Epic');
+
+  // The aliases do not grow the bundle's table; the card's own name resolves to its tier.
+  assert.equal(T.SPECIES.length, 232);
+  assert.equal(T.SPECIES.some((r) => r[0] === 'Pharaoh Cuttlefish' || r[0] === 'Golden Canny'), false);
+  assert.equal(catchOf('Pharaoh Cuttlefish', '', '9.86 kg').rarity, 'Epic');
+});
+
+// The live nepchur ledger on 2026-11-18: 356 Unknown catches across these 38 names. Kept verbatim
+// so the worklist is pinned against the data it was designed for, not a tidied subset.
+const LIVE_UNKNOWN = {
+  'Fried Egg': 12, 'Shiny Flying': 1, Decent: 1, 'Town Key': 4, Exquisite: 1,
+  'Black Seadevil': 1, Greenland: 10, 'Hawaiian Gregory': 3, Eelpouts: 5, Keeltail: 6,
+  Riftia: 6, Flagtail: 7, 'Rocks with': 9, 'Goby Fish': 5, Titan: 1, 'Hawaiian Bigeye': 4,
+  'Green Coral': 2, 'Sea Sponge': 5, Snailfish: 2, Boops: 1, Boxfish: 6, 'Banana Moray': 1,
+  'Moon Jellyfish': 3, "Bartlett's": 4, Pharaoh: 24, 'Sea Cucumber': 2, Vulcanoctopus: 1,
+  Mandarinfish: 1, 'Forceps Fish': 1, 'Longfin Batfish': 1, 'Shiny Boxfish': 1,
+  'Eyeless Shrimp': 1, 'Yeti Crab': 1, 'Volcanic Rod': 1, Parrotfish: 1, Yellowstripe: 3,
+  Semicircle: 1, 'Golden Shiner': 217,
+};
+
+test('the unknown worklist sorts 356 historical Unknowns into today\'s four kinds', () => {
+  const book = T.emptyLog(1000);
+  book.unknown = { ...LIVE_UNKNOWN };
+  const w = T.unknownWorklist(book);
+
+  assert.equal(w.names, 38);
+  assert.equal(w.total, 356);
+  assert.deepEqual(w.counts, { resolved: 270, fragment: 79, nonFish: 7, open: 0 });
+  assert.equal(w.counts.resolved + w.counts.fragment + w.counts.nonFish + w.counts.open, w.total,
+    'every unknown catch lands in exactly one kind');
+
+  // The Golden-prefix fix resolves the biggest pile, and the display alias explains the last
+  // name: 'Pharaoh' is the first line of the card's 'Pharaoh Cuttlefish'.
+  assert.equal(w.resolved[0].name, 'Golden Shiner');
+  assert.equal(w.resolved[0].n, 217);
+  assert.deepEqual(w.open, [], 'no historical name is a gap once the display renames are known');
+
+  // A fragment names the catalogue species the card was split across.
+  const fragment = (name) => w.fragment.find((e) => e.name === name).candidates;
+  assert.deepEqual(fragment('Fried Egg'), ['Fried Egg Jellyfish']);
+  assert.deepEqual(fragment('Yellowstripe'), ['Yellowstripe Goatfish']);
+  assert.deepEqual(fragment('Rocks with'), ['Rocks with Mussels']);
+  assert.deepEqual(fragment("Bartlett's"), ["Bartlett's Anthias"]);
+  assert.deepEqual(fragment('Shiny Flying'), ['Flying Fish'], 'a variant keeps its base for the match');
+  assert.equal(fragment('Greenland').length, 2, 'either Greenland species explains the fragment');
+  assert.deepEqual(fragment('Pharaoh'), ['Pharaoh Cuttlefish'], 'a display rename explains its first line');
+
+  // Item and quality text is not a species.
+  assert.deepEqual(w.nonFish.map((e) => e.name).sort(), ['Decent', 'Exquisite', 'Town Key', 'Volcanic Rod']);
+});
+
+test('the unknown worklist never edits the ledger it reads', () => {
+  const book = T.emptyLog(1000);
+  book.unknown = { ...LIVE_UNKNOWN };
+  const before = JSON.stringify(book);
+  T.unknownWorklist(book);
+  assert.equal(JSON.stringify(book), before);
+});
+
+test('only an Unknown catch enters the worklist; a resolved species does not', () => {
+  const book = T.emptyLog(1000);
+  T.addToLog(book, catchOf('Golden Shiner', '', '0.2 kg'), 2000);
+  T.addToLog(book, catchOf('Pharaoh', '', '9.86 kg'), 3000);
+  const w = T.unknownWorklist(book);
+  assert.deepEqual(Object.keys(book.unknown), ['Pharaoh'], 'the known species never adds a counter');
+  assert.equal(w.total, 1);
+  assert.deepEqual(w.resolved, []);
+  assert.deepEqual(w.open, []);
+  assert.deepEqual(w.fragment.map((e) => e.name), ['Pharaoh']);
+  assert.deepEqual(w.fragment[0].candidates, ['Pharaoh Cuttlefish']);
+  assert.equal(w.fragment[0].last, 3000, 'the worklist carries the ledger\'s own last-seen stamp');
+});
+
+test('an empty ledger has an empty worklist', () => {
+  const w = T.unknownWorklist(T.emptyLog(1000));
+  assert.deepEqual(w, {
+    total: 0, names: 0, counts: { resolved: 0, fragment: 0, nonFish: 0, open: 0 },
+    resolved: [], fragment: [], nonFish: [], open: [],
+  });
 });
 
 test('normTier accepts the spellings the card and the bundle use', () => {

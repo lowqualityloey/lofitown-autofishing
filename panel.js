@@ -1098,7 +1098,7 @@
       captureToggle: captureToggle, captureLine: captureLine,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
-      tierCells: tierCells, lastCatch: lastCatch,
+      tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
@@ -1464,6 +1464,27 @@
   }
 
   /**
+   * The UNK cell's tooltip. The raw unknown map is cumulative, so a name the catalogue has since
+   * learned keeps its old count; the worklist is what makes today's gap legible - normally one
+   * open name behind every historical one.
+   */
+  function unknownTitle(w) {
+    if (!w || !w.names) return 'caught and logged, but the card printed no rarity and the species is not in the built-in catalogue';
+    var open = w.open || [];
+    var rest = w.names - open.length;
+    if (!open.length) return 'no open gaps - all ' + w.names + ' historical unknown names are resolved, fragments or non-fish';
+    if (open.length > 1) {
+      var catches = open.reduce(function (sum, e) { return sum + e.n; }, 0);
+      return open.length + ' open gaps · ' + catches + ' catches · ' + rest + ' of ' + w.names +
+        ' historical names are resolved, fragments or non-fish';
+    }
+    var top = open[0];
+    var when = top.last ? new Date(top.last).toLocaleDateString([], { day: 'numeric', month: 'short' }) : '';
+    return '1 open gap · ' + top.name + ' (' + top.n + ' catches' + (when ? ', last ' + when : '') + ') · ' +
+      rest + ' of ' + w.names + ' historical names are resolved, fragments or non-fish';
+  }
+
+  /**
    * The ledger is the panel's only real history: fill the rarity strip and the last-catch line.
    * Everything here is a read - a broken ledger must never make the panel throw.
    */
@@ -1482,6 +1503,7 @@
       // UNK only takes space when it has something to say
       if (cell.cell) cell.cell.style.display = n ? '' : 'none';
     });
+    if (ui.unknownCell) ui.unknownCell.title = unknownTitle(book && book.worklist);
     if (ui.logToggle) {
       ui.logToggle.textContent = logScope === 'today' ? 'today' : 'all';
       ui.logToggle.style.color = logScope === 'today' ? '#5ad18b' : '#9aa4ae';
