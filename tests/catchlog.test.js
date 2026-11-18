@@ -142,6 +142,40 @@ test('splitVariant separates the Shiny / Golden prefix from the base species', (
   assert.equal(info.rarity, 'Rare', 'a shiny still has its base species rarity');
 });
 
+test('a catalogue species whose name starts with Golden stays a species', () => {
+  // These are the two catalogue names the prefix rule used to swallow. Golden Shiner is a
+  // Common species, not a Golden variant of an absent "Shiner", and Golden Goldfish is its
+  // own Legendary species, not a Golden Goldfish variant of Goldfish.
+  const shiner = T.speciesInfo('Golden Shiner');
+  assert.equal(shiner.known, true);
+  assert.equal(shiner.base, 'Golden Shiner');
+  assert.equal(shiner.variant, '');
+  assert.equal(shiner.golden, false);
+  assert.equal(shiner.rarity, 'Common');
+
+  const goldfish = T.speciesInfo('Golden Goldfish');
+  assert.equal(goldfish.known, true);
+  assert.equal(goldfish.base, 'Golden Goldfish');
+  assert.equal(goldfish.variant, '');
+  assert.equal(goldfish.rarity, 'Legendary');
+
+  const shinerCatch = catchOf('Golden Shiner', '', '');
+  assert.equal(shinerCatch.rarity, 'Common');
+  assert.equal(shinerCatch.derived, true);
+  const goldfishCatch = catchOf('Golden Goldfish', '', '');
+  assert.equal(goldfishCatch.rarity, 'Legendary');
+
+  // A real Golden variant and a real Shiny variant must still take the old path.
+  const tuna = T.speciesInfo('Golden Tuna');
+  assert.equal(tuna.base, 'Tuna');
+  assert.equal(tuna.variant, 'Golden');
+  assert.equal(tuna.rarity, 'Uncommon');
+  const boxfish = T.speciesInfo('Shiny Boxfish');
+  assert.equal(boxfish.base, 'Boxfish');
+  assert.equal(boxfish.variant, 'Shiny');
+  assert.equal(boxfish.rarity, 'Common');
+});
+
 test('normTier accepts the spellings the card and the bundle use', () => {
   assert.equal(T.normTier('common'), 'Common');
   assert.equal(T.normTier('LEGENDARY'), 'Legendary');
