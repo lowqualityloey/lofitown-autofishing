@@ -182,19 +182,25 @@ function coverageOf(good, attempts, sessions, opts) {
   const firstPostAt = posts.length ? posts[0] : null;
   const lastPostAt = posts.length ? posts[posts.length - 1] : null;
   const newest = timed.length ? timed[timed.length - 1] : null;
+  const oldest = timed.length ? timed[0] : null;
   const sessionEnd = sessions.length ? Math.max.apply(null, sessions.map((s) => s.time)) : null;
+  const starts = sessions.map((s) => s.start).filter(Number.isFinite);
+  const sessionStart = starts.length ? Math.min.apply(null, starts) : null;
+  // A short row that ends after the newest attempt must not vouch for the hours before it began.
+  const beforeMs = sessionStart != null && oldest != null ? Math.max(0, sessionStart - oldest) : 0;
   const missingMs = sessionEnd != null && newest != null ? sessionEnd - newest : 0;
   let verdict = 'unbounded';
   let stopped = null;
   if (sessionEnd != null && newest != null) {
-    if (missingMs > GAP_MS) {
+    if (beforeMs > GAP_MS || missingMs > GAP_MS) {
       verdict = 'truncated';
       // "capture" means the posts stopped; "run" means they kept landing with no new attempt.
-      stopped = lastPostAt != null && lastPostAt < sessionEnd - GAP_MS ? 'capture' : 'run';
+      if (missingMs > GAP_MS) stopped = lastPostAt != null && lastPostAt < sessionEnd - GAP_MS ? 'capture' : 'run';
     } else verdict = 'complete';
   }
   return {
-    verdict, missingMs: Math.max(0, missingMs), stopped, firstPostAt, lastPostAt, newest, sessionEnd,
+    verdict, beforeMs, missingMs: Math.max(0, missingMs), stopped,
+    firstPostAt, lastPostAt, oldest, newest, sessionStart, sessionEnd,
     snapshots: good.length, ignored: o.ignored || 0,
   };
 }
@@ -212,10 +218,17 @@ function readSessions(from, to, profiles) {
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(1)
     .map((line) => line.split(','))
     .filter((r) => r.length >= 5)
-    .map((r) => ({
-      time: Date.parse(r[0]), started_at: r[1], minutes: Number(r[2]) || 0,
-      catches: Number(r[3]) || 0, reason: r[4], profile: r[5] || 'default',
-    }))
+    .map((r) => {
+      const time = Date.parse(r[0]);
+      const minutes = Number(r[2]) || 0;
+      const started = Date.parse(r[1]);
+      return {
+        time, started_at: r[1],
+        // The row's own start; an old five-column row has no started_at, so use its duration.
+        start: Number.isFinite(started) ? started : (Number.isFinite(time) ? time - minutes * 60000 : null),
+        minutes, catches: Number(r[3]) || 0, reason: r[4], profile: r[5] || 'default',
+      };
+    })
     .filter((r) => !want || want.has(r.profile))
     // The upper bound is given by the caller: a session that ended after the last snapshot is the
     // one row that proves the capture stopped, so it must not be filtered out.
@@ -297,11 +310,17 @@ function analyze(snapshots, opts) {
   if (cov.verdict === 'complete') {
     lines.push('newest attempt ' + dayClock(cov.newest) + ' · sessions logged until ' + dayClock(cov.sessionEnd) + ' · complete');
   } else if (cov.verdict === 'truncated') {
-    lines.push('newest attempt ' + dayClock(cov.newest) + ' · sessions logged until ' + dayClock(cov.sessionEnd) + ' · ' +
-      dur(cov.missingMs) + ' unaccounted — ' +
-      (cov.stopped === 'capture'
-        ? 'the capture stopped at ' + (cov.lastPostAt ? clock(cov.lastPostAt) : '?')
-        : 'posts kept landing, but no attempt was recorded after ' + clock(cov.newest)));
+    if (cov.beforeMs > GAP_MS) {
+      lines.push('oldest attempt ' + dayClock(cov.oldest) + ' · sessions start at ' + dayClock(cov.sessionStart) +
+        ' · ' + dur(cov.beforeMs) + ' unaccounted before the first session row');
+    }
+    if (cov.missingMs > GAP_MS) {
+      lines.push('newest attempt ' + dayClock(cov.newest) + ' · sessions logged until ' + dayClock(cov.sessionEnd) + ' · ' +
+        dur(cov.missingMs) + ' unaccounted — ' +
+        (cov.stopped === 'capture'
+          ? 'the capture stopped at ' + (cov.lastPostAt ? clock(cov.lastPostAt) : '?')
+          : 'posts kept landing, but no attempt was recorded after ' + clock(cov.newest)));
+    }
   } else {
     lines.push('newest attempt ' + (cov.newest ? dayClock(cov.newest) : '?') + ' · no session row to bound the night');
   }

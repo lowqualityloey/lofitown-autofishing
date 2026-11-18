@@ -165,6 +165,22 @@ test('data that reaches the last session is complete, not a warning', () => {
   });
 });
 
+test('a short session that ends after the newest attempt does not bound an earlier night', () => {
+  const night = snapshot('export-2026-11-18T08-53-00-000Z.json', '2026-11-18T08:53:00Z', [
+    row(1, 0, 'caught'), row(2, 330, 'caught'), row(3, 369, 'caught'),
+  ], 'nepchur');
+  withSessions([
+    [new Date(at(370)).toISOString(), new Date(at(330)).toISOString(), 32, 48, 'user', 'nepchur'].join(','),
+  ], () => {
+    const out = analyze([night], {});
+    assert.equal(out.coverage.verdict, 'truncated', 'the row ends after the last attempt but starts 5.5 h late');
+    assert.equal(out.coverage.beforeMs, 330 * 60000);
+    assert.equal(out.coverage.sessionStart, at(330));
+    assert.match(out.text, /5 h 30 m unaccounted before the first session row/);
+    assert.doesNotMatch(out.text, /· complete/);
+  }, 'time,started_at,minutes,catches,reason,profile');
+});
+
 test('with no session row the report does not invent a truncation', () => {
   const prev = process.env.FISHSERVE_SESSIONS;
   process.env.FISHSERVE_SESSIONS = path.join(os.tmpdir(), 'overnight-none-' + process.pid + '.csv');
