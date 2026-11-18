@@ -1,9 +1,10 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.44) - a two-tier panel, with the run surface (phase, clock, counters, rarity
-strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, and the
-diagnostics now written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical",
-"292 of 300 presses landed"), on top of
+Status: **WORKING (3.9.47) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, the diagnostics
+written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical", "292 of 300 presses
+landed"), and an overnight capture the panel loads again after every page load, retries on its own
+when the sampler dies or a post fails, and reports on its face, on top of
 post-render detection over the merged WebGL layer, the stable first-press gate, containment's
 `inside-now` press, an allocation-free WebGL readback, a monotonic session catch clock and press
 verdicts split by evidence. The 3.9.28 two-tier split was rendered against a stub core and 3.9.29
@@ -323,6 +324,72 @@ dial pressed until the toggle was clicked. Mount now adopts only the setting; `f
 the hold when `inFocusSession()` is true, which is what the toggle promises, and the prompt mask
 follows the hold rather than the page load.
 
+3.9.45 moves the overnight sampler into the panel, because a console paste dies with the page. The
+2026-11-17 night showed the cost: `data/runs` stops at `07:18:47Z` and resumes at `15:01:45Z`, and the
+page's 250-row store only reached back to `12:12:41Z`, so 7 h 43 m of a 634-attempt run - 633 of them
+caught - was never written down. "Overnight capture" (Session & guards) now keeps the setting, mount
+loads `/overnight.js` from fishserve again on every page load, and a line under the meters reads
+`capture armed · N posts · last HH:MM` - amber for a failed post, or for a last post over eleven
+minutes old, which is two missed five-minute posts. A panel served by fishserve already knows its
+origin; the inlined userscript has no server of its own, so it asks for the fishserve address once and
+stores it with the pref, and a reload or a browser restart arms again without asking. The sampler
+installs `__overnight` before its first POST, so the panel can read the status it shows.
+
+3.9.46 makes that capture heal itself, because a pref the panel only read at mount still died in the
+two ways that matter: a sampler that stopped answering, and a fishserve that was not up when the page
+loaded. `tick()` now runs one check a second, outside the render path. A missing or stopped sampler loads `/overnight.js`
+again; a live sampler whose last POST failed, or whose last post is over eleven minutes old, is nudged
+with `__overnight.now()` instead of being stacked with a second timer; both wait on a 30 s / 1 m / 2 m
+/ 5 m backoff, so a fishserve that is down is not hammered; a dead sampler says `· re-arming` and a
+pending retry is spelled out on the line's title. The one exception is a page that has never been told an address - only the toggle
+can supply one, so nothing prompts at 3 a.m. That click now asks on the first press whatever the
+switch says: with the setting left on without an address, the first click used to only turn it off and
+the question arrived on the second. Cancelling the question leaves the capture off, so a setting that
+cannot run always has a way to be switched off.
+
+3.9.47 fixes the two ways the address itself could go wrong. The sampler now posts to the origin that
+served `/overnight.js` (`window.__overnightBase`, host and port) instead of rebuilding
+`http://127.0.0.1:<port>` from the port alone, so a fishserve on another host is written where it was
+loaded from; a console paste still falls back to 127.0.0.1:8731. A stored address that moves is no
+longer a dead end: an amber status line is clickable (Enter/Space too) and asks for a corrected origin,
+stopping the old sampler before loading the new one, and a failed load says `no answer - click to
+change the address` instead of only asking whether fishserve is running. A failed POST also names the
+origin it tried, and no longer throws inside its own error handler (the message still referenced a
+removed `PORT`), so the post-failure amber line is reachable. The whole "Overnight capture"
+row is the control, not just the 14 px on/off button, because the status line tells the owner to click
+the row's name.
+
+## 2026-11-18 live verification - 3.9.47 in the real game
+
+The built 3.9.47 was loaded into the real `app.lofi.town` tab in BrowserOS neo. Tampermonkey still
+held 3.9.46, so that panel was unmounted and the page copy injected for the check; **a reload would
+have restored 3.9.46**, which is why the release and install are the next step. The panel kept its
+real **closed** shadow root. Coordinates came from CDP's pierced DOM tree and the clicks went through
+BrowserOS neo's real input bridge; a window listener logged every one as `isTrusted: true`.
+
+- A real click on **Session & guards** opened it (`aria-expanded="true"`), then a real click on the
+  **Overnight capture label** (not the 14 px switch) opened the address prompt. Accepting
+  `http://127.0.0.1:8731` set `overnight:true` and `overnightBase:"http://127.0.0.1:8731"`, and the
+  line read `capture armed · 1 post · last 19:09`. The first snapshot was 250 attempts
+  (`export-2026-11-18T06-09-52-273Z.json`).
+- Fishserve was moved from 8731 to 8732 and `__overnight.now()` was forced. The POST failed with
+  `Failed to fetch - is fishserve running on http://127.0.0.1:8731?`, and the line turned amber:
+  `capture armed · 1 posted · last post failed: ...`, class `capture warn`, `role="button"`,
+  `tabindex="0"`, pointer cursor. A real click on the line opened the prompt with the stale address
+  as its default; accepting `http://127.0.0.1:8732` corrected the pref and re-armed. The line read
+  `capture armed · 1 post · last 19:11`; `export-2026-11-18T06-11-01-191Z.json` landed on 8732 and
+  8731's log stayed at the 06:09 export. The cycle was repeated once, ending at 06:12:51 on 8732.
+- The live run found a defect in the new sampler error path: the message still referenced a removed
+  `PORT`, so the handler threw inside its own `catch`, `lastError` stayed null, and the amber
+  post-failure state was unreachable. It now names the resolved `ORIGIN`; a VM test runs a rejecting
+  `fetch` and asserts `lastError` carries the origin and the error. That took the suite to **340
+  tests** (0 fail) and rebuilt the 360,459-byte dist.
+- Full evidence, exact click coordinates, observed-versus-not-observed and the limitations are in
+  [docs/reviews/2026-11-18-capture-address-live.md](docs/reviews/2026-11-18-capture-address-live.md);
+  the contract is [docs/specs/2026-11-18-overnight-capture.md](docs/specs/2026-11-18-overnight-capture.md).
+  The 244 px line ellipsizes a long failure; the origin and full text remain in the title and the
+  accessibility tree.
+
 **Leaving it fishing unattended.** The limits are sized for it (12 h session, 24 h cap), but the tab is
 the machine: the game draws on requestAnimationFrame and the fishing timer is a page timer, so a
 backgrounded or minimised tab freezes both, and the panel stops the session when it sees the page
@@ -332,25 +399,41 @@ overnight run means the window stays open and visible, the display stays awake, 
 to sleep. Two known ways a long run can quietly stop: the after-catch cast stall (no cast prompt is
 pressed for a minute or more while the loop still ticks) and a missed reels left waiting for a bite.
 
-**Recording a night.** The page keeps only the last 250 attempts (`autofish:run:v1`), so an overnight
+### Recording a night
+
+The page keeps only the last 250 attempts (`autofish:run:v1`), so an overnight
 run has to be sampled while it happens or the part that matters rolls off. `scripts/overnight-export.js`
-is loaded into the game page once - pasted into the console, or appended as a `<script src>` tag (the
-server hands out the file at `http://127.0.0.1:8731/overnight.js`, so the running copy is the one on
-disk). It posts `__fish.exportRun()` to fishserve immediately on load - that first file is the proof
-the capture works before the page is left - and then every five minutes
-(`POST /export` -> `data/runs/export-<time>.json`). At the measured ~1.3 attempts/minute five minutes
-is about seven new rows, so consecutive snapshots always overlap and no attempt is lost between them.
-`__overnight.now()` forces a snapshot and `__overnight.stop()` ends the sampler; neither touches the
-fishing run. Afterwards `node scripts/overnight-report.js` merges the snapshots by attempt id and
-prints the night: catch rate with its Wilson interval, the width bands, the losses, every gap over ten
-minutes (the shape of a stall), the cut reasons each snapshot recorded, the doctor verdicts, the last
-perf line, and the sessions fishserve logged for the same window.
+is served at `http://127.0.0.1:8731/overnight.js`, and the panel's "Overnight capture" toggle loads it
+on mount and after every reload, so the running copy is the one on disk without a console paste; the
+line under the meters says whether it is armed and when it last posted. It POSTs `__fish.exportRun()`
+to fishserve immediately on load - that first file proves the path before the page is left - and then
+every five minutes (`POST /export` -> `data/runs/export-<time>.json`). At the measured ~1.3
+attempts/minute five minutes is about seven new rows, so consecutive snapshots always overlap and no
+attempt is lost between them. `__overnight.now()` forces a snapshot and `__overnight.stop()` ends the
+sampler; neither touches the fishing run. The file can still be pasted into the console instead, and
+`window.__overnightBase` tells the sampler which origin served it, so it posts back to the same host
+and port (a console paste falls back to 127.0.0.1:8731). Afterwards
+`node scripts/overnight-report.js` reads one night: the twelve hours ending with the newest snapshot,
+not "now", so a report run the next afternoon still reads the night rather than every file ever
+captured (`--all` merges everything, `--hours N` and `--since ISO` move the window, and explicit file
+arguments read exactly those). Attempts the page store carried from an earlier run are left out of
+the totals, and the summary says how many. It merges the snapshots by attempt id and prints the night: catch rate
+with its Wilson interval, the width bands, the losses, every gap over ten minutes (the shape of a
+stall), the cut reasons each snapshot recorded, the doctor verdicts, the last perf line, and the
+sessions fishserve logged for the same window. A `## Coverage` section puts the newest attempt next
+to the last session row: `complete` when the data reaches it, and `X h Y m unaccounted` when the
+capture stopped first (or the posts kept landing with no new attempt), naming the moment. The command
+exits 1 on a truncated night and 0 otherwise, so the morning check can fail loudly; with no session
+row it says so and does not fail. Both sides use one address: session ends are posted to `BASE` when
+fishserve served the panel, and otherwise to the capture address stored in the prefs, so an inlined
+install writes the same `sessions.csv` the coverage verdict reads.
 
 The panel never draws over the play area: it asks the core for the live bubble/dial/card rectangles
 (`__fish.zones()`) and slides to a free corner every 250 ms, collapsing to a pill if there is no
 room. It also keeps the screen awake while it is fishing (the game freezes when the tab is hidden),
 writes a `reload` row and can resume a clock-window session after an accidental page reload, and
-uploads one row per session to `sessions.csv` via `POST /session`.
+uploads one row per session to `sessions.csv` via `POST /session` - at the same fishserve address the
+overnight capture uses, so the server-free install feeds the report's coverage check as well.
 
 The console API above keeps working and is unchanged; the panel is a front end for it. Guards the
 core enforces on its own: hidden-tab pause/stop (G1), no catch for 10 min → one 60 s retry, three

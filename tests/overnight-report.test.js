@@ -4,8 +4,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
-const { mergeAttempts, toAttempts, gaps, perHour, report, wilson, runSummary } = require('../scripts/overnight-report.js');
+const { analyze, selectNight, mergeAttempts, toAttempts, gaps, perHour, report, wilson, runSummary } = require('../scripts/overnight-report.js');
+const SCRIPT = path.join(__dirname, '..', 'scripts', 'overnight-report.js');
 
 const T = Date.UTC(2026, 10, 17, 19, 0, 0);
 const at = (minutes) => T + minutes * 60000;
@@ -71,6 +73,176 @@ test('perHour counts only timed attempts, and the totals use the page\'s own sum
   assert.equal(summary.attempts, 9);
   assert.equal(summary.caught + summary.lost, 9);
   assert.deepEqual(summary.catchCi, wilson(summary.caught, 9), 'the report quotes the page\'s own interval');
+});
+
+function snapshot(file, exportedAt, attempts) {
+  return { file, data: { version: '3.9.46', exportedAt, attempts } };
+}
+
+/** Point the report at a throwaway sessions.csv (rows are CSV lines except the header). */
+function withSessions(rows, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-'));
+  const csv = path.join(dir, 'sessions.csv');
+  fs.writeFileSync(csv, ['time,started_at,minutes,catches,reason'].concat(rows).join('\n') + '\n');
+  const prev = process.env.FISHSERVE_SESSIONS;
+  process.env.FISHSERVE_SESSIONS = csv;
+  try { return fn(csv); } finally {
+    if (prev === undefined) delete process.env.FISHSERVE_SESSIONS;
+    else process.env.FISHSERVE_SESSIONS = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const ONE_NIGHT = snapshot('export-2026-11-17T14-01-00-000Z.json', '2026-11-17T14:01:00Z', [
+  row(1, 0, 'caught'), row(2, 300, 'caught'),
+]);
+
+const sessionLine = (minutes, duration, catches, reason) =>
+  [new Date(at(minutes)).toISOString(), '', duration, catches, reason].join(',');
+
+test('the report reads one night by default, and --all still merges every file', () => {
+  const older = snapshot('export-2026-11-17T20-00-00-000Z.json', '2026-11-17T20:00:00Z', [row(1, 0, 'caught')]);
+  const newer = snapshot('export-2026-11-18T20-00-00-000Z.json', '2026-11-18T20:00:00Z', [row(2, 1440, 'caught')]);
+  const sel = selectNight([older, newer], {});
+  assert.equal(sel.to, Date.parse(newer.data.exportedAt), 'the window ends at the newest snapshot, not at now');
+  assert.equal(sel.from, sel.to - 12 * 3600000, 'twelve hours by default');
+  assert.equal(sel.ignored, 1, 'the older night is out of the window');
+
+  const night = analyze([older, newer], { night: true });
+  assert.equal(night.coverage.snapshots, 1, 'only the newest night is read');
+  assert.match(night.text, /1 from other nights ignored/);
+  assert.equal(analyze([older, newer], { night: false }).coverage.snapshots, 2, '--all keeps every file');
+});
+
+test('attempts the store carried from an earlier run stay out of the night', () => {
+  const snap = snapshot('export-2026-11-18T04-00-00-000Z.json', '2026-11-18T04:00:00Z', [
+    row(1, -600, 'caught'), row(2, 0, 'caught'),
+  ]);
+  const out = analyze([snap], { night: true });
+  assert.equal(out.coverage.snapshots, 1);
+  assert.match(out.text, /1 attempts \(0 repeated rows merged · 1 outside the window\)/);
+});
+
+test('a session that outlives the data makes the night truncated', () => {
+  withSessions([sessionLine(600, 600, 9, 'duration')], () => {
+    const out = analyze([ONE_NIGHT], {});
+    assert.equal(out.coverage.verdict, 'truncated');
+    assert.equal(out.coverage.missingMs, 300 * 60000, 'the five hours between the last attempt and the session end');
+    assert.equal(out.coverage.stopped, 'capture', 'the posts stopped rather than the run stalling');
+    assert.match(out.text, /5 h 0 m unaccounted/);
+    assert.match(out.text, /the capture stopped at/);
+    assert.match(out.text, /\| 600 \| 9 \| duration \|/, 'the session that outlived the data is listed');
+  });
+});
+
+test('data that reaches the last session is complete, not a warning', () => {
+  const late = snapshot('export-2026-11-17T14-10-00-000Z.json', '2026-11-17T14:10:00Z', [row(1, 0, 'caught'), row(2, 590, 'caught')]);
+  withSessions([sessionLine(580, 600, 9, 'duration')], () => {
+    const out = analyze([late], {});
+    assert.equal(out.coverage.verdict, 'complete');
+    assert.match(out.text, /· complete/);
+    assert.doesNotMatch(out.text, /unaccounted/);
+  });
+});
+
+test('with no session row the report does not invent a truncation', () => {
+  const prev = process.env.FISHSERVE_SESSIONS;
+  process.env.FISHSERVE_SESSIONS = path.join(os.tmpdir(), 'overnight-none-' + process.pid + '.csv');
+  try {
+    const out = analyze([ONE_NIGHT], {});
+    assert.equal(out.coverage.verdict, 'unbounded');
+    assert.match(out.text, /no session row to bound the night/);
+    assert.doesNotMatch(out.text, /unaccounted/);
+  } finally {
+    if (prev === undefined) delete process.env.FISHSERVE_SESSIONS;
+    else process.env.FISHSERVE_SESSIONS = prev;
+  }
+});
+
+test('a session fishserve logs makes the report flag the truncated night', async () => {
+  // The inlined panel posts this row shape to the address it uses for overnight capture; the report
+  // has to see that row (not just a hand-written CSV) as the proof the capture stopped early.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-session-'));
+  const keys = ['FISHSERVE_CATCHES', 'FISHSERVE_SESSIONS', 'FISHSERVE_SHOTS', 'FISHSERVE_RUNS'];
+  const prev = {};
+  for (const k of keys) prev[k] = process.env[k];
+  process.env.FISHSERVE_CATCHES = path.join(dir, 'catches.csv');
+  process.env.FISHSERVE_SESSIONS = path.join(dir, 'sessions.csv');
+  process.env.FISHSERVE_SHOTS = path.join(dir, 'shots');
+  process.env.FISHSERVE_RUNS = path.join(dir, 'runs');
+  const { createServer } = require('../fishserve.js');
+  const server = createServer();
+  await new Promise((res) => server.listen(0, '127.0.0.1', res));
+  try {
+    const now = Date.now();
+    const posted = await fetch('http://127.0.0.1:' + server.address().port + '/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://app.lofi.town' },
+      body: JSON.stringify({
+        started_at: new Date(now - 10 * 3600000).toISOString(), minutes: 600, catches: 12, reason: 'duration',
+      }),
+    });
+    assert.equal(posted.status, 200, 'fishserve accepted the row the panel posts');
+
+    const attempt = {
+      id: 'x-1', n: 1, v: 'caught', t: now - 5 * 3600000, ms: 20000, p: 5, pa: 5, pr: 0, d: 2,
+      w: 80, wb: 'mid', b: 'slow',
+    };
+    const out = analyze([snapshot('export-now.json', new Date(now - 20 * 60000).toISOString(), [attempt])], {});
+    assert.equal(out.coverage.verdict, 'truncated');
+    assert.equal(out.coverage.stopped, 'capture', 'the logged row outlives the last snapshot');
+    assert.match(out.text, /unaccounted/);
+    assert.match(out.text, /duration/, 'the row the panel posted is the one compared');
+  } finally {
+    await new Promise((res) => server.close(res));
+    for (const k of keys) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the command reads the newest night by default and every file with --all', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-cli-night-'));
+  const write = (name, iso, n) => fs.writeFileSync(path.join(dir, name), JSON.stringify({
+    version: '3.9.46', exportedAt: iso, attempts: [row(n, 0, 'caught')],
+  }));
+  write('export-2026-11-17T20-00-00-000Z.json', '2026-11-17T20:00:00Z', 1);
+  write('export-2026-11-18T20-00-00-000Z.json', '2026-11-18T20:00:00Z', 2);
+  const env = Object.assign({}, process.env, {
+    FISHSERVE_RUNS: dir, FISHSERVE_SESSIONS: path.join(dir, 'none.csv'),
+  });
+  try {
+    const one = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8', env });
+    assert.equal(one.status, 0, one.stderr);
+    assert.match(one.stdout, /1 snapshots/, 'the older night is not merged');
+    assert.match(one.stdout, /1 from other nights ignored/);
+    const all = spawnSync(process.execPath, [SCRIPT, '--all'], { encoding: 'utf8', env });
+    assert.equal(all.status, 0, all.stderr);
+    assert.match(all.stdout, /2 snapshots/, '--all keeps the old behaviour');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the command fails a morning check when the night was truncated', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-cli-'));
+  const file = path.join(dir, 'export-2026-11-17T14-01-00-000Z.json');
+  fs.writeFileSync(file, JSON.stringify({
+    version: '3.9.46', exportedAt: '2026-11-17T14:01:00Z', attempts: [row(1, 0, 'caught'), row(2, 300, 'caught')],
+  }));
+  const csv = path.join(dir, 'sessions.csv');
+  fs.writeFileSync(csv, ['time,started_at,minutes,catches,reason', sessionLine(600, 600, 9, 'duration')].join('\n') + '\n');
+  try {
+    const run = spawnSync(process.execPath, [SCRIPT, file], {
+      encoding: 'utf8', env: Object.assign({}, process.env, { FISHSERVE_SESSIONS: csv }),
+    });
+    assert.equal(run.status, 1, run.stderr || run.stdout);
+    assert.match(run.stdout, /unaccounted/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the sessions fishserve logged are cross-checked against the night', () => {

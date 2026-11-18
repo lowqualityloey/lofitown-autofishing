@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.44
+// @version      3.9.47
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.44" };
+  const F = { version: "3.9.47" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -5321,14 +5321,19 @@ const SPECIES = [
 
   /* ------------------------------------------------------------- deps ----- */
 
-  function loadScript(name, url) {
+  function loadScriptFrom(src) {
     return new Promise(function (res, rej) {
       var s = document.createElement('script');
-      s.src = BASE + url + '?t=' + Date.now();
+      s.src = src;
       s.onload = function () { res(); };
-      s.onerror = function () { rej(new Error('cannot load ' + url)); };
+      s.onerror = function () { rej(new Error('cannot load ' + src)); };
       document.head.appendChild(s);
     });
+  }
+
+  /** One of our own files, from the server that served this panel. */
+  function loadScript(name, url) {
+    return loadScriptFrom(BASE + url + '?t=' + Date.now());
   }
 
   async function deps() {
@@ -5361,6 +5366,8 @@ const SPECIES = [
     prefs.postCatches = !!p.postCatches;
     prefs.hideUpsell = !!p.hideUpsell;
     prefs.focusMode = !!p.focusMode;
+    prefs.overnight = !!p.overnight;
+    if (typeof p.overnightBase === 'string') prefs.overnightBase = p.overnightBase;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
     prefs.chain = !!p.chain;
     if (p.profile) prefs.profile = String(p.profile);
@@ -5379,6 +5386,8 @@ const SPECIES = [
       postCatches: !!window.__panel.postCatches,
       hideUpsell: !!window.__panel.hideUpsell,
       focusMode: !!focusPref,
+      overnight: !!overnightPref,
+      overnightBase: captureBase || '',
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
     });
   }
@@ -5593,6 +5602,239 @@ const SPECIES = [
     try { if (window.__fish.setPromptMask) window.__fish.setPromptMask(null); } catch (e) {}
   }
 
+  /* ------------------------------------------------- overnight capture ---- */
+  /*
+   * The night that died: the sampler was pasted into the console, the page reloaded, and the paste
+   * went with it - data/runs jumps from 07:18Z to 15:01Z (2026-11-17), and the page's 250-row store
+   * only reached back to 12:12Z, so 7 h 43 m of a 634-attempt run was never written down.
+   *
+   * So the setting lives here. mount() loads the sampler again whenever the page comes back, and a
+   * line under the meters says whether it is armed, how many posts it has made and when it last
+   * wrote one: an armed capture whose POSTs fail looks exactly like a quiet night otherwise.
+   *
+   * The sampler reads the page's __fish.exportRun() and posts back to the origin that served it, so
+   * it has to come from that same fishserve. The bookmarklet path already knows the origin (BASE).
+   * The inlined userscript has no server of its own, so it is told once and the address is kept
+   * with the pref - a reload or a browser restart arms again without asking. The amber status line
+   * asks for the address again, for a fishserve that moved.
+   */
+  var overnightPref = false;
+  var captureBase = '';
+  var captureState = 'off';     // off | arming | armed | error
+  var captureError = '';
+  var captureEditReady = false; // the amber line accepts a corrected address
+  var captureArming = false;    // one load in flight; a tick can ask again while it runs
+  var captureRetryAt = 0;       // when the next self-heal attempt is due
+  var captureRetries = 0;       // attempts since it was last healthy
+  var CAPTURE_BACKOFF = [30000, 60000, 120000, 300000];
+  // The sampler posts every five minutes, so two misses mean it is not writing. One constant
+  // because the status line and the heal must agree on what "stale" means.
+  var CAPTURE_STALE_MS = 11 * 60 * 1000;
+
+  function captureStatus() {
+    try { return window.__overnight ? window.__overnight.status() : null; } catch (e) { return null; }
+  }
+
+  /** The fishserve origin the sampler comes from, or '' when nothing has ever told this page. */
+  function captureServer() {
+    var base = String(captureBase || BASE || '').replace(/\/+$/, '');
+    return /^https?:\/\/[^/]+:\d+$/.test(base) ? base : '';
+  }
+
+  function captureClearBackoff() {
+    captureRetryAt = 0;
+    captureRetries = 0;
+  }
+
+  function captureStale(st) {
+    return !!(st && st.last && Date.now() - Date.parse(st.last.at) > CAPTURE_STALE_MS);
+  }
+
+  async function armOvernight() {
+    if (captureArming) return false;     // the heal timer can come due while a load is in flight
+    var server = captureServer();
+    if (!server) {
+      captureState = 'error';
+      captureError = 'no address — click Overnight capture';
+      renderCapture();
+      return false;
+    }
+    var live = captureStatus();
+    // A remount in the same page (the SPA can drop and rebuild the panel) must not stack a second
+    // timer on the same run, and neither must a heal.
+    if (live && !live.stopped) {
+      captureState = 'armed';
+      captureError = '';
+      captureClearBackoff();
+      renderCapture();
+      return true;
+    }
+    captureArming = true;
+    captureState = 'arming';
+    captureError = '';
+    renderCapture();
+    try {
+      // The sampler posts back to the origin that served it, not to a guessed port, so a fishserve
+      // on another host or port is written where it was loaded from.
+      window.__overnightBase = server;
+      try {
+        await loadScriptFrom(server + '/overnight.js?t=' + Date.now());
+      } catch (e) {
+        captureState = 'error';
+        captureError = 'no answer — click to change the address';
+        return false;
+      }
+      if (!captureStatus()) {
+        // The sampler throws before it installs itself when __fish.exportRun is missing on the page.
+        captureState = 'error';
+        captureError = 'the sampler did not start — is the bot loaded on this page?';
+        return false;
+      }
+      captureState = 'armed';
+      captureClearBackoff();
+      return true;
+    } finally {
+      captureArming = false;
+      renderCapture();   // repaint with the flag down; the tick retries if this failed
+    }
+  }
+
+  function disarmOvernight() {
+    try { if (window.__overnight) window.__overnight.stop(); } catch (e) {}
+    window.__overnight = null;
+    captureState = 'off';
+    captureError = '';
+    captureClearBackoff();
+    renderCapture();
+  }
+
+  /**
+   * Ask once for the fishserve origin. The answer is kept with the pref, so a reload does not ask
+   * again. A cancelled answer returns '' and changes nothing; a malformed one also says why.
+   */
+  function askCaptureAddress() {
+    var typed = window.prompt('fishserve address for overnight capture (http://host:port)', captureBase || '');
+    var base = String(typed == null ? '' : typed).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^/]+:\d+$/.test(base)) {
+      banner = base ? 'capture needs an address like http://127.0.0.1:PORT' : '';
+      return '';
+    }
+    captureBase = base;
+    banner = '';
+    return base;
+  }
+
+  /**
+   * Correct a stale address from the amber line. The old sampler is stopped first, or it would keep
+   * posting to the origin that no longer answers; the pref stays on and the capture arms again from
+   * the corrected origin. Cancelling changes nothing, so the toggle can still turn it off.
+   */
+  function editCaptureAddress() {
+    if (BASE) return;                      // a served panel has only the origin that served it
+    if (!askCaptureAddress()) return;
+    try { if (window.__overnight) window.__overnight.stop(); } catch (e) {}
+    window.__overnight = null;
+    captureState = 'off';
+    captureError = '';
+    captureClearBackoff();
+    savePrefs();
+    armOvernight();
+    render();
+  }
+
+  /**
+   * The pref says on, so the sampler should be posting. When it is not - the script never came back
+   * after a reload, fishserve was down when it did, or the last POST failed - fix it here instead of
+   * waiting for someone to read a line under the meters at 3 a.m. A missing address is the one
+   * exception: only the toggle can supply one, and a prompt nobody is looking at helps no one.
+   *
+   * A dead sampler is loaded again; a live one that cannot write is nudged with __overnight.now()
+   * rather than stacked. Both wait on a backoff stamped before each attempt, so fishserve is asked
+   * at most once per step (30 s at first, then 5 m) even while it is down. Called from tick(), not
+   * render(): painting the panel must not start network work.
+   */
+  function healCapture() {
+    if (!overnightPref || captureArming) return;
+    if (!captureServer()) return;   // only the toggle can supply an address
+    var st = captureStatus();
+    var why = '';
+    if (captureState === 'error') why = 'arm';
+    else if (!st || st.stopped) why = 'dead';
+    else if (st.lastError) why = 'post';
+    else if (captureStale(st)) why = 'stale';
+    if (!why) { captureClearBackoff(); return; }
+    var now = Date.now();
+    if (!captureRetryAt) { captureRetryAt = now + CAPTURE_BACKOFF[0]; return; }
+    if (now < captureRetryAt) return;
+    captureRetryAt = now + CAPTURE_BACKOFF[Math.min(captureRetries++, CAPTURE_BACKOFF.length - 1)];
+    if (why === 'post' || why === 'stale') {
+      // Its timer is still running, so forcing one snapshot retries the POST without loading a
+      // second sampler over the first.
+      try { window.__overnight.now(); } catch (e) {}
+      return;
+    }
+    armOvernight();
+  }
+
+  /** Eleven minutes is two missed five-minute posts: armed-but-dead, said out loud. */
+  function renderCapture() {
+    if (ui.captureToggle) {
+      ui.captureToggle.textContent = overnightPref ? 'on' : 'off';
+      ui.captureToggle.style.color = overnightPref ? '#5ad18b' : '#9aa4ae';
+    }
+    var st = captureStatus();
+    var line = '';
+    var tone = '';
+    var armed = false;
+    if (!overnightPref) {
+      line = '';
+    } else if (captureState === 'arming') {
+      line = 'capture: loading the sampler from ' + (captureServer() || '?') + '…';
+    } else if (captureState === 'error') {
+      line = 'capture: ' + captureError;
+      tone = 'warn';
+    } else if (!st || st.stopped) {
+      line = 'capture: the sampler is not running · re-arming';
+      tone = 'warn';
+    } else if (st.lastError) {
+      line = 'capture armed · ' + st.posts + ' posted · last post failed: ' + st.lastError;
+      tone = 'warn';
+      armed = true;
+    } else if (!st.last) {
+      line = 'capture armed · first post in flight';
+      tone = 'on';
+      armed = true;
+    } else {
+      line = 'capture armed · ' + st.posts + (st.posts === 1 ? ' post' : ' posts') + ' · last ' +
+        new Date(st.last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (captureStale(st)) { line += ' · stale (fishserve gone?)'; tone = 'warn'; }
+      else tone = 'on';
+      armed = true;
+    }
+    captureEditReady = !!(overnightPref && !BASE && tone === 'warn');
+    if (ui.captureLine) {
+      ui.captureLine.textContent = line;
+      ui.captureLine.className = 'capture' + (line ? '' : ' hide') + (tone ? ' ' + tone : '');
+      ui.captureLine.title = overnightPref
+        ? 'posts __fish.exportRun() to ' + (captureServer() || 'fishserve') + ' every five minutes; data/runs keeps one file per post' +
+          (captureRetryAt ? '; retrying on a backoff (30 s to 5 m)' : '') +
+          (captureEditReady ? '; click to change the fishserve address' : '')
+        : 'sample this run every five minutes, and load the sampler again after a reload';
+      ui.captureLine.style.cursor = captureEditReady ? 'pointer' : '';
+      if (captureEditReady) {
+        ui.captureLine.setAttribute('role', 'button');
+        ui.captureLine.tabIndex = 0;
+      } else {
+        ui.captureLine.removeAttribute('role');
+        ui.captureLine.tabIndex = -1;
+      }
+    }
+    if (host) {
+      if (!overnightPref) delete host.dataset.capture;
+      else host.dataset.capture = armed ? (tone === 'warn' ? 'stale' : 'armed') : 'error';
+    }
+  }
+
   /* ------------------------------------------------------------ server ---- */
 
   function dayKey(d) {
@@ -5618,12 +5860,16 @@ const SPECIES = [
   }
 
   function postSessionRow(reason, minutes, catches) {
-    if (!BASE) return;                       // the budget is already local; nothing to mirror
+    // fishserve is also where the overnight sampler posts. An inlined panel has no BASE of its own,
+    // so the address the owner gave the capture is the one server this page knows; without it there
+    // is nowhere to log and the local budget has to answer alone.
+    var server = BASE || captureServer();
+    if (!server) return;
     // fishserve's sessions.csv has no profile column. Mirroring a second profile's rows there
     // would contaminate the default profile's day total on the next load.
     if (profileName() !== 'default') return;
     try {
-      fetch(BASE + '/session', {
+      fetch(server + '/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ started_at: new Date(state.startedAt || Date.now()).toISOString(), minutes: minutes, catches: catches, reason: reason })
@@ -5883,6 +6129,8 @@ const SPECIES = [
     '.sel option{background:#12161c;color:#e8ecef}',
     '.perfbox{display:flex;flex-direction:column;gap:1px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer}',
     '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.capture{font-size:10px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.capture.on{color:#5ad18b}.capture.warn{color:#f2c14e}',
     '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
     '.sec{border-top:1px solid rgba(255,255,255,.08)}',
     '.sechead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#aab4bf;font:inherit;font-size:11px;letter-spacing:.3px;padding:8px 0 7px;cursor:pointer;text-align:left}',
@@ -5997,6 +6245,19 @@ const SPECIES = [
     postRow.append(postLabel, postToggle);
     setSec.body.appendChild(postRow);
 
+    // A sampler that lives in the console dies with the page. This is the setting that brings it
+    // back on every load; the line under the meters proves whether it is actually posting.
+    var captureRow = el('div', 'row');
+    var captureLabel = el('div', 'label', 'Overnight capture');
+    var captureToggle = el('button', 'icon', overnightPref ? 'on' : 'off');
+    captureToggle.title = 'post a run snapshot to fishserve every five minutes, and load the sampler again after a reload';
+    // The row is the control, not the 14 px switch: the status line tells the owner to click
+    // "Overnight capture", and that has to work wherever on the row they click.
+    captureRow.style.cursor = 'pointer';
+    captureRow.title = captureToggle.title;
+    captureRow.append(captureLabel, captureToggle);
+    setSec.body.appendChild(captureRow);
+
     // One ledger per profile, because two accounts in one browser used to share one history.
     var profRow = el('div', 'row');
     var profLabel = el('div', 'label', 'Profile');
@@ -6015,6 +6276,11 @@ const SPECIES = [
       meter('left', 'Timer'), meter('catches'), meter('presses'), meter('today')
     );
     body.appendChild(meters);
+
+    // Always on the surface while capture is on, not folded into the settings: the whole point is
+    // to see that the night is being written down without opening anything.
+    var captureLine = el('div', 'capture hide', '');
+    body.appendChild(captureLine);
 
     // Catch history. The core writes it on every parsed catch; the panel only reads it, so a
     // reload of the game still shows yesterday's ledger.
@@ -6096,6 +6362,7 @@ const SPECIES = [
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
       focusToggle: focusToggle,
       chainToggle: chainToggle, reloadToggle: reloadToggle, postToggle: postToggle,
+      captureToggle: captureToggle, captureLine: captureLine,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, lastCatch: lastCatch,
@@ -6170,6 +6437,31 @@ const SPECIES = [
       window.__panel.postCatches = !window.__panel.postCatches;
       savePrefs();
       render();
+    });
+    captureRow.addEventListener('click', function () {
+      var next = !overnightPref;
+      // The inlined userscript was not served by fishserve, so it has no origin to fetch the sampler
+      // from. Ask on the first click whatever the switch currently says: with the pref left on and
+      // no address, waiting for a turn-off first is what made this need two clicks. The answer is
+      // stored with the pref, so a reload does not ask again. A cancelled or malformed answer leaves
+      // the capture off - otherwise a pref that cannot run would have no way to be switched off.
+      if (!captureServer()) next = !!askCaptureAddress();
+      overnightPref = next;
+      captureClearBackoff();
+      window.__panel.overnight = overnightPref;
+      savePrefs();
+      if (next) armOvernight(); else disarmOvernight();
+      render();
+    });
+    // An amber line is the one place that knows the address is the problem; clicking it asks for a
+    // corrected origin without needing to turn the capture off first (or hand-edit the stored pref).
+    captureLine.addEventListener('click', function () {
+      if (captureEditReady) editCaptureAddress();
+    });
+    captureLine.addEventListener('keydown', function (e) {
+      if (!captureEditReady || (e.key !== 'Enter' && e.key !== ' ')) return;
+      e.preventDefault();
+      editCaptureAddress();
     });
     profSel.addEventListener('change', function () {
       if (!switchProfile(profSel.value)) {
@@ -6559,6 +6851,7 @@ const SPECIES = [
     ui.timeRow.style.display = state.window.on ? '' : 'none';
     renderUpsellToggle();
     renderFocusToggle();
+    renderCapture();
 
     if (!focused(ui.dur.val)) ui.dur.val.value = minutesText(state.durationMs);
     if (!focused(ui.cool.val)) ui.cool.val.value = minutesText(state.cooldownMs);
@@ -6803,6 +7096,9 @@ const SPECIES = [
   function tick() {
     // A focus session ending releases a hold it started; a manual toggle is never touched here.
     focusTick();
+    // Outside render(): a dead or failing overnight capture is retried from the heartbeat, so a
+    // repaint (a toggle, a dispatch) can never start a sampler load or a POST of its own.
+    healCapture();
     // A run that crosses midnight starts the new day at zero, the same way a reload does.
     var dayNow = dayKey();
     if (budgetDay && dayNow !== budgetDay) {
@@ -6922,6 +7218,13 @@ const SPECIES = [
     // zero dial presses until the toggle was clicked. focusTick() engages the hold when a session
     // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
+    captureBase = BASE || prefs.overnightBase || '';
+    overnightPref = !!prefs.overnight;
+    captureClearBackoff();
+    // The night a reload used to end: with the setting on, mount loads the sampler again. It posts
+    // once immediately, so the capture line proves the path before the tab is left alone. After
+    // that tick() heals it - a dead sampler or a failing post is retried on a backoff.
+    if (overnightPref) armOvernight();
     mountAdoption();
     banner = checkInterrupted() || banner;
 
@@ -6938,6 +7241,8 @@ const SPECIES = [
     window.__panel.focus = inFocusSession;
     window.__panel.focusMode = focusOn;
     window.__panel.setFocusMode = setFocusMode;
+    window.__panel.overnight = overnightPref;
+    window.__panel.armOvernight = armOvernight;
     tick();
   }
 
