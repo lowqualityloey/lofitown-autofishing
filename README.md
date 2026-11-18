@@ -167,6 +167,32 @@ The setting survives a reload. The panel loads the sampler again and posts immed
 is not lost to an accidental refresh. Capture is off by default and can be switched off by clicking
 anywhere on the row. It only reads `__fish.exportRun()`; it never starts, stops or presses the run.
 
+### Running fishserve as a service (WSL)
+
+The panel can heal a sampler; it cannot start a fishserve that died with the terminal that ran it.
+On this machine fishserve is a **systemd user unit inside WSL**, so it outlives the shell, the agent
+session and a distro restart:
+
+- **Unit**: `~/.config/systemd/user/fishserve.service` - `WorkingDirectory` is the main checkout
+  (`/home/heyloey/personal/lofitown-autofishing`), `Restart=always`, `RestartSec=5`,
+  `WantedBy=default.target`. It runs the resolved node binary, not a PATH lookup.
+- **Start / inspect**: `systemctl --user enable --now fishserve.service`,
+  `systemctl --user status fishserve`, `journalctl --user -u fishserve -f`. There is no log file:
+  the unit's stdout goes to the journal.
+- **Linger**: `loginctl show-user "$USER" -p Linger` must read `Linger=yes`
+  (`loginctl enable-linger "$USER"`). Without it the user manager, and the unit with it, stops when
+  the last login session closes.
+- **Where the data lands**: fishserve resolves `data/runs`, `catches.csv`, `sessions.csv` and `shots/`
+  from `__dirname`, not from the shell's working directory, so the checkout the unit runs from
+  decides the destination. That is why the unit runs from the main checkout - a fishserve started in
+  another worktree writes its snapshots there instead, and the morning report in this one will not
+  see them.
+- **Reboot caveat**: the unit starts when the WSL distro starts, and a Windows reboot does not start
+  the distro by itself. After a reboot, capture stays dead until something runs a WSL command (a
+  terminal, or a logon Task Scheduler entry such as `wsl.exe -d Ubuntu -u heyloey -- true`); the
+  panel then heals within its 30 s to 5 min backoff. If the line is amber after a reboot, start WSL
+  before changing the address in the panel.
+
 In the morning:
 
 ```bash
