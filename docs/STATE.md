@@ -1,21 +1,28 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.44 + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.47 + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
 - **Overall Status**: ACTIVE — private source at github.com/lowqualityloey/lofitown-autofishing, public
   distribution mirror at github.com/lowqualityloey/lofitown-autofishing-dist; **3.9.43** is tagged and
   published (345,976 bytes, sha256 `97f482af…`), carrying 3.9.33-3.9.43; 3.9.42 was built and installed
-  but **never tagged** — superseded by 3.9.43 before release. **3.9.44** is the current build: it fixes
-  a page-load focus hold (panel.js), ships with the overnight capture tooling, and is being prepared
-  for tag
-- **Target Release / Deadline**: 3.9.44 fixes the mount-time focus hold and carries the overnight
-  export/report tooling, built 2026-11-17
-- **Current Working Branch**: `proto/focus-prompt-mask` (3.9.44); `main` at the 3.9.43 tooling merge
-  `94911be`; 3.9.43 tagged `56afe89`
-- **Last Updated**: 2026-11-17
+  but **never tagged** — superseded by 3.9.43 before release. **3.9.44** is tagged and published (it
+  fixes the page-load focus hold); **3.9.45** moved the overnight sampler into the panel and re-armed it
+  after a reload; **3.9.46** made the capture re-arm itself on a backoff when the sampler dies or a
+  post fails, and one click on its toggle asks for the fishserve address; **3.9.47** is the current
+  build: the sampler posts back to the full origin that served it, an amber status line asks for a
+  corrected address, and the whole "Overnight capture" row is the control. The morning report reads
+  one night and verdicts whether it was recorded to the end. **3.9.45 and 3.9.46 were built and
+  installed but never tagged**; 3.9.47 is the release candidate - built, 340 tests, live-verified
+  on 2026-11-18, and **not tagged or published yet**. The release carries 3.9.45-3.9.47 together.
+- **Target Release / Deadline**: v3.9.47 - full-origin capture, editable stale address, clickable
+  row, and a coverage verdict in the morning report. Built 2026-11-18; tag/release pending.
+- **Current Working Branch**: `proto/focus-prompt-mask` (HEAD `8a3f716` plus the uncommitted 3.9.47
+  docs/code); `main` at the overnight-route merge `eb41a40`; 3.9.44 tagged `ee1ecd2`. `run.sh` is a
+  pre-existing unstaged modification and must stay out of the release commit.
+- **Last Updated**: 2026-11-18
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
 ---
@@ -52,7 +59,7 @@
   that measurement (a press destroys the frame it would be read from) with a press-free prediction
   error in degrees and ms. A 3.9.19 session answered it: narrow **5/5**, prediction p50 1.9 deg /
   9.6 ms, p95 6.1 deg / 31.3 ms against a ~62 ms narrow window - no timing deficit - and **36% of
-  press verdicts are inferred**, not observed. 3.9.28 splits the card into a run surface with two folded sections; 3.9.29 rewrites the diagnostics as plain sentences and renames the idle meter `Timer`; 3.9.31 rounds each detector share to whole ms and splits the per-second line over two, because the live line measured 256 px inside the 244 px card. 270 tests.
+  press verdicts are inferred**, not observed. 3.9.28 splits the card into a run surface with two folded sections; 3.9.29 rewrites the diagnostics as plain sentences and renames the idle meter `Timer`; 3.9.31 rounds each detector share to whole ms and splits the per-second line over two, because the live line measured 256 px inside the 244 px card. 340 tests.
 - [x] **Milestone R** — private repository published (README, MIT licence, docs index); `shots/`
   (game bundle, screenshots) and the local PromptKit scaffolding stay out of git.
 - [x] **Milestone 3** — self-updating distribution: a private repository's release assets answer an
@@ -79,15 +86,17 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-10-28-catch-log.md` (the panel design spec is [docs/specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md); its decisions are also the ADR log in §6)
-- **Active Task Spec**: `docs/tasks/autofish-panel.md`
-- **Key Source Files in Flight**: `autofish.js`, `panel.js`, `session.js`, `layout.js`, `build-userscript.js`, `scripts/release.js`, `dist/autofish.user.js`, `tests/*.test.js`
+- **Active RFC / Spec**: `docs/specs/2026-11-18-overnight-capture.md` (the catch-log and panel design specs remain the earlier approved decisions)
+- **Active Task Spec**: `docs/tasks/TASK-2026-11-18-overnight-capture.md` (the panel milestone record stays in `docs/tasks/autofish-panel.md`)
+- **Key Source Files in Flight**: `panel.js`, `scripts/overnight-export.js`, `scripts/overnight-report.js`, `fishserve.js`, `build-userscript.js`, `scripts/release.js`, `dist/autofish.user.js`, `tests/overnight-export.test.js`, `tests/overnight-report.test.js`, `tests/panel.test.js`
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
   - Build: `node build-userscript.js`; a test fails when the committed `dist/` is stale
   - Release mirror: `node scripts/release.js --check` after every tag — verifies both release assets
     against the tagged build and fetches the public URL anonymously
   - Server smoke: `FISHSERVE_PORT=8741 node fishserve.js` then `curl -s localhost:8741/recent?n=1`
+  - Overnight report: `node scripts/overnight-report.js` (12 h ending at the newest snapshot; `## Coverage`; exit 1 when truncated)
+  - Capture live check: start fishserve, enable Overnight capture, confirm the first POST, then read the live review (`docs/reviews/2026-11-18-capture-address-live.md`)
   - Typecheck / Linter: none configured
 
 ---
@@ -209,10 +218,11 @@ Staging area for rules observed during sessions but not yet approved as invarian
     no hardcoded seed remains.
   - **Zen frame budget unmeasured.** Every timing figure in AUTOFISH.md from 3.8.2 on is Chromium. A
     Gecko readback is not a Chromium one; measure with `__fish.perf()` before changing a throttle.
-  - **Port collision.** Port 8731 on the Windows host is held by an older fishserve that answers
-    404 for `/panel.js`. The browser talks to whatever listens there, not to the WSL instance. Use
-    `FISHSERVE_PORT=8741` (or stop the old process) — the panel derives its API origin from its own
-    script URL, so any port works.
+  - **Port collision.** 8731 was free on 2026-11-18, but a stale fishserve can still hold it; the
+    browser talks to whatever listens there, not to the WSL instance. Probe
+    `curl -s localhost:8731/overnight.js` and use `FISHSERVE_PORT=8741` (or stop the old process) if
+    it answers old code. The panel derives its API origin from the stored capture address, so any
+    port works.
   - **Stale worktree index.** `main` is also checked out in the WSL worktree at
     `//wsl.localhost/Ubuntu/home/heyloey/personal/lofitown-autofishing`. Merge commits made from the
     Windows worktree move the ref but not that tree, so it reads a large diff until a
@@ -279,30 +289,29 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. Watch a real overnight run: the 30-minute seat cap, the clock-window stop and the daily-cap stop
-   have never fired in the field, and only a night shows whether a stall costs hours or nothing. The
-   capture exists: `scripts/overnight-export.js` samples `__fish.exportRun()` to fishserve's
-   `POST /export` (`data/runs/`) every five minutes, because the page store holds only 250 attempts,
-   and `scripts/overnight-report.js` merges the snapshots into one night (gaps, cuts, bands, doctor,
-   perf, sessions).
-2. Extend the 112-attempt run to 200 catches if a long seated session is available; 103/112 is a real
-   sample and the README now quotes it, so a larger one is worth having.
-3. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
-   bubbles) at window sizes nobody has tested yet.
-4. Measure the Zen frame budget with `__fish.perf()` (bot stopped, then running) before changing any
-   scan throttle; a Gecko readback is not a Chromium one.
-5. Run `node scripts/release.js --check` after every tag: it is the only check that proves the public
-   asset matches the tagged build.
-6. Carry `HeyLoey-Milestone: <summary>` on the release commit (see README "Releasing") and read the
-   daily note back afterwards. Logging on agent judgement failed once - 3.9.12 shipped in a session
-   that had not loaded the vault rule and went unrecorded until it was backfilled - and the trailer is
-   the only path that does not depend on an agent remembering. It failed again on 3.9.43 (its release
-   merge `56afe89` had no trailer; the note was written by hand on 2026-11-17), so the rule is now in
-   the tool: `scripts/release.js` refuses to publish - and `--check` refuses to pass - when the tagged
-   commit carries no non-empty trailer. `v3.9.43` is the only named exemption, and a new tag has to
-   carry it. The refusal never suggests moving a published tag: it names `heyloey done` alone unless
-   the release does not exist yet, in which case amending the commit and `git tag -f` are safe and
-   are offered (`published` is read before the refusal, and an unknown state gives the safe advice).
+1. **Release v3.9.47.** The code and docs are ready (340 tests; live review dated 2026-11-18). Commit
+   all of it except the pre-existing `run.sh` modification, carrying a non-empty
+   `HeyLoey-Milestone:` trailer (the release tool refuses without it), tag `v3.9.47`, merge to `main`
+   through the WSL worktree (`git merge-tree --write-tree` + `commit-tree` + `update-ref`; never check
+   out `main` here), push branch/tag/main, then `gh release create` and `node scripts/release.js`.
+   `node scripts/release.js --check` is the only proof that the public asset matches the tag. 3.9.45
+   and 3.9.46 are untagged, so this release carries them too.
+2. **Install 3.9.47 in Tampermonkey** from the release and reload the game; confirm the panel header
+   and `__fish.version` still read 3.9.47 after the reload. The 2026-11-18 test was a page injection
+   and reverted to 3.9.46 on reload, so this is the first persistence check.
+3. **Run one real night.** Start fishserve on a stable port (`FISHSERVE_PORT=8731 node fishserve.js`,
+   or `./run.sh`, which prints its port), arm Overnight capture, confirm the first POST lands in
+   `data/runs/`, and leave the game window visible and the OS told not to sleep. Watch the 30-minute
+   seat cap, the clock-window stop and the daily cap, which have never fired in the field.
+4. **Read the morning report.** `node scripts/overnight-report.js`; record the `## Coverage` verdict
+   and exit status in the task record, the live review and §8. Exit 1 means the night is truncated -
+   report it, do not round it up.
+5. Extend the 112-attempt run to 200 catches if a long seated session is available; 103/112 is a real
+   sample and the README quotes it, so a larger one is worth having.
+6. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
+   bubbles) at window sizes nobody has tested yet. Measure the Zen frame budget with `__fish.perf()`
+   (bot stopped, then running) before changing any scan throttle; a Gecko readback is not a Chromium
+   one.
 
 7. **Done in 3.9.27:** `adoptSurface()` requires a **found prompt** twice instead of a blank count;
    a dense renderer is considered only when the current surface has already read blank, which keeps
@@ -310,9 +319,9 @@ Staging area for rules observed during sessions but not yet approved as invarian
    box follows the live surface. Native-F11 confirmation passed at 1920x1080, with 7/8 catches and
    no false cards; the panel stayed at x=12.
 
-Items 1-4 are field experiments: they need a live game tab and a human at the keyboard, and no
-automated run can produce them. Items 5-6 are release rituals, not one-offs. Item 7 is the last known
-surface defect and is cheap: same evidence rule, different call site.
+Items 1-4 are the release and overnight sequence; items 5-6 are field experiments that need a live
+game tab and a human. Item 7 is the last known surface defect and is cheap: same evidence rule,
+different call site.
 
 ---
 
@@ -370,7 +379,13 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-17 | lead (Freebuff session) | Focus mask setup: 3.9.42 | This release commit on `proto/focus-prompt-mask`. The mask could not arm on a page that had never fished: `uiCanvas` and the render hook are set up by the fishing loop, which a core paused from mount never runs, so every arm was refused and no frame reached the clear - measured live after a reload with the hold engaged, **108 refusals, 0 probes, prompt visible**. The arm path now calls `ensureMaskLive()` (`surfaces()` when the read surface is missing or stale, `installPostRender()` when the hook is absent) before `maskTarget()`. 313 tests, including a behaviour test that arms on a sandboxed never-scanned page and checks the overlay becomes the read surface and the prototype render is wrapped (it fails with the setup call commented out). Never tagged: superseded by 3.9.43 before release, when the on-screen check showed the cleared box was smaller than the sprite. |
 | 2026-11-17 | lead (Freebuff session) | Mask covers the whole UI layer: 3.9.43 | `proto/focus-prompt-mask`. 3.9.42 was built and installed but never tagged: on screen a 6 px sliver of the bubble's bottom border survived and the lure button was untouched, because the mask cleared one detector box (`528,223,120,54`) while the sprites are `{531,225,114,60}` and `{651,234,48,48}`. The mask now derives every rect from the frame (`uiRects()`: blobs of the quarter-scale snapshot, each refined to its own connected component through `readUI`), re-probes every 300 ms and clears each rect per draw; the panel only says "hide". The component scoping is pinned by a regression test that feeds the measured quarter-scale blobs through the refinement and asserts exactly `{531,225,114,60}` and `{651,234,48,48}` - it fails against the earlier window-wide bbox, which returned `{531,225,130,60}`. The probe allocates nothing per pass: both scratch buffers (component marks and flood stack) are sized once and reused, and the arm keeps its probe clock so the 300 ms throttle is not reset by the panel's once-a-second re-arm. Two probes in a row that read the layer and find nothing drop the armed rects, so a stale rect cannot erase an element that paints in that spot later; an unreadable probe (`null`) holds them instead, since it proves nothing. 318 tests. Shipped as `v3.9.43`: tag on the merge `56afe89`, source release and public mirror byte-identical (345,976 bytes, sha256 `97f482afd48a`), `release.js --check` green. The check that had been pending was made on the installed build at 1179x886 - probe `{531,258,114,60}` and `{651,267,48,48}`, masked frame with both gone and no sliver, released frame with both back, re-arm hidden again (168 probes, 121 resolved, 32 drops, 10,432 clears, no errors). |
 
+| 2026-11-17 | lead (Freebuff session) | Overnight capture belongs to the panel: 3.9.45 | The 2026-11-17 night lost 7 h 43 m to a page reload: the sampler was a console paste, so `data/runs` jumps `07:18:47Z` -> `15:01:45Z` and the page's 250-row store only reached `12:12:41Z`. "Overnight capture" is now a pref the panel keeps: `mount()` loads `/overnight.js` from fishserve when it is on, the sampler installs `__overnight` before its first POST so the panel can read it, and a line under the meters reads `capture armed · N posts · last HH:MM`, amber when the last post failed or is over eleven minutes old. A served panel knows its origin; the inlined userscript asks for the fishserve address once and stores it with the pref. Pinned by a panel source guard. 327 tests. |
+| 2026-11-17 | lead (Freebuff session) | A dead capture heals itself: 3.9.46 | 3.9.45 armed the sampler at mount, but nothing re-armed it afterwards: a sampler that stopped, or a fishserve that was down when the page loaded, left the pref on with nothing posting until someone clicked. `tick()` calls `healCapture()` once a second, outside the render path: a missing or stopped sampler loads `/overnight.js` again; a live sampler whose last POST failed, or whose last post is over eleven minutes old, gets `__overnight.now()` instead of a second timer; attempts back off 30 s / 1 m / 2 m / 5 m, a dead sampler says `· re-arming`, and a pending retry is explained on the line's title. A missing address is not retried - only the toggle can supply it - and that click now prompts on the first press whatever the switch says, instead of needing off-then-on; a cancelled question leaves the capture off rather than on with no way to switch it off. The 11-minute staleness rule is one constant shared by the line and the heal. Pinned by a panel source guard. 328 tests. |
+| 2026-11-18 | lead (Freebuff session) | Capture entry points: full origin, an editable address, a clickable row: 3.9.47 | The sampler rebuilt `http://127.0.0.1:<port>` from the port alone, so a fishserve on another host passed the address check but wrote nowhere near it; it now posts to `window.__overnightBase`, the origin that served `/overnight.js`, while a console paste keeps the documented 127.0.0.1:8731 fallback. A stored address that moved had no way back from the UI - the toggle only asked when `!captureServer()` - so heal retried the dead origin until someone edited the pref by hand; the amber status line is now clickable (Enter/Space too), asks for a corrected origin, stops the old sampler before loading the new one, saves the pref and re-arms. The row's label was dead space beside a 14 px switch while the line said "click Overnight capture", so the listener sits on the row now (one handler; a click on the button bubbles into it rather than toggling twice). Pinned by a VM test that runs the real sampler against a fake page (full origin, port fallback, default, and a failed post that must report the origin instead of throwing - the error string still named a removed `PORT`, so a failed POST never set `lastError` and the post-failure amber line was unreachable) and panel source guards. 340 tests. | `AUTOFISH.md` 3.9.47; `tests/overnight-export.test.js`; `tests/panel.test.js` |
+| 2026-11-18 | lead (Freebuff session) | Session ends reach the capture's fishserve too | The new coverage verdict could never fire on the inlined install: `postSessionRow()` began with `if (!BASE) return;`, and the inlined userscript has no origin of its own, so `sessions.csv` stayed empty and the report could only say "no session row to bound the night". The panel now resolves `BASE || captureServer()` - the address the owner already gave "Overnight capture" - and posts the row there, keeping the default-profile guard. Pinned by the panel source guard (no hard-coded port, address required) and a new integration test that POSTs the panel's body to a real fishserve instance and asserts the report flags the truncated night from the row fishserve wrote. 336 tests. | `AUTOFISH.md`; `tests/panel.test.js`; `tests/overnight-report.test.js` |
+| 2026-11-18 | lead (Freebuff session) | The morning report reads one night and says whether it was recorded | The 2026-11-17 loss shape - capture dies while the run continues - was invisible to the report: `gaps()` only measures holes *between* attempts, so a night whose last attempt is 02:00 printed as a clean night ending at 02:00, and the default command merged every JSON in `data/runs`, so from the second night on catch rate and gaps mixed unrelated runs. `scripts/overnight-report.js` now dates each snapshot (`exportedAt`, then the `export-<ISO>` file name, then mtime), anchors a 12 h window on the newest snapshot rather than "now" (`--all`, `--hours`, `--since`, explicit files), leaves attempts the page store carried from an earlier run out of the totals (the summary counts them), and compares the newest attempt with the last session `sessions.csv` logged - including a session that ended after the data, which the old ±1 h filter dropped. The new `## Coverage` section prints `complete`, `X h Y m unaccounted - the capture stopped at HH:MM` (or "posts kept landing, but no attempt was recorded after"), or says no session row bounds the night; the CLI exits 1 only on a truncated or unreadable night. Dates are local everywhere (a UTC date beside a local clock made a cross-midnight night read backwards). 335 tests. | `AUTOFISH.md` overnight section; `tests/overnight-report.test.js` |
 | 2026-11-17 | lead (Freebuff session) | A page load no longer leaves the focus hold on: 3.9.44 | Reported live from Neo: "not doing dial mode catch ... its just hidden even when im not on focus mode". `autofish.prefs` held `focusMode: true` from the mask work, and `mount()` engaged the hold itself (`if (focusPref) setFocusMode(true)`); `focusTick` only auto-releases a hold it saw a session drive, so with the title plain `lofi.town` the page sat `running: true, paused: true` with one rect `{534,258,114,60}` masked, and `session.js` re-paused on every tick's `fact.focus`. Mount now adopts only the setting, and `focusTick()` engages when `inFocusSession()` is true. Pinned by the panel source guard, which fails against the old mount. 325 tests. |
+| 2026-11-18 | lead (Freebuff session) | 3.9.47 live check and release docs | In the real `app.lofi.town` tab (BrowserOS neo; page injection, so Tampermonkey stayed 3.9.46 and a reload would revert), trusted clicks on **Session & guards** then the **Overnight capture** label armed 8731 and posted 250 attempts at 06:09:52Z. Moving fishserve to 8732 and forcing `__overnight.now()` produced the amber `last post failed` line naming 8731; a trusted click on the line accepted 8732 and re-armed (06:11:01Z, repeated 06:12:51Z; 8731 got no further export). The run found the `PORT`-in-`catch` bug, fixed to `ORIGIN` with a rejecting-fetch VM test. Wrote the capture spec, task record and live review, and updated README/AUTOFISH/STATE; 340 tests, dist 360,459 bytes. Not tagged or published yet; `run.sh` stays out of the release commit. |
 
 ---
 

@@ -56,7 +56,11 @@ test('collapsing actually hides the card and shows the 48px pill', () => {
 test('the panel never assumes a local server it was not served from', () => {
   assert.ok(src.indexOf("'http://127.0.0.1:8731'") < 0, 'the server-free build must not guess a port');
   const post = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
-  assert.match(post, /if \(!BASE\) return;/, 'no fetch without a server');
+  assert.match(post, /var server = BASE \|\| captureServer\(\);/, 'a served panel uses its origin; an inlined one uses the capture address');
+  assert.match(post, /if \(!server\) return;/, 'no fetch without an address');
+  assert.ok(post.includes("server + '/session'"), 'the row goes to the same fishserve the sampler uses');
+  assert.ok(!/if \(!BASE\) return;/.test(post), 'an inlined panel no longer stays silent');
+  assert.ok(!/http:\/\/127\.0\.0\.1:/.test(post), 'and it still never guesses a port');
   assert.match(src, /function syncBudget\(\)/, 'the finished session counts in the local budget');
   assert.match(src, /if \(!BASE\) return;/, 'diagnosis uploads must not run without a server');
 });
@@ -279,6 +283,88 @@ test('reload resume and catch POSTs are opt-in, and resume no longer needs a clo
   assert.ok(src.includes('postCatches: !!window.__panel.postCatches'), 'the POST pref is saved');
   assert.ok(src.includes("var post = (window.__panel && window.__panel.postCatches && BASE) ? BASE + '/catch' : null"), 'the URL is only passed when opted in');
   assert.ok(src.includes('logUrl: post'), 'startCore carries the opt-in URL');
+});
+
+test('overnight capture survives a reload and says in the panel whether it is armed', () => {
+  // The capture used to be a console paste: the 2026-11-17 night reloaded and data/runs jumped
+  // 07:18Z -> 15:01Z. The setting has to live in the panel, mount has to load the sampler again,
+  // and the panel has to say whether posts are actually landing.
+  assert.match(src, /prefs\.overnight = !!p\.overnight/, 'the pref is read');
+  assert.match(src, /overnight: !!overnightPref/, 'the setting is saved');
+  assert.match(src, /overnightBase: captureBase \|\| ''/, 'the fishserve address is kept with it');
+  assert.ok(src.includes('if (overnightPref) armOvernight();'), 'mount arms the sampler from the stored setting');
+  assert.ok(src.includes('captureBase = BASE || prefs.overnightBase'), 'a served panel knows the address; an inlined one remembers it');
+
+  const arm = src.slice(src.indexOf('async function armOvernight'), src.indexOf('function disarmOvernight'));
+  assert.ok(arm.length > 0, 'armOvernight exists');
+  assert.ok(arm.includes("/overnight.js?t="), 'the sampler is fetched from fishserve, not pasted');
+  assert.ok(arm.includes('window.__overnightBase'), 'the POST origin follows the server that served the sampler');
+  assert.ok(arm.includes('if (live && !live.stopped)'), 'a sampler already running is not stacked');
+  assert.ok(arm.includes('if (!captureStatus())'), 'a sampler that never installed itself is reported, not assumed');
+  assert.ok(arm.includes('renderCapture()'), 'every arm step repaints the status');
+
+  assert.ok(src.includes('captureLine: captureLine'), 'the status line is registered');
+  assert.ok(src.includes("'capture armed · '"), 'the line says armed in words');
+  assert.ok(src.includes('· stale (fishserve gone?),') || src.includes("st.lastError"), 'a dead or failing capture is not green');
+  assert.ok(src.includes('renderCapture();'), 'render refreshes it on the tick');
+  assert.ok(src.includes('host.dataset.capture'), 'the armed state is observable outside the shadow root');
+
+  const toggle = src.slice(src.indexOf("captureRow.addEventListener('click'"), src.indexOf("profSel.addEventListener('change'"));
+  assert.ok(toggle.length > 0, 'the whole row is the control');
+  assert.ok(!src.includes("captureToggle.addEventListener('click'"), 'the 14 px button is not a second, stacked listener');
+  assert.ok(toggle.includes('askCaptureAddress()'), 'the server-free install is asked for the address once');
+  assert.ok(!/localStorage/.test(toggle), 'the address goes through the prefs, not a second store');
+  assert.ok(toggle.includes('if (!captureServer()) next = !!askCaptureAddress();'), 'one click asks for the address, even when the switch already says on');
+  assert.ok(toggle.includes('if (next) armOvernight(); else disarmOvernight();'), 'answering arms; cancelling leaves the capture off');
+});
+
+test('a stale capture address can be corrected from the amber line', () => {
+  // A stored address that moves used to have no way back: the toggle only asked when there was no
+  // address at all, so the pref sat on a dead origin forever and heal retried the same one.
+  const ask = src.slice(src.indexOf('function askCaptureAddress'), src.indexOf('function editCaptureAddress'));
+  assert.ok(ask.length > 0 && ask.includes('window.prompt('), 'the address is asked for in one place');
+  assert.ok(ask.includes('captureBase = base'), 'the answer is kept with the pref');
+  assert.ok(ask.includes('capture needs an address like'), 'a malformed answer says why');
+
+  const edit = src.slice(src.indexOf('function editCaptureAddress'), src.indexOf('function healCapture'));
+  assert.ok(edit.length > 0, 'editCaptureAddress exists');
+  assert.ok(edit.includes('if (BASE) return;'), 'a served panel has only the origin that served it');
+  assert.ok(edit.includes('window.__overnight.stop()'), 'the old sampler is stopped before the new one loads');
+  assert.ok(edit.includes('savePrefs()'), 'the corrected address survives a reload');
+  assert.ok(edit.includes('armOvernight()'), 'it arms from the new origin instead of keeping the dead one');
+
+  assert.ok(src.includes("captureLine.addEventListener('click'"), 'the amber line is clickable');
+  assert.ok(src.includes("captureLine.addEventListener('keydown'"), 'and reachable from the keyboard');
+  assert.match(src, /captureEditReady = !!\(overnightPref && !BASE && tone === 'warn'\)/, 'only a broken capture offers the edit');
+  assert.ok(src.includes('click to change the fishserve address'), 'the line explains what the click does');
+});
+
+test('a capture that died or cannot post heals itself, without a click', () => {
+  // 3.9.45 armed the sampler at mount, but nothing re-armed it later: a sampler that stopped, or a
+  // fishserve that was down when the page loaded, left the pref on with nothing posting until the
+  // toggle was clicked. The pref is the source of truth, so the heartbeat retries it on a backoff.
+  assert.ok(src.includes('var CAPTURE_BACKOFF = ['), 'retries back off instead of hammering');
+  assert.equal((src.match(/11 \* 60 \* 1000/g) || []).length, 1, 'the staleness threshold is one constant');
+
+  const heal = src.slice(src.indexOf('function healCapture'), src.indexOf('function renderCapture'));
+  assert.ok(heal.length > 0, 'healCapture exists');
+  assert.ok(heal.includes('if (!overnightPref || captureArming) return;'), 'it only runs with the pref on, and never over a load in flight');
+  assert.ok(heal.includes('if (!captureServer())'), 'a missing address is left to the toggle');
+  assert.ok(heal.includes('st.lastError'), 'a failed post is retried');
+  assert.ok(heal.includes('st.stopped'), 'a sampler that died is loaded again');
+  assert.ok(heal.includes('captureStale(st)'), 'and so is one that went quiet');
+  assert.ok(heal.includes('__overnight.now()'), 'a live sampler is nudged, not stacked');
+  assert.ok(heal.includes('armOvernight()'), 'a dead sampler is re-armed');
+  assert.ok(heal.includes('if (now < captureRetryAt) return;'), 'the retry waits for the backoff');
+  assert.ok(heal.includes('if (!why) { captureClearBackoff(); return; }'), 'a healthy capture clears the backoff');
+
+  assert.ok(src.includes('retrying on a backoff'), 'a pending retry is explained on the line');
+  const render = src.slice(src.indexOf('function renderCapture'), src.indexOf('/* ------------------------------------------------------------ server ----'));
+  assert.ok(!render.includes('healCapture();'), 'rendering stays display-only: no sampler loads or POSTs from a repaint');
+  assert.ok(render.includes('captureStale(st)'), 'the line and the heal share the staleness rule');
+  assert.ok(render.includes('the sampler is not running · re-arming'), 'a dead sampler says so instead of asking for a click');
+  const tick = src.slice(src.indexOf('function tick()'), src.indexOf('/* ------------------------------------------------------------- mount ----'));
+  assert.ok(tick.includes('healCapture();'), 'the heartbeat drives the heal, in every phase');
 });
 
 test('a stop says what stopped it, and the hidden threshold is configurable', () => {

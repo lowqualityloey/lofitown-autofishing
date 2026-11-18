@@ -17,6 +17,9 @@ const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
 const GAP_MS = 10 * 60 * 1000;
+// One night, not every night: the report's window ends with the newest snapshot, so running it the
+// next afternoon still reads last night instead of whatever is newest in the directory.
+const NIGHT_MS = 12 * 60 * 60 * 1000;
 
 const SRC = fs.readFileSync(path.join(ROOT, 'autofish.js'), 'utf8');
 
@@ -40,7 +43,13 @@ const clock = (t) => {
   const p = (n) => String(n).padStart(2, '0');
   return p(d.getHours()) + ':' + p(d.getMinutes());
 };
-const dayClock = (t) => new Date(t).toISOString().slice(0, 10) + ' ' + clock(t);
+// Local date and local clock together: a UTC date beside a local time made a night that crossed
+// midnight read as if it ran backwards (19:58 → 04:06 on the same date).
+const dayClock = (t) => {
+  const d = new Date(t);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + clock(t);
+};
 const dur = (ms) => {
   const m = Math.round(ms / 60000);
   return m >= 60 ? Math.floor(m / 60) + ' h ' + (m % 60) + ' m' : m + ' m';
@@ -121,6 +130,75 @@ function perHour(attempts) {
   return rows;
 }
 
+/** When a snapshot was taken: its own export stamp, then the file name, then the file's mtime. */
+function snapshotTime(s) {
+  const stamp = s && s.data && Date.parse(s.data.exportedAt);
+  if (Number.isFinite(stamp) && stamp > 1e12) return stamp;
+  const name = path.basename((s && s.file) || '');
+  const m = /-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z\.json$/.exec(name);
+  if (m) {
+    const t = Date.parse(m[1] + 'T' + m[2] + ':' + m[3] + ':' + m[4] + '.' + m[5] + 'Z');
+    if (Number.isFinite(t)) return t;
+  }
+  try { return fs.statSync(s.file).mtimeMs; } catch (e) { return null; }
+}
+
+/**
+ * Keep the snapshots of one night. The window is anchored on the newest export, not on "now": a
+ * report run hours later must still read the night, not the afternoon. Files that cannot be dated
+ * are kept rather than hidden, because an unreadable snapshot is worth seeing.
+ */
+function selectNight(snapshots, opts) {
+  const o = opts || {};
+  const timed = snapshots.map((s) => ({ s, at: snapshotTime(s) })).filter((x) => x.at != null);
+  if (!timed.length) return { snapshots, from: null, to: null, ignored: 0 };
+  timed.sort((a, b) => a.at - b.at);
+  const to = timed[timed.length - 1].at;
+  const from = o.from != null ? o.from : to - (o.hours > 0 ? o.hours : NIGHT_MS / 3600000) * 3600000;
+  const kept = [];
+  const ignored = [];
+  for (const x of timed) (x.at >= from && x.at <= to ? kept : ignored).push(x.s);
+  return {
+    snapshots: kept.concat(snapshots.filter((s) => snapshotTime(s) == null)),
+    from, to, ignored: ignored.length,
+  };
+}
+
+/** How long a session was allowed to run; it bounds how far past the last post a session row may sit. */
+function nightCapMs(good) {
+  const o = good.length ? good[good.length - 1].data.opts : null;
+  const d = o && Number(o.durationMs);
+  return Number.isFinite(d) && d > 3600000 ? Math.min(d, 24 * 3600000) : NIGHT_MS;
+}
+
+/**
+ * Did the capture outlive the data? A night that ends at 02:00 while sessions.csv logs a session
+ * ending at 07:00 is missing five hours, and that used to look like a clean, quiet night.
+ */
+function coverageOf(good, attempts, sessions, opts) {
+  const o = opts || {};
+  const posts = good.map(snapshotTime).filter((t) => t != null).sort((a, b) => a - b);
+  const timed = attempts.filter((a) => a.t != null && a.t > 1e12).map((a) => a.t).sort((a, b) => a - b);
+  const firstPostAt = posts.length ? posts[0] : null;
+  const lastPostAt = posts.length ? posts[posts.length - 1] : null;
+  const newest = timed.length ? timed[timed.length - 1] : null;
+  const sessionEnd = sessions.length ? Math.max.apply(null, sessions.map((s) => s.time)) : null;
+  const missingMs = sessionEnd != null && newest != null ? sessionEnd - newest : 0;
+  let verdict = 'unbounded';
+  let stopped = null;
+  if (sessionEnd != null && newest != null) {
+    if (missingMs > GAP_MS) {
+      verdict = 'truncated';
+      // "capture" means the posts stopped; "run" means they kept landing with no new attempt.
+      stopped = lastPostAt != null && lastPostAt < sessionEnd - GAP_MS ? 'capture' : 'run';
+    } else verdict = 'complete';
+  }
+  return {
+    verdict, missingMs: Math.max(0, missingMs), stopped, firstPostAt, lastPostAt, newest, sessionEnd,
+    snapshots: good.length, ignored: o.ignored || 0,
+  };
+}
+
 function readSessions(from, to) {
   const file = process.env.FISHSERVE_SESSIONS || path.join(ROOT, 'sessions.csv');
   if (!fs.existsSync(file)) return [];
@@ -128,22 +206,50 @@ function readSessions(from, to) {
     .map((line) => line.split(','))
     .filter((r) => r.length >= 5)
     .map((r) => ({ time: Date.parse(r[0]), started_at: r[1], minutes: Number(r[2]) || 0, catches: Number(r[3]) || 0, reason: r[4] }))
-    .filter((r) => !from || (r.time >= from - 3600_000 && r.time <= (to || Date.now()) + 3600_000));
+    // The upper bound is given by the caller: a session that ended after the last snapshot is the
+    // one row that proves the capture stopped, so it must not be filtered out.
+    .filter((r) => !from || (r.time >= from - 3600_000 && (!to || r.time <= to)));
 }
 
-function report(snapshots) {
-  const good = snapshots.filter((s) => s.data);
-  if (!good.length) return 'no readable snapshots\n';
+/**
+ * Build the night's page and the coverage verdict. `opts.night` selects the window; callers that
+ * already handed in an explicit file list get exactly those files.
+ */
+function analyze(snapshots, opts) {
+  const o = opts || {};
+  let picked = snapshots;
+  let ignored = 0;
+  let window = null;
+  if (o.night) {
+    const sel = selectNight(snapshots, { hours: o.hours, from: o.since });
+    picked = sel.snapshots;
+    ignored = sel.ignored;
+    window = sel;
+  }
+  const good = picked.filter((s) => s.data);
+  if (!good.length) {
+    return {
+      text: 'no readable snapshots' + (o.night ? ' in the night window; use --all to merge every file' : '') + '\n',
+      coverage: null,
+      snapshots: picked,
+    };
+  }
   const merged = mergeAttempts(good);
-  const run = runSummary(toAttempts(merged.attempts), {});
-  const timed = merged.attempts.filter((a) => a.t != null && a.t > 1e12);
+  // The page store carries rows from runs before this one, so a snapshot can hold attempts older
+  // than its own night. They belong to an earlier run, not this report.
+  const rows = window
+    ? merged.attempts.filter((a) => a.t == null || (a.t >= window.from && a.t <= window.to))
+    : merged.attempts;
+  const outside = merged.attempts.length - rows.length;
+  const run = runSummary(toAttempts(rows), {});
+  const timed = rows.filter((a) => a.t != null && a.t > 1e12);
   const from = timed.length ? timed[0].t : null;
   const to = timed.length ? timed[timed.length - 1].t : null;
-  const found = gaps(merged.attempts, GAP_MS);
-  const hours = perHour(merged.attempts);
+  const found = gaps(rows, GAP_MS);
+  const hours = perHour(rows);
   const hourKeys = Object.keys(hours).map(Number).sort((a, b) => a - b);
   const losses = {};
-  for (const a of merged.attempts) if (a.v === 'lost') losses[a.why || 'unknown'] = (losses[a.why || 'unknown'] || 0) + 1;
+  for (const a of rows) if (a.v === 'lost') losses[a.why || 'unknown'] = (losses[a.why || 'unknown'] || 0) + 1;
   const cuts = {};
   const doctors = {};
   let storeErrors = 0;
@@ -156,15 +262,40 @@ function report(snapshots) {
   }
   const last = good[good.length - 1].data;
   const ci = run.catchCi;
-  const sessions = readSessions(from, to);
+  const cap = nightCapMs(good);
+  const posts = good.map(snapshotTime).filter((t) => t != null);
+  const lastPost = posts.length ? Math.max.apply(null, posts) : null;
+  const sessions = readSessions(from, Math.max(to || 0, lastPost || 0) + cap);
+  const cov = coverageOf(good, rows, sessions, { ignored });
   const lines = [];
 
   lines.push('# Overnight run' + (from ? ' · ' + dayClock(from) + ' → ' + (to ? dayClock(to) : '?') : ''));
   lines.push('');
+  lines.push('## Coverage');
+  lines.push('');
+  if (window) {
+    lines.push('window ' + dayClock(window.from) + ' → ' + dayClock(window.to) +
+      (ignored ? ' · ' + ignored + ' from other nights ignored' : ''));
+  }
   lines.push([
-    good.length + ' snapshots',
-    merged.unique + ' attempts (' + merged.repeated + ' repeated rows merged)',
-    trimmedIssues(snapshots).length + ' unreadable',
+    'captured ' + (cov.firstPostAt ? dayClock(cov.firstPostAt) : '?') + ' → ' + (cov.lastPostAt ? dayClock(cov.lastPostAt) : '?'),
+    cov.snapshots + ' snapshots',
+  ].join(' · '));
+  if (cov.verdict === 'complete') {
+    lines.push('newest attempt ' + dayClock(cov.newest) + ' · sessions logged until ' + dayClock(cov.sessionEnd) + ' · complete');
+  } else if (cov.verdict === 'truncated') {
+    lines.push('newest attempt ' + dayClock(cov.newest) + ' · sessions logged until ' + dayClock(cov.sessionEnd) + ' · ' +
+      dur(cov.missingMs) + ' unaccounted — ' +
+      (cov.stopped === 'capture'
+        ? 'the capture stopped at ' + (cov.lastPostAt ? clock(cov.lastPostAt) : '?')
+        : 'posts kept landing, but no attempt was recorded after ' + clock(cov.newest)));
+  } else {
+    lines.push('newest attempt ' + (cov.newest ? dayClock(cov.newest) : '?') + ' · no session row to bound the night');
+  }
+  lines.push('');
+  lines.push([
+    rows.length + ' attempts (' + merged.repeated + ' repeated rows merged' + (outside ? ' · ' + outside + ' outside the window' : '') + ')',
+    trimmedIssues(picked).length + ' unreadable',
     storeErrors + ' store errors',
   ].join(' · '));
   lines.push('');
@@ -241,7 +372,12 @@ function report(snapshots) {
     for (const s of sessions) lines.push('| ' + dayClock(s.time) + ' | ' + s.minutes + ' | ' + s.catches + ' | ' + s.reason + ' |');
   }
   lines.push('');
-  return lines.join('\n');
+  return { text: lines.join('\n'), coverage: cov, snapshots: picked };
+}
+
+/** The page itself, for callers and tests that only want the text. */
+function report(snapshots, opts) {
+  return analyze(snapshots, opts).text;
 }
 
 function trimmedIssues(snapshots) {
@@ -250,20 +386,60 @@ function trimmedIssues(snapshots) {
 
 if (require.main === module) {
   const args = process.argv.slice(2);
-  // The server writes wherever FISHSERVE_RUNS points; read the same place by default.
-  const targets = args.length ? args : [process.env.FISHSERVE_RUNS || path.join(ROOT, 'data', 'runs')];
-  const snapshots = loadSnapshots(targets);
-  if (!snapshots.length) {
-    console.error('no snapshots in ' + targets.join(', ') + ' - run scripts/overnight-export.js in the page, or paste data/runs here');
-    process.exitCode = 1;
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log([
+      'usage: node scripts/overnight-report.js [--all | --hours N | --since ISO] [file.json ...]',
+      '',
+      '  default        the last 12 hours ending with the newest snapshot',
+      '  --hours N      change that window',
+      '  --since ISO    start at an explicit time instead (e.g. 2026-11-17T18:00:00Z)',
+      '  --all          merge every snapshot in the directory, as before',
+      '  file.json ...  read exactly these files, with no window',
+    ].join('\n'));
+    return;
+  }
+  const files = [];
+  const opts = { night: true };
+  let bad = '';
+  for (let i = 0; i < args.length && !bad; i++) {
+    const a = args[i];
+    if (a === '--all') opts.night = false;
+    else if (a === '--hours') {
+      const n = Number(args[++i]);
+      if (!(n > 0)) bad = '--hours needs a positive number';
+      else opts.hours = n;
+    } else if (a === '--since') {
+      const at = Date.parse(args[++i]);
+      if (!Number.isFinite(at)) bad = '--since needs a date, e.g. 2026-11-17T18:00:00Z';
+      else opts.since = at;
+    } else if (a.startsWith('--')) bad = 'unknown option ' + a;
+    else files.push(a);
+  }
+  if (bad) {
+    console.error(bad + ' (try --help)');
+    process.exitCode = 2;
   } else {
-    console.log(report(snapshots));
-    const bad = trimmedIssues(snapshots);
-    if (bad.length) {
-      console.error('unreadable: ' + bad.join('; '));
+    if (files.length) opts.night = false;   // an explicit file list is the night
+    const targets = files.length ? files : [process.env.FISHSERVE_RUNS || path.join(ROOT, 'data', 'runs')];
+    const snapshots = loadSnapshots(targets);
+    if (!snapshots.length) {
+      console.error('no snapshots in ' + targets.join(', ') + ' - run scripts/overnight-export.js in the page, or paste data/runs here');
       process.exitCode = 1;
+    } else {
+      const result = analyze(snapshots, opts);
+      console.log(result.text);
+      const issues = trimmedIssues(result.snapshots);
+      if (issues.length) {
+        console.error('unreadable: ' + issues.join('; '));
+        process.exitCode = 1;
+      }
+      if (!result.coverage) process.exitCode = 1;
+      else if (result.coverage.verdict === 'truncated') process.exitCode = 1;
     }
   }
 }
 
-module.exports = { mergeAttempts, toAttempts, gaps, perHour, loadSnapshots, report, wilson, runSummary };
+module.exports = {
+  analyze, coverageOf, gaps, loadSnapshots, mergeAttempts, nightCapMs, perHour, report, runSummary,
+  selectNight, snapshotTime, toAttempts, wilson,
+};

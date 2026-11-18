@@ -4,7 +4,7 @@ A single-file userscript that plays the lofi.town fishing loop for you: it finds
 
 ![AutoFish running in lofi.town](docs/images/in-game.jpg)
 
-No server, no build step, no account. One file in Tampermonkey and a **Start** button.
+No server is needed to fish, no build step, no account. One file in Tampermonkey and a **Start** button. An optional local fishserve adds overnight capture and the morning report.
 
 ---
 
@@ -50,6 +50,9 @@ Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts c
 | Footer: *clock paused - nothing to bite* | The character is standing. Sit by the water; the session resumes on its own. |
 | Two panels stacked | The script got loaded twice (a second copy, or an old console injection). Reload the page. |
 | Counters climb, no catches | The rod is out but nothing bites: usually a missed reel prompt. Press Stop, sit again, Start. |
+| Amber capture line: *last post failed* | Fishserve stopped, crashed, or the address moved. Start it or click the amber line and enter the current origin. |
+| *capture: no answer - click to change the address* | The panel could not load the sampler from the stored address. Click the line and enter a running fishserve origin. |
+| *capture: the sampler is not running - re-arming* | The panel saw the sampler die and is retrying on a 30 s to 5 min backoff. If fishserve moved, click the amber line. |
 
 ---
 
@@ -65,7 +68,7 @@ Where each control lives, top to bottom:
 | Where | What lives there |
 | :--- | :--- |
 | **On the surface** - the short card in the folded screenshot | The phase chip and build, `Timer`, `catches`, `presses`, `today` against the cap, the catch-history block around that strip (all/today toggle, shiny and kept-day lines, last catch) and the **Start / Pause** plus **Stop** pair. Nothing here sets policy; only those two transport buttons act on the run. |
-| **Session & guards** - folded | The four steppers (Session, Cooldown, Daily time cap, Stop when hidden), Clock window with its from/to times, Cozier popup, Auto-start next run, Resume after reload, Send catches to CSV, and Profile with its add and reset buttons. Everything decided once, opened once. |
+| **Session & guards** - folded | The four steppers (Session, Cooldown, Daily time cap, Stop when hidden), Clock window with its from/to times, Cozier popup, Auto-start next run, Resume after reload, Send catches to CSV, Overnight capture, and Profile with its add and reset buttons. Everything decided once, opened once. |
 | **Diagnostics** - folded | fps with typical/slow/worst frame time, caught of attempts, rare dials and presses landed, per-second detector work, per-dial and per-card milliseconds; click the block for the raw frame report. Read-only. |
 
 The two screenshots are the same card in its two states: [panel.jpg](docs/images/panel.jpg) with both blocks open, [panel-folded.jpg](docs/images/panel-folded.jpg) with them closed.
@@ -73,6 +76,7 @@ The two screenshots are the same card in its two states: [panel.jpg](docs/images
 - **Session / Cooldown / Daily time cap / Clock window** - how long it fishes, how long it rests after, how much game time it may spend per day, and an optional time-of-day window. Every field can be typed (`90`, `1h 30`, `21:30`) as well as stepped; the cap is **fishing time**, not a fish limit, and 24 h is reachable.
 - **Pause / Resume, Stop, Start now** - Pause holds the current session (no cooldown, no lost time); Stop ends it and starts the rest. A daily-cap or clock-window stop does not start a cooldown, and **Start now** skips the self-imposed rest after a confirmation.
 - **Stop when hidden / Auto-start next run / Resume after reload / Send catches to CSV / Profile** - page-hidden limit, automatic next session after a rest, opt-in reload resume, opt-in local CSV POST, and which catch history this account uses. The catch-history line has an **all/today** toggle and a confirm-guarded reset for the current profile.
+- **Overnight capture** - posts a run snapshot to your local fishserve immediately and every five minutes, and loads the sampler again after a reload. It needs fishserve running; see [Overnight capture](#overnight-capture). The whole row is the switch.
 - **Cozier popup** - hides the in-session Cozier upsell. Cosmetic only: a free account still cannot fish in a focus session.
 - **Pause in focus sessions** - pauses the run while a focus session runs (solo or together) and resumes when it ends. It draws nothing over the game: the cast prompt is painted into the game's canvas and cannot be removed by a page script.
 - **Diagnostics** - fps, typical/slow/worst frame time and per-detector work per second, the same numbers as `__fish.perf()`.
@@ -105,6 +109,7 @@ Per-press timing is scored by whether the game spawned a new triangle (a press i
 - **You seat the character.** Nothing else can.
 - **The game can still win.** Legendary and secret fish need many presses inside a tight clock; a missed click costs the previous gain and the streak.
 - **One tab, one copy.** Loading the script twice mounts two panels.
+- **Overnight capture needs fishserve.** With no server the line stays amber and the night is not recorded; fishing still works.
 - It automates an online game, which can break that game's terms. Your call, your risk. Not affiliated with lofi.town.
 
 ## Keeping it running (background tabs)
@@ -131,6 +136,57 @@ and leave it uncovered. The panel pauses the clock when the page hides; **Stop w
 long it may stay hidden before the session ends (2-60 min, default 2). Switching tabs or minimising
 the window is not recoverable - no page gets frames while it is hidden.
 
+## Overnight capture
+
+The page keeps only the last 250 attempts, so a long run has to be sampled while it happens. The
+panel can do that, but it needs a local fishserve to receive the snapshots:
+
+```bash
+node fishserve.js        # or ./run.sh, which picks a free port and prints it
+```
+
+1. Open **Session & guards** and click anywhere on **Overnight capture**.
+2. The first time, enter the fishserve origin, usually `http://127.0.0.1:8731`.
+3. The line under the meters reads `capture armed · 1 post · last HH:MM`. The first snapshot is
+   posted immediately; after that the sampler posts every five minutes to
+   `data/runs/export-<time>.json`.
+
+The line is the truth:
+
+- **Green** - the sampler is writing. The count and local time are the last successful post.
+- **Amber** - a post failed, the sampler is missing, or the last post is over eleven minutes old
+  (two missed posts).
+- `capture: no answer - click to change the address` means the panel could not load the sampler.
+- Click the amber line, or focus it and press **Enter** or **Space**, when fishserve moved. Enter the
+  new origin; the old sampler is stopped, the pref is saved, and the capture arms again. Cancelling
+  changes nothing.
+- `capture: the sampler is not running · re-arming` means the panel is healing itself; a failed
+  fishserve is retried on a 30 s / 1 m / 2 m / 5 min backoff, so it is not hammered.
+
+The setting survives a reload. The panel loads the sampler again and posts immediately, so a night
+is not lost to an accidental refresh. Capture is off by default and can be switched off by clicking
+anywhere on the row. It only reads `__fish.exportRun()`; it never starts, stops or presses the run.
+
+In the morning:
+
+```bash
+node scripts/overnight-report.js
+```
+
+By default it reads the twelve hours ending with the newest snapshot, not everything ever captured,
+and prints catch rate, width bands, losses, long gaps, cut reasons, doctor verdicts, the last perf
+line and the sessions fishserve logged. The closing **Coverage** section compares the newest attempt
+with the last session row: `complete`, or `X h Y m unaccounted - the capture stopped at HH:MM`. The
+command exits 1 when the night is truncated or unreadable, and 0 otherwise. `--all` merges every
+snapshot; `--hours N` and `--since ISO` move the window. The full contract is
+[docs/specs/2026-11-18-overnight-capture.md](docs/specs/2026-11-18-overnight-capture.md); the
+real-game check is
+[docs/reviews/2026-11-18-capture-address-live.md](docs/reviews/2026-11-18-capture-address-live.md).
+
+![Overnight capture armed, after correcting the address](docs/images/capture-armed-3.9.47.png)
+
+![Overnight capture with a stale address](docs/images/capture-stale-3.9.47.png)
+
 ## Nerd corner
 
 In the browser console on app.lofi.town:
@@ -147,6 +203,10 @@ __fish.accuracy()  // attempts, catch rate, by speed band, by dial width, by cau
 __fish.calibration()       // live timing knobs + width/rarity reports + a narrow-dial hint
 __fish.tune({ marginDeg: 5 })  // apply numeric timing knobs to the live run
 __fish.perf()      // fps, p50/p95 gap, and per-detector ms/call, ms/s and share
+__fish.exportRun() // one JSON string: attempts, interval, perf, doctor verdict
+__overnight.status()  // capture timer: posts, last file, last error
+__overnight.now()     // force a capture snapshot now
+__overnight.stop()    // stop the capture timer (fishing is untouched)
 __fish.opts        // press timing, windows, retry ladders (live-editable)
 ```
 
@@ -161,7 +221,7 @@ On a build older than `perf()` the console has no probe. Paste [scripts/perf-win
 
 ## Optional: the server path
 
-Only needed if you want session records on disk and the `/sessions` and `/diag` endpoints. Catches are sent to the local CSV only when **Send catches to CSV** is on (off by default; the local ledger always works), and session rows are mirrored only for the `default` profile because `sessions.csv` has no profile column.
+Only needed for overnight capture, the morning report, session records on disk and the `/sessions` and `/diag` endpoints. Besides the catch/session routes it serves `/overnight.js` and accepts `POST /export` (one `data/runs/export-<time>.json` per snapshot). Catches are sent to the local CSV only when **Send catches to CSV** is on (off by default; the local ledger always works), and session rows are mirrored only for the `default` profile because `sessions.csv` has no profile column. With the inlined userscript, session rows go to the same origin as the capture, so the report's coverage check has a row to read.
 
 ```bash
 ./run.sh    # picks a free port, prints the install URL and the bookmarklet
@@ -217,7 +277,9 @@ It takes `dist/autofish.user.js` as committed at `v<package.json version>`, requ
 - [AUTOFISH.md](AUTOFISH.md) - design record and every live measurement, in order.
 - [docs/STATE.md](docs/STATE.md) - current position, decisions, next actions.
 - [docs/specs/](docs/specs/) - approved specs. [docs/tasks/](docs/tasks/) - task records.
-- [docs/reviews/](docs/reviews/) - verification reviews.
+- [docs/specs/2026-11-18-overnight-capture.md](docs/specs/2026-11-18-overnight-capture.md) - capture and morning-report contract.
+- [docs/reviews/2026-11-18-capture-address-live.md](docs/reviews/2026-11-18-capture-address-live.md) - the real-game capture check.
+- [docs/reviews/](docs/reviews/) - all verification reviews.
 
 ## Licence
 

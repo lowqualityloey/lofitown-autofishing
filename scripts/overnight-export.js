@@ -7,8 +7,11 @@
  * snapshot every five minutes, which at that rate is ~7 new rows between posts: far below the cap,
  * so consecutive snapshots always overlap.
  *
- * Paste this whole file into the browser console on app.lofi.town while the bot is fishing. It
- * needs fishserve on 127.0.0.1:8731 (POST /export writes data/runs/export-<time>.json).
+ * The panel loads this file on mount when the "Overnight capture" pref is on, and the server hands
+ * it out at /overnight.js, so a page reload re-arms it. It can still be pasted into the console on
+ * app.lofi.town. It needs fishserve (POST /export writes data/runs/export-<time>.json); the panel
+ * sets window.__overnightBase to the origin that served the file, so the POST goes back to that
+ * same host and port. A console paste has no panel and falls back to http://127.0.0.1:8731.
  *
  *   __overnight.now()      force a snapshot now (do this once, to prove the path before leaving)
  *   __overnight.status()   posts so far and the last one
@@ -20,9 +23,10 @@
 (async () => {
   const F = window.__fish;
   if (!F || typeof F.exportRun !== 'function') throw new Error('no __fish.exportRun on this page - is the userscript running?');
-  const PORT = Number(window.__overnightPort) || 8731;
+  const ORIGIN = String(window.__overnightBase || '').replace(/\/+$/, '') ||
+    ('http://127.0.0.1:' + (Number(window.__overnightPort) || 8731));
   const EVERY_MS = 5 * 60 * 1000;
-  const url = 'http://127.0.0.1:' + PORT + '/export';
+  const url = ORIGIN + '/export';
 
   if (window.__overnight) window.__overnight.stop();
   const state = { stopped: false, posts: 0, last: null, lastError: null };
@@ -50,20 +54,22 @@
       console.log('[overnight] ' + attempts + ' attempts (' + reason + ') -> ' + out.file);
       return state.last;
     } catch (e) {
-      state.lastError = 'POST failed: ' + ((e && e.message) || e) + ' - is fishserve running on ' + PORT + '?';
+      state.lastError = 'POST failed: ' + ((e && e.message) || e) + ' - is fishserve running on ' + ORIGIN + '?';
       console.warn('[overnight] ' + state.lastError);
       return null;
     }
   }
 
   timer = setInterval(() => { snap('interval'); }, EVERY_MS);
-  const first = await snap('start');
-  console.log('[overnight] every ' + (EVERY_MS / 60000) + ' min to ' + url +
-    '; __overnight.now() forces one, __overnight.stop() ends it' +
-    (first ? '' : ' - THE FIRST POST FAILED, fix it before leaving'));
+  // Installed before the first POST, not after: the panel loads this file on mount and reads
+  // __overnight.status() right away to show whether capture is armed.
   window.__overnight = {
     now: () => snap('manual'),
     stop: () => { state.stopped = true; clearInterval(timer); console.log('[overnight] stopped (' + state.posts + ' posts)'); },
     status: () => Object.assign({}, state),
   };
+  const first = await snap('start');
+  console.log('[overnight] every ' + (EVERY_MS / 60000) + ' min to ' + url +
+    '; __overnight.now() forces one, __overnight.stop() ends it' +
+    (first ? '' : ' - THE FIRST POST FAILED, fix it before leaving'));
 })();
