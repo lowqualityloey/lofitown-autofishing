@@ -16,9 +16,9 @@ Install only after the morning report has been read and saved. The live tab is s
       server **before** the userscript:
       `systemctl --user restart fishserve`
       `systemctl --user is-active fishserve`
-      `curl -s "http://127.0.0.1:8731/sessions?profile=nepchur&day=$(date +%F)"`
-      The `day` is required: without it the endpoint starts from the UTC date. After the restart
-      expect `"profile":"nepchur"` and a six-column header in `sessions.csv`. An old server
+      `curl -s "http://127.0.0.1:8731/sessions?profile=nepchur"`
+      The endpoint defaults to the server's local day; `&day=$(date +%F)` is equivalent. After the
+      restart expect `"profile":"nepchur"` and a six-column header in `sessions.csv`. An old server
       ignores `profile` and writes five-column rows, so this order matters.
 
 ## Install

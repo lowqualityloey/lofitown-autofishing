@@ -43,6 +43,20 @@ test('POST /session appends a row and GET /sessions totals the day', async () =>
   } finally { server.close(); }
 });
 
+test('GET /sessions without day uses the local day, not the UTC date', async () => {
+  // Local noon is the previous UTC day at UTC+13, so the old UTC default would miss this row.
+  const now = new Date();
+  const noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
+  const line = [noon.toISOString(), noon.toISOString(), 7, 3, 'user', 'default'].join(',');
+  const { server, port } = await boot({ sessions: 'time,started_at,minutes,catches,reason,profile\n' + line + '\n' });
+  try {
+    const body = await (await fetch('http://127.0.0.1:' + port + '/sessions')).json();
+    assert.equal(body.day, localDay(noon.toISOString()), 'the default follows the wall clock');
+    assert.equal(body.minutes, 7, "today's row is included");
+    assert.equal(body.rows.length, 1);
+  } finally { server.close(); }
+});
+
 test("a named profile's session row is kept apart from the default total", async () => {
   const { server, dir, port } = await boot();
   try {

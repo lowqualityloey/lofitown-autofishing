@@ -274,7 +274,9 @@ function createServer() {
     }
 
     if (req.method === 'GET' && route === '/sessions') {
-      const day = query.get('day') || new Date().toISOString().slice(0, 10);
+      // The rows are bucketed by localDay(), and the panel asks with its own local dayKey(); the
+      // default must agree with both, or a NSW morning would query yesterday's UTC date.
+      const day = query.get('day') || localDay(new Date().toISOString());
       // Every profile writes its own rows; a caller that does not say which profile it is asking
       // for gets the default one, never the sum of every account in the file.
       const profile = query.get('profile') || 'default';
