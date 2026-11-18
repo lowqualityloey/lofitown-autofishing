@@ -54,7 +54,7 @@ The full contract is `docs/specs/2026-11-18-overnight-capture.md`.
 
 ## Result
 
-- 3.9.47 is built (360,459 bytes) and the suite is **340 passing / 0 failing**.
+- 3.9.47 is built (360,594 bytes) and the suite is **340 passing / 0 failing**.
 - Live 2026-11-18 in BrowserOS neo on `app.lofi.town`, panel v3.9.47 with a closed shadow root:
   - label click -> prompt -> `http://127.0.0.1:8731`, pref on, `capture armed · 1 post · last 19:09`,
     a 250-attempt export;
