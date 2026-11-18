@@ -1031,10 +1031,14 @@ const SPECIES = [
 
   /** {name, base, variant, shiny, golden, rarity, minWeight, maxWeight, baseGold, known} */
   function speciesInfo(name) {
-    const parts = splitVariant(name);
-    const row = SPECIES_BY_NAME[parts.base.toLowerCase()] || null;
+    const full = tidyName(name);
+    // Some catalogue names start with Shiny/Golden themselves (Golden Shiner, Golden Goldfish).
+    // An exact catalogue hit wins; only an unmatched name is treated as a variant.
+    const exact = SPECIES_BY_NAME[full.toLowerCase()] || null;
+    const parts = exact ? { variant: '', base: full } : splitVariant(full);
+    const row = exact || SPECIES_BY_NAME[parts.base.toLowerCase()] || null;
     return {
-      name: tidyName(name),
+      name: full,
       base: parts.base,
       variant: parts.variant,
       shiny: parts.variant === 'Shiny',
