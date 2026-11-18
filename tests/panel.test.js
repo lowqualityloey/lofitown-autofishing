@@ -266,7 +266,9 @@ test('the panel separates all-time totals from today and lets a profile be clear
   assert.ok(src.includes('function budgetKey'), 'the daily budget is keyed by profile');
   assert.ok(src.includes("p === 'default' ? BUDGET_KEY : BUDGET_PREFIX + p"), 'default keeps the pre-profile budget key');
   assert.ok(src.includes('k.indexOf(BUDGET_PREFIX) === 0'), 'a profile with only a budget stays selectable');
-  assert.ok(src.includes("profileName() !== 'default'"), 'the global server total does not leak into a second profile');
+  assert.ok(src.includes('profile: profileName()'), 'every profile logs its own session row');
+  assert.ok(src.includes("&profile=' + encodeURIComponent(profileName())"), 'the server total is read for this profile only');
+  assert.ok(!src.includes("if (profileName() !== 'default') return;"), 'no profile is excluded from the session log');
 });
 
 test('the panel has a real pause, a separate stop, and typed time fields', () => {

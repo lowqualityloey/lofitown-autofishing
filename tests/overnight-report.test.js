@@ -75,15 +75,17 @@ test('perHour counts only timed attempts, and the totals use the page\'s own sum
   assert.deepEqual(summary.catchCi, wilson(summary.caught, 9), 'the report quotes the page\'s own interval');
 });
 
-function snapshot(file, exportedAt, attempts) {
-  return { file, data: { version: '3.9.46', exportedAt, attempts } };
+function snapshot(file, exportedAt, attempts, profile) {
+  const data = { version: '3.9.46', exportedAt, attempts };
+  if (profile) data.profile = profile;
+  return { file, data };
 }
 
 /** Point the report at a throwaway sessions.csv (rows are CSV lines except the header). */
-function withSessions(rows, fn) {
+function withSessions(rows, fn, head) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-'));
   const csv = path.join(dir, 'sessions.csv');
-  fs.writeFileSync(csv, ['time,started_at,minutes,catches,reason'].concat(rows).join('\n') + '\n');
+  fs.writeFileSync(csv, [head || 'time,started_at,minutes,catches,reason'].concat(rows).join('\n') + '\n');
   const prev = process.env.FISHSERVE_SESSIONS;
   process.env.FISHSERVE_SESSIONS = csv;
   try { return fn(csv); } finally {
@@ -135,6 +137,24 @@ test('a session that outlives the data makes the night truncated', () => {
   });
 });
 
+test("a named profile is bounded by its own session row, never another profile's", () => {
+  const nep = snapshot('export-2026-11-17T14-01-00-000Z.json', '2026-11-17T14:01:00Z',
+    [row(1, 0, 'caught'), row(2, 300, 'caught')], 'nepchur');
+  withSessions([
+    sessionLine(600, 600, 9, 'duration'),   // the default profile, ten hours long
+  ], (csv) => {
+    const lonely = analyze([nep], {});
+    assert.equal(lonely.coverage.verdict, 'unbounded', 'another profile cannot bound this night');
+    assert.doesNotMatch(lonely.text, /unaccounted/);
+
+    fs.appendFileSync(csv, [new Date(at(305)).toISOString(), '', 305, 8, 'duration', 'nepchur'].join(',') + '\n');
+    const bounded = analyze([nep], {});
+    assert.equal(bounded.coverage.verdict, 'complete');
+    assert.match(bounded.text, /\| nepchur \| 305 \| 8 \| duration \|/, 'the matching row is listed with its profile');
+    assert.doesNotMatch(bounded.text, /default \| 600/, 'the other profile is not folded in');
+  }, 'time,started_at,minutes,catches,reason,profile');
+});
+
 test('data that reaches the last session is complete, not a warning', () => {
   const late = snapshot('export-2026-11-17T14-10-00-000Z.json', '2026-11-17T14:10:00Z', [row(1, 0, 'caught'), row(2, 590, 'caught')]);
   withSessions([sessionLine(580, 600, 9, 'duration')], () => {
@@ -159,9 +179,11 @@ test('with no session row the report does not invent a truncation', () => {
   }
 });
 
-test('a session fishserve logs makes the report flag the truncated night', async () => {
-  // The inlined panel posts this row shape to the address it uses for overnight capture; the report
-  // has to see that row (not just a hand-written CSV) as the proof the capture stopped early.
+/**
+ * Boot the real fishserve on a throwaway directory, run fn(port, dir), then close it, restore the
+ * env and delete the directory. Both end-to-end tests post the panel's row through this server.
+ */
+async function withFishserve(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'overnight-session-'));
   const keys = ['FISHSERVE_CATCHES', 'FISHSERVE_SESSIONS', 'FISHSERVE_SHOTS', 'FISHSERVE_RUNS'];
   const prev = {};
@@ -174,13 +196,32 @@ test('a session fishserve logs makes the report flag the truncated night', async
   const server = createServer();
   await new Promise((res) => server.listen(0, '127.0.0.1', res));
   try {
+    return await fn(server.address().port, dir);
+  } finally {
+    await new Promise((res) => server.close(res));
+    for (const k of keys) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function postSession(port, body) {
+  return fetch('http://127.0.0.1:' + port + '/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://app.lofi.town' },
+    body: JSON.stringify(body),
+  });
+}
+
+test('a session fishserve logs makes the report flag the truncated night', async () => {
+  // The inlined panel posts this row shape to the address it uses for overnight capture; the report
+  // has to see that row (not just a hand-written CSV) as the proof the capture stopped early.
+  await withFishserve(async (port) => {
     const now = Date.now();
-    const posted = await fetch('http://127.0.0.1:' + server.address().port + '/session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'https://app.lofi.town' },
-      body: JSON.stringify({
-        started_at: new Date(now - 10 * 3600000).toISOString(), minutes: 600, catches: 12, reason: 'duration',
-      }),
+    const posted = await postSession(port, {
+      started_at: new Date(now - 10 * 3600000).toISOString(), minutes: 600, catches: 12, reason: 'duration',
     });
     assert.equal(posted.status, 200, 'fishserve accepted the row the panel posts');
 
@@ -193,14 +234,37 @@ test('a session fishserve logs makes the report flag the truncated night', async
     assert.equal(out.coverage.stopped, 'capture', 'the logged row outlives the last snapshot');
     assert.match(out.text, /unaccounted/);
     assert.match(out.text, /duration/, 'the row the panel posted is the one compared');
-  } finally {
-    await new Promise((res) => server.close(res));
-    for (const k of keys) {
-      if (prev[k] === undefined) delete process.env[k];
-      else process.env[k] = prev[k];
-    }
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  });
+});
+
+test("a named profile posted to a real fishserve bounds that profile's night", async () => {
+  // End to end: the panel's own body (profile included) through a live fishserve into sessions.csv,
+  // then the morning report reads that file.
+  const profile = 'nepchur';
+  await withFishserve(async (port) => {
+    const now = Date.now();
+    const posted = await postSession(port, {
+      started_at: new Date(now - 10 * 3600000).toISOString(), minutes: 600, catches: 12,
+      reason: 'duration', profile,
+    });
+    assert.equal(posted.status, 200, 'fishserve accepted the row the panel posts');
+    assert.match(fs.readFileSync(process.env.FISHSERVE_SESSIONS, 'utf8'), /,duration,nepchur$/m, 'the row is stored with its profile');
+
+    const night = {
+      file: 'export-now.json',
+      data: {
+        version: '3.9.51', profile,
+        // The night ends with its last attempt: posts stop, the session runs on.
+        exportedAt: new Date(now - 5 * 3600000).toISOString(),
+        attempts: [{ id: 'x-1', n: 1, v: 'caught', t: now - 5 * 3600000, ms: 20000, p: 5, pa: 5, pr: 0, d: 2, w: 80, wb: 'mid', b: 'slow' }],
+      },
+    };
+    const out = analyze([night], {});
+    assert.equal(out.coverage.verdict, 'truncated', 'the logged row bounds the same profile\'s night');
+    assert.equal(out.coverage.stopped, 'capture', 'the posts stopped before the session ended');
+    assert.match(out.text, /5 h 0 m unaccounted/);
+    assert.match(out.text, /\| nepchur \| 600 \| 12 \| duration \|/, 'the row is listed with the profile it was parsed from');
+  });
 });
 
 test('the command reads the newest night by default and every file with --all', () => {

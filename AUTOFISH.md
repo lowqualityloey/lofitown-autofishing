@@ -1,7 +1,12 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.49) - a two-tier panel, with the run surface (phase, clock, counters, rarity
-strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, the diagnostics
+Status: **WORKING (3.9.51) - a proven new triangle is pressed as soon as it appears instead of after
+the wedge leaves the window (slow dials were getting one press and dying), a first-press hold is
+skipped when its budget cannot fit the 150 ms fit it waits for, and session rows carry the profile
+that fished them (`sessions.csv` gained a column, and the morning report bounds a named profile's
+night), on top of a two-tier panel with the
+run surface (phase, clock, counters, rarity strip, Start/Pause) split from the folded Session &
+guards and Diagnostics blocks, the diagnostics
 written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical", "292 of 300 presses
 landed"), and an overnight capture the panel loads again after every page load, retries on its own
 when the sampler dies or a post fails, and reports on its face, on top of

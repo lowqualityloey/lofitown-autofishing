@@ -1,16 +1,18 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, readFileSync, readdirSync, existsSync } = require('node:fs');
+const { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
-function boot() {
+function boot(seed) {
   const dir = mkdtempSync(join(tmpdir(), 'fishserve-'));
   process.env.FISHSERVE_CATCHES = join(dir, 'catches.csv');
   process.env.FISHSERVE_SESSIONS = join(dir, 'sessions.csv');
   process.env.FISHSERVE_SHOTS = join(dir, 'shots');
   process.env.FISHSERVE_RUNS = join(dir, 'runs');
+  // An existing file, for the upgrade path: boot() would otherwise create a fresh header.
+  if (seed && seed.sessions) writeFileSync(join(dir, 'sessions.csv'), seed.sessions);
   delete require.cache[require.resolve('../fishserve.js')];
   const { createServer } = require('../fishserve.js');
   const server = createServer();
@@ -22,6 +24,13 @@ function post(port, route, body) {
   return fetch('http://127.0.0.1:' + port + route, { method: 'POST', body: JSON.stringify(body) });
 }
 
+/** The wall-clock day of an ISO stamp, the same rule the server uses to bucket rows. */
+function localDay(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
 test('POST /session appends a row and GET /sessions totals the day', async () => {
   const { server, dir, port } = await boot();
   try {
@@ -30,7 +39,58 @@ test('POST /session appends a row and GET /sessions totals the day', async () =>
     const body = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=2026-10-27')).json();
     assert.equal(body.minutes, 12);
     assert.equal(body.rows.length, 1);
-    assert.match(readFileSync(join(dir, 'sessions.csv'), 'utf8'), /,12,5,duration/);
+    assert.match(readFileSync(join(dir, 'sessions.csv'), 'utf8'), /,12,5,duration,default/);
+  } finally { server.close(); }
+});
+
+test("a named profile's session row is kept apart from the default total", async () => {
+  const { server, dir, port } = await boot();
+  try {
+    const day = localDay();
+    await post(port, '/session', { minutes: 10, catches: 1, reason: 'user' });
+    await post(port, '/session', { minutes: 25, catches: 4, reason: 'duration', profile: 'nepchur' });
+
+    const def = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + day)).json();
+    assert.equal(def.minutes, 10, 'the default total does not include another profile');
+    assert.equal(def.rows.length, 1);
+    assert.equal(def.rows[0].profile, 'default');
+
+    const nep = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + day + '&profile=nepchur')).json();
+    assert.equal(nep.minutes, 25);
+    assert.equal(nep.rows.length, 1);
+    assert.equal(nep.rows[0].profile, 'nepchur', 'the row names the account it belongs to');
+    assert.match(readFileSync(join(dir, 'sessions.csv'), 'utf8'), /,duration,nepchur/);
+  } finally { server.close(); }
+});
+
+test('a profile is stored as the safe token the panel writes', async () => {
+  const { server, dir, port } = await boot();
+  try {
+    await post(port, '/session', { minutes: 4, catches: 1, reason: 'user', profile: 'nep, chur\n!' });
+    const text = readFileSync(join(dir, 'sessions.csv'), 'utf8');
+    assert.match(text, /,user,nep chur\n/, 'a comma and a newline cannot add a column or a row');
+    const body = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + localDay() + '&profile=nep%20chur')).json();
+    assert.equal(body.minutes, 4);
+    assert.equal(body.rows[0].profile, 'nep chur');
+  } finally { server.close(); }
+});
+
+test('a five-column sessions.csv is read as default and upgraded without rewriting its rows', async () => {
+  const when = '2026-10-27T08:00:00.000Z';
+  const old = 'time,started_at,minutes,catches,reason\n' + when + ',,12,5,duration\n';
+  const { server, dir, port } = await boot({ sessions: old });
+  try {
+    const body = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + localDay(when) + '&profile=default')).json();
+    assert.equal(body.minutes, 12, 'an old row still counts for the default profile');
+    assert.equal(body.rows[0].profile, 'default');
+
+    const text = readFileSync(join(dir, 'sessions.csv'), 'utf8');
+    assert.equal(text.split('\n')[0], 'time,started_at,minutes,catches,reason,profile');
+    assert.match(text, new RegExp(when.replace(/\./g, '\\.') + ',,12,5,duration'), 'the old row is untouched');
+
+    await post(port, '/session', { minutes: 3, catches: 1, reason: 'user', profile: 'alt' });
+    const alt = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + localDay() + '&profile=alt')).json();
+    assert.equal(alt.minutes, 3, 'a new row is written with its profile');
   } finally { server.close(); }
 });
 

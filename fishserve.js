@@ -11,7 +11,7 @@
  *   GET  /overnight.js     the overnight export sampler, so it can be loaded with one <script> tag
  *                          instead of pasted (it posts exportRun() to /export every five minutes)
  *   POST /catch            { t, species, rarity, quality, weight, value } -> a catches.csv row
- *   POST /session          { started_at, minutes, catches, reason }      -> a sessions.csv row
+ *   POST /session          { started_at, minutes, catches, reason, profile } -> a sessions.csv row
  *   POST /diag             { png: data:image/png;base64,... , note, stats } -> shots/diag/ui-<time>.png
  *                          (a run that never sees a prompt uploads one frame so the detector can be fixed)
  *   POST /export           __fish.exportRun() JSON -> data/runs/export-<time>.json, one snapshot per post
@@ -31,7 +31,7 @@ const path = require('path');
 
 const PORT = Number(process.env.FISHSERVE_PORT) || 8731;
 const CATCH_HEAD = ['time', 'species', 'rarity', 'quality', 'weight', 'value'];
-const SESSION_HEAD = ['time', 'started_at', 'minutes', 'catches', 'reason'];
+const SESSION_HEAD = ['time', 'started_at', 'minutes', 'catches', 'reason', 'profile'];
 // The game page and this server's own install page are the only origins that need to talk to it.
 // A wildcard let any page the user visited read the history, append CSV rows, or write PNGs - and
 // CORS alone never stopped a write, so a foreign Origin is rejected outright on POST.
@@ -76,8 +76,31 @@ const cell = (v) => {
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 };
 
+/**
+ * Session fields are tokens, not free text. The panel already reduces a profile to this shape;
+ * doing it here too means a hand-written POST cannot inject a comma, quote or newline (or forge
+ * extra columns), so the report can read the file with a plain comma split.
+ */
+const sessionToken = (v, fallback, max) =>
+  String(v == null ? '' : v).trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, max) || fallback;
+
 const ensure = (file, head) => {
   if (!fs.existsSync(file)) fs.writeFileSync(file, head.join(',') + '\n');
+};
+
+/**
+ * sessions.csv used to have five columns and another build's file may already be on disk. The
+ * profile column is appended to the header, never backfilled into rows: a row without it is the
+ * default profile, so the history keeps the values the old build wrote and only the header line
+ * changes, once, at startup.
+ */
+const ensureSessionHead = (file) => {
+  ensure(file, SESSION_HEAD);
+  const rows = readRows(file);
+  if (rows.length && !splitRow(rows[0].replace(/\r$/, '')).includes('profile')) {
+    rows[0] = SESSION_HEAD.join(',');
+    fs.writeFileSync(file, rows.join('\n') + '\n');
+  }
 };
 
 /** Split one CSV line, honouring the quoting written by cell(). */
@@ -140,7 +163,7 @@ function withHost(text, host) {
 
 function createServer() {
   ensure(CATCHES(), CATCH_HEAD);
-  ensure(SESSIONS(), SESSION_HEAD);
+  ensureSessionHead(SESSIONS());
 
   return http.createServer((req, res) => {
     const url = req.url.split('?');
@@ -192,9 +215,11 @@ function createServer() {
         try {
           const rec = JSON.parse(body);
           if (!Number.isFinite(Number(rec.minutes))) throw new Error('minutes must be a number');
-          const row = [new Date().toISOString(), rec.started_at || '', Number(rec.minutes), Number(rec.catches) || 0, rec.reason || 'user'];
+          const profile = sessionToken(rec.profile, 'default', 24);
+          const reason = sessionToken(rec.reason, 'user', 32);
+          const row = [new Date().toISOString(), rec.started_at || '', Number(rec.minutes), Number(rec.catches) || 0, reason, profile];
           fs.appendFileSync(SESSIONS(), row.map(cell).join(',') + '\n');
-          console.log(['session', row[4], row[2] + ' min', row[3] + ' catches'].join('  '));
+          console.log(['session', profile, row[4], row[2] + ' min', row[3] + ' catches'].join('  '));
           json(res, 200, { ok: true });
         } catch (e) {
           json(res, 400, { ok: false, e: String((e && e.message) || e) });
@@ -250,11 +275,17 @@ function createServer() {
 
     if (req.method === 'GET' && route === '/sessions') {
       const day = query.get('day') || new Date().toISOString().slice(0, 10);
+      // Every profile writes its own rows; a caller that does not say which profile it is asking
+      // for gets the default one, never the sum of every account in the file.
+      const profile = query.get('profile') || 'default';
       const rows = readRows(SESSIONS()).slice(1)
         .map(splitRow)
-        .filter((r) => localDay(r[1] || r[0]) === day)
-        .map((r) => ({ time: r[0], started_at: r[1], minutes: Number(r[2]) || 0, catches: Number(r[3]) || 0, reason: r[4] }));
-      json(res, 200, { day, rows, minutes: rows.reduce((a, r) => a + r.minutes, 0) });
+        .filter((r) => localDay(r[1] || r[0]) === day && (r[5] || 'default') === profile)
+        .map((r) => ({
+          time: r[0], started_at: r[1], minutes: Number(r[2]) || 0, catches: Number(r[3]) || 0,
+          reason: r[4], profile: r[5] || 'default',
+        }));
+      json(res, 200, { day, profile, rows, minutes: rows.reduce((a, r) => a + r.minutes, 0) });
       return;
     }
 
