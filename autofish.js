@@ -259,6 +259,19 @@
   }
 
   /**
+   * Can the first-press hold possibly mature before its budget runs out?
+   *
+   * The gate only clears once the fit has firstPressMinSpanMs (150 ms) of history. A budget
+   * shorter than that can never reach it: the hold would expire and press on the same two-point
+   * fit it had at the lock, having only delayed the press. Measured live 2026-11-18: 37 dials
+   * held and 37 forced - every hold was wasted - so a budget that cannot fit the fit is skipped.
+   */
+  function firstPressCanMature(budgetMs, o) {
+    const need = o && o.firstPressMinSpanMs != null ? o.firstPressMinSpanMs : 150;
+    return budgetMs >= need;
+  }
+
+  /**
    * How long to wait before the next whole-surface dial recovery pass, in ms.
    *
    * Measured live 2026-11-02 (3.9.10): one recovery pass is a ~257k-test annulus sweep costing
@@ -458,6 +471,16 @@
       if (Math.abs(wrap180(Number(s.delta) - predicted)) > (opts.jumpDeg || 25)) return true;
     }
     return false;
+  }
+  /**
+   * May this frame re-arm the press gate?
+   *
+   * A proven new triangle is the only licence to press again: an unchanged triangle must never
+   * re-arm, or the next frame would double-press it (the game subtracts the last gain). The cap
+   * still guards against a runaway if the game stops accepting input.
+   */
+  function rearmReady(proven, presses, max) {
+    return !!proven && presses < (max || 12);
   }
   /**
    * Speed band a press is scored in. The verified win rate is only meaningful per band: a dial at
@@ -3939,64 +3962,60 @@ const SPECIES = [
       if (F.pressesThisDial === 0 &&
           (Number(s.width) < (F.opts.firstPressMaxWidthDeg || 60) ||
            Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
-        const heldMs = t - (F.geoAt || t);
         const stable = fitStable(s.fit, F.opts);
-        // How long the hold has lasted against one pass of the arc. Above 1 it skipped whole
-        // rotations - the 3.9.9 "it did a round turn" report. 3.9.12 cannot exceed 0.4 by
-        // construction, so this number is also the regression witness doctor() reads.
-        // Full turns of the arc waited through so far. This is the user-visible quantity - the
-        // owner reported "it does a round turn or more" - and unlike a ratio against the
-        // instantaneous width/omega it does not swing when the spin estimate spikes. 3.9.12 cannot
-        // pass 1 by construction; 3.9.9's fixed 2500 ms ceiling passed 2 or more on a fast dial.
-        const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
-        if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
         // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
         // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
         const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
-        const giveUp = heldMs >= budget;
-        if (!stable && !giveUp) {
-          if (!F.geo._firstHeld) {
-            F.geo._firstHeld = true;
-            F.stats.firstPressHeld = (F.stats.firstPressHeld || 0) + 1;
-            L('first press held', {
+        // A budget too short for the fit can only delay the press; see firstPressCanMature().
+        if (!stable && firstPressCanMature(budget, F.opts)) {
+          const heldMs = t - (F.geoAt || t);
+          // Full turns of the arc waited through so far. This is the user-visible quantity - the
+          // owner reported "it does a round turn or more" - and unlike a ratio against the
+          // instantaneous width/omega it does not swing when the spin estimate spikes.
+          const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
+          if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
+          if (heldMs < budget) {
+            if (!F.geo._firstHeld) {
+              F.geo._firstHeld = true;
+              F.stats.firstPressHeld = (F.stats.firstPressHeld || 0) + 1;
+              L('first press held', {
+                width: Math.round(Number(s.width) || 0),
+                omega: s.omega == null ? null : Math.round(s.omega),
+                fitN: s.fit ? s.fit.n : 0,
+                fitSpan: s.fit ? Math.round(s.fit.span) : 0,
+                fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
+              });
+            }
+            F.planReason = 'first-fit';
+            cancelPend();
+            return;
+          }
+          if (!F.geo._firstForced) {
+            F.geo._firstForced = true;
+            F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
+            L('first press forced', {
+              heldMs: Math.round(heldMs),
+              budget: Math.round(budget),
               width: Math.round(Number(s.width) || 0),
               omega: s.omega == null ? null : Math.round(s.omega),
               fitN: s.fit ? s.fit.n : 0,
-              fitSpan: s.fit ? Math.round(s.fit.span) : 0,
               fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
             });
           }
-          F.planReason = 'first-fit';
-          cancelPend();
-          return;
-        }
-        if (!stable && giveUp && !F.geo._firstForced) {
-          F.geo._firstForced = true;
-          F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
-          L('first press forced', {
-            heldMs: Math.round(heldMs),
-            budget: Math.round(budget),
-            width: Math.round(Number(s.width) || 0),
-            omega: s.omega == null ? null : Math.round(s.omega),
-            fitN: s.fit ? s.fit.n : 0,
-            fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
-          });
         }
       }
-      // Re-arm once the wedge has left the window: one rotation gets one press, and a new
-      // triangle on the same dial is pressed on its next rotation. The earlier 'one press per
-      // dial' rule assumed a press solved the fish; it does not - a fish is many triangles, so
-      // that rule forced a full dial close plus re-lock for every single press and starved slow
-      // dials. The cap only guards against a runaway if the game stops accepting input.
-      // Re-arm for the next rotation. newTriangle() reads geometry (a blink, a width jump, a jump
-      // against the prediction); an accepted press is stronger evidence than any of them and it is
-      // already recorded, so a narrow dial is not skipped just because its new triangle looks like
-      // the old one.
+      // Re-arm the moment a new triangle is proven. newTriangle() reads geometry (a blink, a
+      // width jump, a jump against the prediction); an accepted press is stronger evidence than
+      // any of them. The old rule also waited for the wedge to leave the window
+      // (|delta| > win + 12), which on a slow, wide dial cost almost a full rotation before the
+      // next press: measured live 2026-11-18, 61% of non-final slow dials got exactly one press,
+      // and a 140 deg / 62 deg/s dial lived 2.0 s against a 4.45 s leave-and-return. spawnProven
+      // is the safety check - it is false for an unchanged triangle - and planPress still holds
+      // each press to pressGapMs. The cap only guards against a runaway if the game stops
+      // accepting input.
       const spawnProven = newTriangle(F.pressStamp, s, F.dialBlinks, F.opts) ||
         (F.acceptedAt != null && t - F.acceptedAt <= (F.opts.rearmAcceptedMs || 600));
-      if (F.pressesThisDial < (F.opts.maxPressPerDial || 12) &&
-          Math.abs(plan.delta) > plan.win + 12 &&
-          spawnProven) F.armed = true;
+      if (rearmReady(spawnProven, F.pressesThisDial, F.opts.maxPressPerDial || 12)) F.armed = true;
       if (plan.cancel) cancelPend();
       if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
       if (plan.press) doPress(s, 'frame');

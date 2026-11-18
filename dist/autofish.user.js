@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.49
+// @version      3.9.51
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.49" };
+  const F = { version: "3.9.51" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -277,6 +277,19 @@ window.__autofishInstalled = true;
   }
 
   /**
+   * Can the first-press hold possibly mature before its budget runs out?
+   *
+   * The gate only clears once the fit has firstPressMinSpanMs (150 ms) of history. A budget
+   * shorter than that can never reach it: the hold would expire and press on the same two-point
+   * fit it had at the lock, having only delayed the press. Measured live 2026-11-18: 37 dials
+   * held and 37 forced - every hold was wasted - so a budget that cannot fit the fit is skipped.
+   */
+  function firstPressCanMature(budgetMs, o) {
+    const need = o && o.firstPressMinSpanMs != null ? o.firstPressMinSpanMs : 150;
+    return budgetMs >= need;
+  }
+
+  /**
    * How long to wait before the next whole-surface dial recovery pass, in ms.
    *
    * Measured live 2026-11-02 (3.9.10): one recovery pass is a ~257k-test annulus sweep costing
@@ -476,6 +489,16 @@ window.__autofishInstalled = true;
       if (Math.abs(wrap180(Number(s.delta) - predicted)) > (opts.jumpDeg || 25)) return true;
     }
     return false;
+  }
+  /**
+   * May this frame re-arm the press gate?
+   *
+   * A proven new triangle is the only licence to press again: an unchanged triangle must never
+   * re-arm, or the next frame would double-press it (the game subtracts the last gain). The cap
+   * still guards against a runaway if the game stops accepting input.
+   */
+  function rearmReady(proven, presses, max) {
+    return !!proven && presses < (max || 12);
   }
   /**
    * Speed band a press is scored in. The verified win rate is only meaningful per band: a dial at
@@ -3957,64 +3980,60 @@ const SPECIES = [
       if (F.pressesThisDial === 0 &&
           (Number(s.width) < (F.opts.firstPressMaxWidthDeg || 60) ||
            Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
-        const heldMs = t - (F.geoAt || t);
         const stable = fitStable(s.fit, F.opts);
-        // How long the hold has lasted against one pass of the arc. Above 1 it skipped whole
-        // rotations - the 3.9.9 "it did a round turn" report. 3.9.12 cannot exceed 0.4 by
-        // construction, so this number is also the regression witness doctor() reads.
-        // Full turns of the arc waited through so far. This is the user-visible quantity - the
-        // owner reported "it does a round turn or more" - and unlike a ratio against the
-        // instantaneous width/omega it does not swing when the spin estimate spikes. 3.9.12 cannot
-        // pass 1 by construction; 3.9.9's fixed 2500 ms ceiling passed 2 or more on a fast dial.
-        const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
-        if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
         // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
         // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
         const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
-        const giveUp = heldMs >= budget;
-        if (!stable && !giveUp) {
-          if (!F.geo._firstHeld) {
-            F.geo._firstHeld = true;
-            F.stats.firstPressHeld = (F.stats.firstPressHeld || 0) + 1;
-            L('first press held', {
+        // A budget too short for the fit can only delay the press; see firstPressCanMature().
+        if (!stable && firstPressCanMature(budget, F.opts)) {
+          const heldMs = t - (F.geoAt || t);
+          // Full turns of the arc waited through so far. This is the user-visible quantity - the
+          // owner reported "it does a round turn or more" - and unlike a ratio against the
+          // instantaneous width/omega it does not swing when the spin estimate spikes.
+          const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
+          if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
+          if (heldMs < budget) {
+            if (!F.geo._firstHeld) {
+              F.geo._firstHeld = true;
+              F.stats.firstPressHeld = (F.stats.firstPressHeld || 0) + 1;
+              L('first press held', {
+                width: Math.round(Number(s.width) || 0),
+                omega: s.omega == null ? null : Math.round(s.omega),
+                fitN: s.fit ? s.fit.n : 0,
+                fitSpan: s.fit ? Math.round(s.fit.span) : 0,
+                fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
+              });
+            }
+            F.planReason = 'first-fit';
+            cancelPend();
+            return;
+          }
+          if (!F.geo._firstForced) {
+            F.geo._firstForced = true;
+            F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
+            L('first press forced', {
+              heldMs: Math.round(heldMs),
+              budget: Math.round(budget),
               width: Math.round(Number(s.width) || 0),
               omega: s.omega == null ? null : Math.round(s.omega),
               fitN: s.fit ? s.fit.n : 0,
-              fitSpan: s.fit ? Math.round(s.fit.span) : 0,
               fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
             });
           }
-          F.planReason = 'first-fit';
-          cancelPend();
-          return;
-        }
-        if (!stable && giveUp && !F.geo._firstForced) {
-          F.geo._firstForced = true;
-          F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
-          L('first press forced', {
-            heldMs: Math.round(heldMs),
-            budget: Math.round(budget),
-            width: Math.round(Number(s.width) || 0),
-            omega: s.omega == null ? null : Math.round(s.omega),
-            fitN: s.fit ? s.fit.n : 0,
-            fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
-          });
         }
       }
-      // Re-arm once the wedge has left the window: one rotation gets one press, and a new
-      // triangle on the same dial is pressed on its next rotation. The earlier 'one press per
-      // dial' rule assumed a press solved the fish; it does not - a fish is many triangles, so
-      // that rule forced a full dial close plus re-lock for every single press and starved slow
-      // dials. The cap only guards against a runaway if the game stops accepting input.
-      // Re-arm for the next rotation. newTriangle() reads geometry (a blink, a width jump, a jump
-      // against the prediction); an accepted press is stronger evidence than any of them and it is
-      // already recorded, so a narrow dial is not skipped just because its new triangle looks like
-      // the old one.
+      // Re-arm the moment a new triangle is proven. newTriangle() reads geometry (a blink, a
+      // width jump, a jump against the prediction); an accepted press is stronger evidence than
+      // any of them. The old rule also waited for the wedge to leave the window
+      // (|delta| > win + 12), which on a slow, wide dial cost almost a full rotation before the
+      // next press: measured live 2026-11-18, 61% of non-final slow dials got exactly one press,
+      // and a 140 deg / 62 deg/s dial lived 2.0 s against a 4.45 s leave-and-return. spawnProven
+      // is the safety check - it is false for an unchanged triangle - and planPress still holds
+      // each press to pressGapMs. The cap only guards against a runaway if the game stops
+      // accepting input.
       const spawnProven = newTriangle(F.pressStamp, s, F.dialBlinks, F.opts) ||
         (F.acceptedAt != null && t - F.acceptedAt <= (F.opts.rearmAcceptedMs || 600));
-      if (F.pressesThisDial < (F.opts.maxPressPerDial || 12) &&
-          Math.abs(plan.delta) > plan.win + 12 &&
-          spawnProven) F.armed = true;
+      if (rearmReady(spawnProven, F.pressesThisDial, F.opts.maxPressPerDial || 12)) F.armed = true;
       if (plan.cancel) cancelPend();
       if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
       if (plan.press) doPress(s, 'frame');
@@ -5939,13 +5958,12 @@ const SPECIES = [
 
   async function loadToday() {
     // The local budget already answered; the server is only a mirror and may not exist at all
-    // (the inlined userscript has BASE null by design). The server has no profile column, so its
-    // global total must not leak into a second profile's cap.
+    // (the inlined userscript has BASE null by design). Rows carry a profile, so ask for this
+    // profile's day instead of summing every account in the file into this cap.
     var local = baseTodayMs || 0;
     if (!BASE) return;
-    if (profileName() !== 'default') return;
     try {
-      var r = await fetch(BASE + '/sessions?day=' + dayKey(), { cache: 'no-store' });
+      var r = await fetch(BASE + '/sessions?day=' + dayKey() + '&profile=' + encodeURIComponent(profileName()), { cache: 'no-store' });
       var j = await r.json();
       var server = (j.minutes || 0) * 60000;
       // Whichever knows about more fishing today wins; a failed fetch keeps the local budget.
@@ -5959,14 +5977,13 @@ const SPECIES = [
     // is nowhere to log and the local budget has to answer alone.
     var server = BASE || captureServer();
     if (!server) return;
-    // fishserve's sessions.csv has no profile column. Mirroring a second profile's rows there
-    // would contaminate the default profile's day total on the next load.
-    if (profileName() !== 'default') return;
+    // Every profile logs its own row: sessions.csv ends with a profile column, so the morning
+    // report can bound a named profile's night and loadToday() reads back only this profile.
     try {
       fetch(server + '/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ started_at: new Date(state.startedAt || Date.now()).toISOString(), minutes: minutes, catches: catches, reason: reason })
+        body: JSON.stringify({ started_at: new Date(state.startedAt || Date.now()).toISOString(), minutes: minutes, catches: catches, reason: reason, profile: profileName() })
       }).then(function (r) { if (!r.ok) banner = 'session log rejected the row'; }).catch(function () { banner = 'session log offline — the session still works'; });
     } catch (e) { banner = 'session log offline — the session still works'; }
   }

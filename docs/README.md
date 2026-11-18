@@ -14,6 +14,7 @@
 | [tasks/TASK-2026-11-02-narrow-band.md](tasks/TASK-2026-11-02-narrow-band.md) | Task record for the narrow band: the press gate that arrived closed, and the per-dial telemetry that proves it. |
 | [tasks/TASK-2026-11-02-press-error.md](tasks/TASK-2026-11-02-press-error.md) | Task record for per-press timing error: how far from the window a press landed, in degrees. |
 | [tasks/TASK-2026-11-18-overnight-capture.md](tasks/TASK-2026-11-18-overnight-capture.md) | Task record for overnight capture and address correction, with acceptance and live evidence. |
+| [tasks/TASK-2026-11-18-install-3.9.51.md](tasks/TASK-2026-11-18-install-3.9.51.md) | Post-night install checklist for 3.9.51: restart fishserve first, install the userscript second, and the counters that prove the re-arm change. |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
 | [reviews/2026-10-27-event-card-freeze.md](reviews/2026-10-27-event-card-freeze.md) | Review of the stuck catch-card bug and its fix. |

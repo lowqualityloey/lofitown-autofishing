@@ -122,12 +122,17 @@ test('a missed surface asks the other canvas before concluding there is no promp
   assert.match(SRC, /if \(!allowDense && inkStats\(alt\)\.density >= 0\.5\) \{ F\.altHit = null; return null; \}/, 'only the blank-adoption path may consider a dense layer');
 });
 
-test('a new dial opens the press gate, and an accepted press re-arms the next rotation', () => {
+test('a new dial opens the press gate, and a proven new triangle re-arms at once', () => {
   // Live 2026-11-02, narrow band 9/12: one lost attempt locked seven dials and pressed three times
   // with nothing rejected. The gate (F.armed) was never opened on arrival at a new spawn.
   assert.match(SRC, /g\._armed0 = !!F\.armed;\s+F\.armed = true;/, 'a new spawn must open the gate');
   assert.match(SRC, /const spawnProven = newTriangle\(F\.pressStamp, s, F\.dialBlinks, F\.opts\) \|\|/);
   assert.match(SRC, /F\.acceptedAt != null && t - F\.acceptedAt <=/, 'an accepted press is proof of a spawn');
+  // Live 2026-11-18: waiting for the wedge to leave the window cost slow dials almost a full
+  // rotation, so 61% of non-final slow dials got one press. A proven triangle is enough.
+  assert.match(SRC, /rearmReady\(spawnProven, F\.pressesThisDial, F\.opts\.maxPressPerDial \|\| 12\)/);
+  assert.doesNotMatch(SRC, /Math\.abs\(plan\.delta\) > plan\.win \+ 12/,
+    'the new triangle is pressed even when the pin is already inside its window');
   assert.match(SRC, /locksDisarmed = \(F\.stats\.locksDisarmed \|\| 0\) \+ 1/, 'a dial that dies unpressed must be countable');
   assert.match(SRC, /!F\.geo\._armed0 && presses === 0/, 'and only that case: arriving shut is normal now');
   assert.match(SRC, /F\.attempt\.dialLog\.push/, 'a dial that passed untouched must be visible per attempt');

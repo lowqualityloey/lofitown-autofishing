@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, dialFallbackWait, dialGhost, ghostBlocked, spinAlive };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, firstPressCanMature, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -178,6 +178,22 @@ test('the first-press hold is a fraction of one pass, not a fixed ceiling', () =
   assert.match(SRC, /firstPressMaxTransitFrac/);
 });
 
+test('the first-press hold is skipped when its budget cannot fit the fit it waits for', () => {
+  // Live 2026-11-18: firstPressHeld and firstPressForced were both 37 - every dial the gate held
+  // was forced anyway, so a short budget only delayed the press on the same two-point fit.
+  assert.equal(T.firstPressCanMature(150, {}), true, 'exactly the 150 ms fit is enough');
+  assert.equal(T.firstPressCanMature(149, {}), false, 'one ms short cannot mature');
+  assert.equal(T.firstPressCanMature(0, {}), false);
+  assert.equal(T.firstPressCanMature(NaN, {}), false);
+  assert.equal(T.firstPressCanMature(120, { firstPressMinSpanMs: 100 }), true,
+    'the fit span is configurable');
+  // A 45 deg dial at 700 deg/s budgets ~26 ms, far below the fit: press on the open frame instead.
+  assert.equal(T.firstPressCanMature(T.firstPressBudget(45, 700, {}), {}), false);
+  // A 165 deg dial at 120 deg/s keeps its long, useful fit.
+  assert.equal(T.firstPressCanMature(T.firstPressBudget(165, 120, {}), {}), true);
+  assert.match(SRC, /firstPressCanMature\(budget, F\.opts\)/, 'the gate consults the budget test');
+});
+
 test('a narrow dial with no spin estimate releases the first press promptly', () => {
   const narrow = T.firstPressBudget(35, null, {});
   assert.ok(narrow > 30 && narrow < 60,
@@ -203,12 +219,13 @@ test('the recovery scan backs off instead of running every second', () => {
   assert.match(SRC, /F\.dialAnyFail = 0; F\.dialAnyAt = 0/);
 });
 
-test('the first press on a narrow or fast dial waits for a mature fit, and the hold is bounded', () => {
+test('the first press on a narrow or fast dial waits for a mature fit, only when the budget can pay', () => {
   assert.match(SRC, /fitStable\(s\.fit, F\.opts\)/);
   assert.match(SRC, /F\.pressesThisDial === 0/);
   assert.match(SRC, /Number\(s\.width\) < \(F\.opts\.firstPressMaxWidthDeg \|\| 60\)/);
   assert.match(SRC, /Math\.abs\(Number\(s\.omega\) \|\| 0\) >= \(F\.opts\.firstPressFastOmega \|\| 300\)/);
-  assert.match(SRC, /const giveUp = heldMs >= budget/, 'the hold must not starve a dial');
+  assert.match(SRC, /firstPressCanMature\(budget, F\.opts\)/, 'a budget too short for the fit is skipped');
+  assert.match(SRC, /if \(heldMs < budget\)/, 'the hold must not starve a dial');
   assert.match(SRC, /F\.stats\.firstPressHeld/);
   assert.match(SRC, /F\.stats\.firstPressForced/);
   assert.match(SRC, /L\('first press held'/);
@@ -431,6 +448,34 @@ test('newTriangle: the ring blinking out twice is a new spawn', () => {
   const press = { delta: 0, width: 120, t: 1000 };
   const s = { delta: 10, width: 120, t: 1100, omega: 300 };
   assert.equal(T.newTriangle(press, s, 2, {}), true);
+});
+
+test('a proven new triangle under the pin re-arms and presses now; an unchanged one does not', () => {
+  // The frame loop used to demand the wedge leave the window before re-arming, so a new triangle
+  // that spawned with the pin already inside waited a full leave-and-return (live 2026-11-18:
+  // 61% of non-final slow dials got one press). The decision is spawnProven alone; planPress then
+  // takes the open window on the next frame.
+  assert.equal(T.rearmReady(false, 1, 12), false, 'an unchanged triangle must not re-arm');
+  assert.equal(T.rearmReady(true, 1, 12), true, 'a proven spawn re-arms');
+  assert.equal(T.rearmReady(true, 11, 12), true);
+  assert.equal(T.rearmReady(true, 12, 12), false, 'the per-dial cap still stops a runaway');
+  assert.equal(T.rearmReady(true, 0, 0), true, 'a missing cap falls back to 12');
+
+  const opts = { trigger: 'contain', insideNowMs: 60, leadMs: 25, midDeg: 6, marginDeg: 4, horizonMs: 40, replanMs: 8 };
+  const press = { delta: 40, width: 120, t: 992 };
+  const same = { delta: 37.6, width: 120, t: 1000, omega: -300 };   // exactly the predicted rotation
+  const proven = T.newTriangle(press, same, 0, {});
+  assert.equal(proven, false);
+  const held = T.planPress({ t: 1000, width: 120, delta: 40, omega: -300, armed: T.rearmReady(proven, 1, 12) }, opts);
+  assert.equal(held.reason, 'disarmed', 'no spawn, no press');
+  assert.equal(held.press, false);
+
+  const spawned = { delta: 37.6, width: 126, t: 1000, omega: -300 };   // a thickness jump proves it
+  assert.equal(T.newTriangle(press, spawned, 0, {}), true);
+  assert.equal(Math.abs(40) > 59 + 12, false, 'the pin is already inside the new window');
+  const planned = T.planPress({ t: 1000, width: 126, delta: 40, omega: -300, armed: T.rearmReady(true, 1, 12) }, opts);
+  assert.equal(planned.reason, 'inside-now');
+  assert.equal(planned.press, true, 'pressed on the next plan, with no rotation wait');
 });
 
 test('newTriangle: continuous rotation with no jump stays one triangle', () => {

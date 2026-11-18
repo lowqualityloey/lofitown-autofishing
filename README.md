@@ -90,8 +90,8 @@ The two screenshots are the same card in its two states: [panel.jpg](docs/images
 
 - **Finds prompts in pixels.** The game merges the CAST!/REEL! prompts and the reel dial into its WebGL renderer canvas, so detection runs from a wrapper around the renderer's `render()` and reads the frame the game just painted; a `requestAnimationFrame` read sees a cleared buffer.
 - **Reads without allocating.** The renderer's WebGL buffer is read with `readPixels` into one reused array instead of a fresh `getImageData` copy for every box; the 2D copy remains the fallback. Live 3.9.12 in the owner's tab: **140.5 fps, p95 11.2 ms, one 91 ms long task in ten seconds**; the same tab on 3.9.9 read 106.8 fps with a 250-285 ms stall every second while it waited for a bite.
-- **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, and containment takes an already-open window (`inside-now`) rather than waiting almost a full rotation when the pin is past the midpoint.
-- **Holds the first press on a hard dial.** On a narrow (<60 deg) or fast (>=300 deg/s) dial, the first press waits up to 2.5 s for a stable spin fit instead of firing on a noisy estimate.
+- **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, and containment takes an already-open window (`inside-now`) rather than waiting almost a full rotation when the pin is past the midpoint. After a press, a proven new triangle re-arms at once, so a wedge already under the pin is pressed immediately instead of after it leaves and comes back.
+- **Holds the first press only when it can pay.** On a narrow (<60 deg) or fast (>=300 deg/s) dial the first press may wait for a stable spin fit, but only when the wait (a fraction of one pass, capped at 2.5 s) is long enough to fit the 150 ms fit it is waiting for; a faster dial presses on its first open frame instead of burning the window on a hold that would expire anyway.
 - **Remembers the dial.** The reel widget's circle is saved per canvas size and tried before any search. If the hint is wrong, one whole-surface pass finds the green wedge and recovers the lock - a fresh run no longer needs a prompt to find its first dial.
 - **Scores fish, not clicks.** One fish is many presses (the game shows a level bar), so the unit is the *fish attempt*: it opens at the first dial lock and closes at a parsed catch or when the cast prompt returns. A win is only counted when the catch card's text parses to a species.
 - **Keeps a ledger.** `localStorage` key `autofish:log:v1:<profile>`: per-species count and best weight, per rarity and per day totals (including that day's shiny/golden), 60 day buckets, and the names of any species the catalogue did not recognise. The profile owns its own daily budget (`autofish:budget:v1:<profile>`), so two accounts in one browser never share a history or a cap. A reset button clears the current profile's history after a confirmation; resetting does not delete the profile itself.
@@ -167,6 +167,33 @@ The setting survives a reload. The panel loads the sampler again and posts immed
 is not lost to an accidental refresh. Capture is off by default and can be switched off by clicking
 anywhere on the row. It only reads `__fish.exportRun()`; it never starts, stops or presses the run.
 
+### Running fishserve as a service (WSL)
+
+The panel can heal a sampler; it cannot start a fishserve that died with the terminal that ran it.
+On this machine fishserve is a **systemd user unit inside WSL**, so it outlives the shell, the agent
+session and a distro restart:
+
+- **Unit**: `~/.config/systemd/user/fishserve.service` - `WorkingDirectory` is the main checkout
+  (`/home/heyloey/personal/lofitown-autofishing`), `Restart=always`, `RestartSec=5`,
+  `WantedBy=default.target`. It runs the resolved node binary, not a PATH lookup.
+- **Start / inspect**: `systemctl --user enable --now fishserve.service`,
+  `systemctl --user status fishserve`, `journalctl --user -u fishserve -f`. There is no log file:
+  the unit's stdout goes to the journal.
+- **Linger**: `loginctl show-user "$USER" -p Linger` must read `Linger=yes`
+  (`loginctl enable-linger "$USER"`). Without it the user manager, and the unit with it, stops when
+  the last login session closes.
+- **Where the data lands**: fishserve resolves `data/runs`, `catches.csv`, `sessions.csv` and `shots/`
+  from `__dirname`, not from the shell's working directory, so the checkout the unit runs from
+  decides the destination. That is why the unit runs from the main checkout - a fishserve started in
+  another worktree writes its snapshots there instead, and the morning report in this one will not
+  see them.
+- **Reboot caveat**: the unit starts when the WSL distro starts, and a Windows reboot does not start
+  the distro by itself. There is deliberately **no logon autostart**: keeping WSL resident around
+  the clock costs RAM for a server that is only needed while fishing. After a reboot, start WSL once
+  by hand (`wsl.exe -d Ubuntu -u heyloey -- true`, or any WSL terminal); the unit comes up with the
+  distro and the panel heals within its 30 s to 5 min backoff. If the line is amber after a reboot,
+  start WSL before changing the address in the panel.
+
 In the morning:
 
 ```bash
@@ -221,7 +248,7 @@ On a build older than `perf()` the console has no probe. Paste [scripts/perf-win
 
 ## Optional: the server path
 
-Only needed for overnight capture, the morning report, session records on disk and the `/sessions` and `/diag` endpoints. Besides the catch/session routes it serves `/overnight.js` and accepts `POST /export` (one `data/runs/export-<time>.json` per snapshot). Catches are sent to the local CSV only when **Send catches to CSV** is on (off by default; the local ledger always works), and session rows are mirrored only for the `default` profile because `sessions.csv` has no profile column. With the inlined userscript, session rows go to the same origin as the capture, so the report's coverage check has a row to read.
+Only needed for overnight capture, the morning report, session records on disk and the `/sessions` and `/diag` endpoints. Besides the catch/session routes it serves `/overnight.js` and accepts `POST /export` (one `data/runs/export-<time>.json` per snapshot). Catches are sent to the local CSV only when **Send catches to CSV** is on (off by default; the local ledger always works), and session rows are written for every profile (`sessions.csv` ends with a `profile` column; rows written before it read as `default`). With the inlined userscript, session rows go to the same origin as the capture, so the report's coverage check has a row to read.
 
 ```bash
 ./run.sh    # picks a free port, prints the install URL and the bookmarklet

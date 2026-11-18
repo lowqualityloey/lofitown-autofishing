@@ -578,13 +578,12 @@
 
   async function loadToday() {
     // The local budget already answered; the server is only a mirror and may not exist at all
-    // (the inlined userscript has BASE null by design). The server has no profile column, so its
-    // global total must not leak into a second profile's cap.
+    // (the inlined userscript has BASE null by design). Rows carry a profile, so ask for this
+    // profile's day instead of summing every account in the file into this cap.
     var local = baseTodayMs || 0;
     if (!BASE) return;
-    if (profileName() !== 'default') return;
     try {
-      var r = await fetch(BASE + '/sessions?day=' + dayKey(), { cache: 'no-store' });
+      var r = await fetch(BASE + '/sessions?day=' + dayKey() + '&profile=' + encodeURIComponent(profileName()), { cache: 'no-store' });
       var j = await r.json();
       var server = (j.minutes || 0) * 60000;
       // Whichever knows about more fishing today wins; a failed fetch keeps the local budget.
@@ -598,14 +597,13 @@
     // is nowhere to log and the local budget has to answer alone.
     var server = BASE || captureServer();
     if (!server) return;
-    // fishserve's sessions.csv has no profile column. Mirroring a second profile's rows there
-    // would contaminate the default profile's day total on the next load.
-    if (profileName() !== 'default') return;
+    // Every profile logs its own row: sessions.csv ends with a profile column, so the morning
+    // report can bound a named profile's night and loadToday() reads back only this profile.
     try {
       fetch(server + '/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ started_at: new Date(state.startedAt || Date.now()).toISOString(), minutes: minutes, catches: catches, reason: reason })
+        body: JSON.stringify({ started_at: new Date(state.startedAt || Date.now()).toISOString(), minutes: minutes, catches: catches, reason: reason, profile: profileName() })
       }).then(function (r) { if (!r.ok) banner = 'session log rejected the row'; }).catch(function () { banner = 'session log offline — the session still works'; });
     } catch (e) { banner = 'session log offline — the session still works'; }
   }

@@ -199,13 +199,24 @@ function coverageOf(good, attempts, sessions, opts) {
   };
 }
 
-function readSessions(from, to) {
+/**
+ * Rows for the profiles this night's snapshots name. fishserve writes profile and reason as
+ * tokens (no commas), so a plain split is enough; a five-column row from an older build is the
+ * default profile. A profile with no row of its own must not be bounded by another profile's row,
+ * or a second account's session would invent hours the capture never had.
+ */
+function readSessions(from, to, profiles) {
   const file = process.env.FISHSERVE_SESSIONS || path.join(ROOT, 'sessions.csv');
   if (!fs.existsSync(file)) return [];
+  const want = profiles && profiles.size ? profiles : null;
   return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).slice(1)
     .map((line) => line.split(','))
     .filter((r) => r.length >= 5)
-    .map((r) => ({ time: Date.parse(r[0]), started_at: r[1], minutes: Number(r[2]) || 0, catches: Number(r[3]) || 0, reason: r[4] }))
+    .map((r) => ({
+      time: Date.parse(r[0]), started_at: r[1], minutes: Number(r[2]) || 0,
+      catches: Number(r[3]) || 0, reason: r[4], profile: r[5] || 'default',
+    }))
+    .filter((r) => !want || want.has(r.profile))
     // The upper bound is given by the caller: a session that ended after the last snapshot is the
     // one row that proves the capture stopped, so it must not be filtered out.
     .filter((r) => !from || (r.time >= from - 3600_000 && (!to || r.time <= to)));
@@ -265,7 +276,9 @@ function analyze(snapshots, opts) {
   const cap = nightCapMs(good);
   const posts = good.map(snapshotTime).filter((t) => t != null);
   const lastPost = posts.length ? Math.max.apply(null, posts) : null;
-  const sessions = readSessions(from, Math.max(to || 0, lastPost || 0) + cap);
+  // Coverage is per profile: only rows from the profiles these snapshots name can bound the night.
+  const profiles = new Set(good.map((s) => s.data.profile).filter(Boolean));
+  const sessions = readSessions(from, Math.max(to || 0, lastPost || 0) + cap, profiles);
   const cov = coverageOf(good, rows, sessions, { ignored });
   const lines = [];
 
@@ -367,9 +380,9 @@ function analyze(snapshots, opts) {
   lines.push('');
   if (!sessions.length) lines.push('_none in this window_');
   else {
-    lines.push('| ended | minutes | catches | reason |');
-    lines.push('| :--- | ---: | ---: | :--- |');
-    for (const s of sessions) lines.push('| ' + dayClock(s.time) + ' | ' + s.minutes + ' | ' + s.catches + ' | ' + s.reason + ' |');
+    lines.push('| ended | profile | minutes | catches | reason |');
+    lines.push('| :--- | :--- | ---: | ---: | :--- |');
+    for (const s of sessions) lines.push('| ' + dayClock(s.time) + ' | ' + s.profile + ' | ' + s.minutes + ' | ' + s.catches + ' | ' + s.reason + ' |');
   }
   lines.push('');
   return { text: lines.join('\n'), coverage: cov, snapshots: picked };
