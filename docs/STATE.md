@@ -28,8 +28,8 @@
 - **Target Release / Deadline**: v3.9.48 shipped 2026-11-18 (the Golden-prefix species lookup);
   v3.9.47 is the night's installed build. The real overnight acceptance run is in progress:
   fishserve on 8731, first snapshot at 06:39:13Z, panel running.
-- **Current Working Branch**: `proto/focus-prompt-mask` at the 3.9.48 release commit `82da2b3`; `main` at
-  the Golden-prefix merge `be89cb3`; tag `v3.9.48`; 3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
+- **Current Working Branch**: `proto/focus-prompt-mask` carries the 3.9.48 release work; `main`
+  carries its release and docs merges; tag `v3.9.48` on `82da2b3`; 3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
   modification and stays out of every commit.
 - **Last Updated**: 2026-11-18
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
