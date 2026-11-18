@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.47) - a two-tier panel, with the run surface (phase, clock, counters, rarity
+Status: **WORKING (3.9.48) - a two-tier panel, with the run surface (phase, clock, counters, rarity
 strip, Start/Pause) split from the folded Session & guards and Diagnostics blocks, the diagnostics
 written in words instead of shorthand ("Caught 144 of 145", "6.9 ms typical", "292 of 300 presses
 landed"), and an overnight capture the panel loads again after every page load, retries on its own
@@ -358,6 +358,15 @@ origin it tried, and no longer throws inside its own error handler (the message 
 removed `PORT`), so the post-failure amber line is reachable. The whole "Overnight capture"
 row is the control, not just the 14 px on/off button, because the status line tells the owner to click
 the row's name.
+
+3.9.48 fixes the species lookup behind an `Unknown` row that was not unknown. `speciesInfo()` split a
+`Shiny`/`Golden` prefix off the card's name before asking the catalogue, so the catalogue species
+`Golden Shiner` became a base species `Shiner` that does not exist and was logged `Unknown`, while
+`Golden Goldfish` became a Golden `Goldfish` and inherited the wrong tier. The full name is now
+matched against the catalogue first and split only when there is no exact species, so real variants
+keep the old path (`Golden Tuna` is still a Golden `Tuna`, `Shiny Boxfish` a Shiny `Boxfish`). A
+regression test pins both catalogue species and both variant forms; the ledger's existing `Unknown`
+rows are left alone and only future catches use the corrected lookup.
 
 ## 2026-11-18 live verification - 3.9.47 in the real game
 
