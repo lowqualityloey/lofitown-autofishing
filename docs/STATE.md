@@ -22,11 +22,13 @@
   current build and release: a catalogue name that begins with `Golden` is a species, not a variant,
   so `Golden Shiner` (Common) and `Golden Goldfish` (Legendary) no longer log as `Unknown` or take
   the wrong tier. It is **not installed** while the overnight run is live - the tab keeps executing
-  the 3.9.47 it loaded, and no install or reload happens until the night is read.
+  the 3.9.47 it loaded, and no install or reload happens until the night is read. It was released as
+  `v3.9.48` (commit `82da2b3`, merged into `main` as `fc2ae5a`, 2026-11-18): 341 tests, 360,908
+  bytes, sha256 `2774e9e90770`, source release and public mirror identical.
 - **Target Release / Deadline**: v3.9.48 shipped 2026-11-18 (the Golden-prefix species lookup);
   v3.9.47 is the night's installed build. The real overnight acceptance run is in progress:
   fishserve on 8731, first snapshot at 06:39:13Z, panel running.
-- **Current Working Branch**: `proto/focus-prompt-mask` at the 3.9.48 release commit; `main` at
+- **Current Working Branch**: `proto/focus-prompt-mask` at the 3.9.48 release commit `82da2b3`; `main` at
   the Golden-prefix merge `be89cb3`; tag `v3.9.48`; 3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
   modification and stays out of every commit.
 - **Last Updated**: 2026-11-18
@@ -296,12 +298,13 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. **Done - release v3.9.47.** Commit `6dfbbab` carries the code and docs with the required
-   `HeyLoey-Milestone:` trailer; tag `v3.9.47` is on it, `main` merged as `946a36b`, and the branch,
-   tag and `main` are pushed. The GitHub release exists and both the source asset and the public
-   mirror are the 360,594-byte build; `node scripts/release.js --check` passes.
-2. **Done - installed.** Tampermonkey was updated from the public mirror and the dashboard lists
-   3.9.47 (360 KB); after a reload `__fish.version` and the panel header both read 3.9.47.
+1. **Done - releases v3.9.47 and v3.9.48.** `v3.9.47` (commit `6dfbbab`, `main` merge `946a36b`)
+   and `v3.9.48` (commit `82da2b3`, `main` merge `fc2ae5a`) both carry the required
+   `HeyLoey-Milestone:` trailer, are tagged and pushed, and have GitHub releases. The 3.9.48 source
+   asset and public mirror are the 360,908-byte build (sha256 `2774e9e90770`), `releases/latest`
+   matches anonymously, and `node scripts/release.js --check` passes.
+2. **Done - 3.9.47 installed; 3.9.48 is not.** Tampermonkey lists 3.9.47 (360 KB) and the overnight
+   tab keeps running it; 3.9.48 was deliberately not installed or reloaded while the night is live.
 3. **In progress - one real night.** Fishserve is on 8731 and the installed panel is armed, with the
    first snapshot at 06:39:13Z (`data/runs/export-2026-11-18T06-39-13-390Z.json`, 250 attempts). The
    old stored address (8732) was corrected through the amber line; the panel is running and the
@@ -389,6 +392,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-18 | lead (Freebuff session) | The morning report reads one night and says whether it was recorded | The 2026-11-17 loss shape - capture dies while the run continues - was invisible to the report: `gaps()` only measures holes *between* attempts, so a night whose last attempt is 02:00 printed as a clean night ending at 02:00, and the default command merged every JSON in `data/runs`, so from the second night on catch rate and gaps mixed unrelated runs. `scripts/overnight-report.js` now dates each snapshot (`exportedAt`, then the `export-<ISO>` file name, then mtime), anchors a 12 h window on the newest snapshot rather than "now" (`--all`, `--hours`, `--since`, explicit files), leaves attempts the page store carried from an earlier run out of the totals (the summary counts them), and compares the newest attempt with the last session `sessions.csv` logged - including a session that ended after the data, which the old ±1 h filter dropped. The new `## Coverage` section prints `complete`, `X h Y m unaccounted - the capture stopped at HH:MM` (or "posts kept landing, but no attempt was recorded after"), or says no session row bounds the night; the CLI exits 1 only on a truncated or unreadable night. Dates are local everywhere (a UTC date beside a local clock made a cross-midnight night read backwards). 335 tests. | `AUTOFISH.md` overnight section; `tests/overnight-report.test.js` |
 | 2026-11-17 | lead (Freebuff session) | A page load no longer leaves the focus hold on: 3.9.44 | Reported live from Neo: "not doing dial mode catch ... its just hidden even when im not on focus mode". `autofish.prefs` held `focusMode: true` from the mask work, and `mount()` engaged the hold itself (`if (focusPref) setFocusMode(true)`); `focusTick` only auto-releases a hold it saw a session drive, so with the title plain `lofi.town` the page sat `running: true, paused: true` with one rect `{534,258,114,60}` masked, and `session.js` re-paused on every tick's `fact.focus`. Mount now adopts only the setting, and `focusTick()` engages when `inFocusSession()` is true. Pinned by the panel source guard, which fails against the old mount. 325 tests. |
 | 2026-11-18 | lead (Freebuff session) | 3.9.47 live check and release docs | In the real `app.lofi.town` tab (BrowserOS neo; page injection, so Tampermonkey stayed 3.9.46 and a reload would revert), trusted clicks on **Session & guards** then the **Overnight capture** label armed 8731 and posted 250 attempts at 06:09:52Z. Moving fishserve to 8732 and forcing `__overnight.now()` produced the amber `last post failed` line naming 8731; a trusted click on the line accepted 8732 and re-armed (06:11:01Z, repeated 06:12:51Z; 8731 got no further export). The run found the `PORT`-in-`catch` bug, fixed to `ORIGIN` with a rejecting-fetch VM test. Wrote the capture spec, task record and live review, and updated README/AUTOFISH/STATE; 340 tests, dist 360,594 bytes. Released as `v3.9.47` (commit `6dfbbab`), source and public mirror identical at 360,594 bytes / sha256 `b2c072b5e4a2`; installed and verified after reload; overnight run started 06:39:13Z. `run.sh` stayed out. |
+| 2026-11-18 | lead (Freebuff session) | Golden-prefixed catalogue names stay species: 3.9.48 | `speciesInfo()` split `Shiny`/`Golden` off a card's name before consulting the catalogue, so `Golden Shiner` - a real Common species - looked up an absent base `Shiner` and was logged `Unknown` (216 of the live ledger's catches), while `Golden Goldfish` resolved to `Goldfish` and took its tier. The full name is now matched first and only an unmatched name is split, so real variants keep their path (`Golden Tuna` -> Golden/Tuna/Uncommon, `Shiny Boxfish` -> Shiny/Boxfish/Common). A regression test covers both species and both variant forms; focused suite 24/24, full suite 341/341, dist rebuilt to 360,908 bytes. Released as `v3.9.48` (commit `82da2b3`, merge `fc2ae5a`), source and public mirror identical at 360,908 bytes / sha256 `2774e9e90770`, `release.js --check` green. Not installed during the live overnight run; `run.sh` stayed out. | `AUTOFISH.md` 3.9.48; `tests/catchlog.test.js` |
 
 ---
 
