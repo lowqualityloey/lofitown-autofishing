@@ -51,8 +51,8 @@ exactly that.
       without a hold, and can exceed held. Calibration: 3.9.49 was 37/456 = 8.1%; the completed
       3.9.51 run was 6/57 = 10.5%; the larger live 3.9.51 sample was 17/98 = 17.35% at the
       2026-11-19 09:34 read. The cap still catches the all-held 37/37 failure while leaving headroom.
-      The sharper future check is a per-dial held-then-forced counter; until it exists, use this cap
-      with `holdPassesMax`.
+      The next build adds `stats.firstPressHeldForced` for dials that held and then forced; keep
+      this 20% cap as the interim gate until that build is installed.
 
 ## If it regresses
 

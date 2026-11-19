@@ -1,7 +1,7 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.51, installed + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.52 on main; 3.9.51 installed + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
@@ -45,6 +45,9 @@
   `8220a54`); source and public mirror are identical. The morning report exits 1 on the 5 h 30 m
   early gap before the first row; that gap is expected, not a userscript failure. Fishserve runs on
   8731 as a systemd user unit, snapshots are in main's `data/runs`, and the panel remains armed.
+  **3.9.52** is committed to main only - not tagged, not installed: read-only first-press telemetry
+  (`firstPressHeldForced`, counting a held dial that later forced) for the next build; no fishing
+  behavior change; the 20% held cap remains the interim gate.
 - **Current Working Branch**: `proto/focus-prompt-mask` carries the 3.9.49 release work; `main`
   carries its release and docs merges; tag `v3.9.51` on `8220a54`, `v3.9.49` on `de34fd9`,
   `v3.9.48` on `82da2b3`;

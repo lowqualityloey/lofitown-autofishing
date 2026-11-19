@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.51
+// @version      3.9.52
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.51" };
+  const F = { version: "3.9.52" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -287,6 +287,19 @@ window.__autofishInstalled = true;
   function firstPressCanMature(budgetMs, o) {
     const need = o && o.firstPressMinSpanMs != null ? o.firstPressMinSpanMs : 150;
     return budgetMs >= need;
+  }
+
+  /**
+   * Record the dial's single force event. `firstPressForced` counts all forced first presses;
+   * `firstPressHeldForced` is the subset the first-press gate had held first. A held dial that
+   * matures never reaches this marker and stays counted by `firstPressHeld` alone.
+   */
+  function markFirstPressForced(stats, geo) {
+    if (!stats || !geo || geo._firstForced) return false;
+    geo._firstForced = true;
+    stats.firstPressForced = (stats.firstPressForced || 0) + 1;
+    if (geo._firstHeld) stats.firstPressHeldForced = (stats.firstPressHeldForced || 0) + 1;
+    return true;
   }
 
   /**
@@ -3244,7 +3257,7 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0, locksDisarmed: 0,
+      firstPressHeld: 0, firstPressForced: 0, firstPressHeldForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.bands = {}; F.widths = {}; F.rarities = {};
@@ -3346,7 +3359,7 @@ const SPECIES = [
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
-      firstPressHeld: 0, firstPressForced: 0, holdPassesMax: 0, locksDisarmed: 0,
+      firstPressHeld: 0, firstPressForced: 0, firstPressHeldForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
     F.ghostGeo = null;
@@ -4008,9 +4021,7 @@ const SPECIES = [
             cancelPend();
             return;
           }
-          if (!F.geo._firstForced) {
-            F.geo._firstForced = true;
-            F.stats.firstPressForced = (F.stats.firstPressForced || 0) + 1;
+          if (markFirstPressForced(F.stats, F.geo)) {
             L('first press forced', {
               heldMs: Math.round(heldMs),
               budget: Math.round(budget),
@@ -4238,6 +4249,7 @@ const SPECIES = [
         presses: s.presses || 0, shapeHits: s.shapeHits || 0,
         pressAccepted: s.pressAccepted || 0, pressRejected: s.pressRejected || 0,
         firstPressHeld: s.firstPressHeld || 0, firstPressForced: s.firstPressForced || 0,
+        firstPressHeldForced: s.firstPressHeldForced || 0,
         pressAcceptRate: s.pressAccepted + s.pressRejected
           ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
         pressVerdicts: verdicts,
@@ -4430,6 +4442,8 @@ const SPECIES = [
       catchRate: caught + lost ? +(caught / (caught + lost)).toFixed(3) : null,
       presses, pressesPerCatch: caught ? +(presses / caught).toFixed(2) : null,
       pressAccepted: s.pressAccepted || 0, pressRejected: s.pressRejected || 0,
+      firstPressHeld: s.firstPressHeld || 0, firstPressForced: s.firstPressForced || 0,
+      firstPressHeldForced: s.firstPressHeldForced || 0,
       pressAcceptRate: s.pressAccepted + s.pressRejected
         ? +((s.pressAccepted || 0) / (s.pressAccepted + s.pressRejected)).toFixed(3) : null,
       // The honest denominator: only verdicts where the spawn was actually seen.

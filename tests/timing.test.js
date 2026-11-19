@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, firstPressCanMature, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive };')();
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +32,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -227,9 +227,30 @@ test('the first press on a narrow or fast dial waits for a mature fit, only when
   assert.match(SRC, /firstPressCanMature\(budget, F\.opts\)/, 'a budget too short for the fit is skipped');
   assert.match(SRC, /if \(heldMs < budget\)/, 'the hold must not starve a dial');
   assert.match(SRC, /F\.stats\.firstPressHeld/);
-  assert.match(SRC, /F\.stats\.firstPressForced/);
+  assert.match(SRC, /markFirstPressForced\(F\.stats, F\.geo\)/);
   assert.match(SRC, /L\('first press held'/);
   assert.match(SRC, /L\('first press forced'/);
+});
+
+test('a held first press that later forces is counted once per dial', () => {
+  const held = { _firstHeld: true };
+  const stats = { firstPressForced: 0, firstPressHeldForced: 0 };
+  assert.equal(T.markFirstPressForced(stats, held), true);
+  assert.equal(stats.firstPressForced, 1);
+  assert.equal(stats.firstPressHeldForced, 1);
+  assert.equal(T.markFirstPressForced(stats, held), false, 'one force event per dial');
+  assert.equal(stats.firstPressForced, 1);
+  assert.equal(stats.firstPressHeldForced, 1);
+
+  const unheld = {};
+  const unheldStats = { firstPressForced: 0, firstPressHeldForced: 0 };
+  assert.equal(T.markFirstPressForced(unheldStats, unheld), true);
+  assert.equal(unheldStats.firstPressForced, 1);
+  assert.equal(unheldStats.firstPressHeldForced, 0);
+
+  assert.match(SRC, /markFirstPressForced\(F\.stats, F\.geo\)/);
+  assert.match(SRC, /firstPressHeldForced: 0/);
+  assert.match(SRC, /firstPressHeldForced: s\.firstPressHeldForced \|\| 0/);
 });
 
 test('planPress presses only inside the window, and schedules the crossing', () => {
