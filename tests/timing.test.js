@@ -15,7 +15,11 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive, lossDiagnostics };')();
+const refreshStart = SRC.indexOf('function refreshLossDiagnostic');
+const refreshEnd = SRC.indexOf('\n  }', refreshStart);
+if (refreshStart < 0 || refreshEnd < refreshStart) throw new Error('refreshLossDiagnostic is missing from autofish.js');
+const refreshLossDiagnostic = new Function('lossDiagnostics', SRC.slice(refreshStart, refreshEnd) + '\n  }\nreturn refreshLossDiagnostic;')(T.lossDiagnostics);
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -32,7 +36,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive', 'lossDiagnostics']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -251,6 +255,45 @@ test('a held first press that later forces is counted once per dial', () => {
   assert.match(SRC, /markFirstPressForced\(F\.stats, F\.geo\)/);
   assert.match(SRC, /firstPressHeldForced: 0/);
   assert.match(SRC, /firstPressHeldForced: s\.firstPressHeldForced \|\| 0/);
+});
+
+test('cast-prompt loss diagnostics are read-only and explicit', () => {
+  const b = { cx: 104, cy: 250, w: 90, h: 40, via: 'box', glyph: true };
+  const prev = { x: 100, y: 245, at: 1000, n: 1, blockedUntil: 0 };
+  assert.deepEqual(T.lossDiagnostics(b, 1100, prev, true), {
+    promptChannel: 'box', glyph: true, confirmed: true,
+    x: 104, y: 250, w: 90, h: 40, catchCardPending: true,
+  });
+  assert.equal(T.lossDiagnostics(Object.assign({}, b, { via: 'anywhere' }), 1100, prev, false).confirmed, false);
+  assert.equal(T.lossDiagnostics(Object.assign({}, b, { glyph: false }), 1100, prev, false).confirmed, false);
+  assert.equal(T.lossDiagnostics(b, 1100, null, false).confirmed, false);
+  assert.equal(T.lossDiagnostics(b, 4001, prev, false).confirmed, false, 'stale sighting');
+  assert.equal(T.lossDiagnostics(b, 1100, Object.assign({}, prev, { blockedUntil: 1200 }), false).confirmed, false);
+  assert.equal(T.lossDiagnostics(null, 1100, prev, true).promptChannel, null);
+  assert.match(SRC, /const diag = refreshLossDiagnostic\(F\.attempt, b, t, F\.bubblePrev, awaitingCard\)/);
+  const branch = SRC.slice(SRC.indexOf('const b = F.findBubble();'), SRC.indexOf('const b = F.findBubble();') + 1800);
+  assert.ok(branch.indexOf('refreshLossDiagnostic') < branch.indexOf('if (!F.attempt.pendingLoss)'),
+    'the diagnostic must refresh before the pending-only decision guard');
+  assert.match(SRC, /lossDiag: a\.lossDiag \|\| null/);
+  assert.match(SRC, /L\('attempt loss pending', Object\.assign\(\{ n: F\.attempt\.n \}, diag\)\)/);
+});
+
+test('a pending loss refreshes lossDiag on a later prompt sighting', () => {
+  const attempt = { pendingLoss: 1000, lossDiag: null };
+  const firstBubble = { cx: 104, cy: 250, w: 90, h: 40, via: 'box', glyph: true };
+  const first = refreshLossDiagnostic(attempt, firstBubble, 1100, null, false);
+  assert.equal(first.confirmed, false);
+  assert.equal(first.catchCardPending, false);
+  assert.equal(attempt.lossDiag, first);
+  assert.equal(attempt.pendingLoss, 1000);
+
+  const prev = { x: 104, y: 250, at: 1100, n: 1, blockedUntil: 0 };
+  const later = refreshLossDiagnostic(attempt, firstBubble, 1300, prev, true);
+  assert.equal(later.confirmed, true);
+  assert.equal(later.catchCardPending, true);
+  assert.notEqual(later, first, 'a later sighting must produce a fresh diagnostic');
+  assert.equal(attempt.lossDiag, later, 'the later diagnostic must replace the first one');
+  assert.equal(attempt.pendingLoss, 1000, 'refreshing must not resolve or clear the pending loss');
 });
 
 test('planPress presses only inside the window, and schedules the crossing', () => {

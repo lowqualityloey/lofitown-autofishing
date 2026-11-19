@@ -88,6 +88,59 @@ test('the run survives a reload: store, cap and a caught failure', () => {
   assert.match(SRC, /F\.runStoreError/);
 });
 
+test('the overnight export carries the held-first-press counters', () => {
+  const s = S.runSummary([], {
+    firstPressHeld: 17,
+    firstPressForced: 25,
+    firstPressHeldForced: 6,
+  });
+  assert.equal(s.firstPressHeld, 17);
+  assert.equal(s.firstPressForced, 25);
+  assert.equal(s.firstPressHeldForced, 6);
+
+  const older = S.runSummary([]);
+  assert.equal(older.firstPressHeld, null, 'an older export is not fabricated as zero');
+  assert.equal(older.firstPressForced, null);
+  assert.equal(older.firstPressHeldForced, null);
+
+  assert.match(SRC, /firstPressHeld: \(F\.stats && F\.stats\.firstPressHeld\) \|\| 0/);
+  assert.match(SRC, /firstPressForced: \(F\.stats && F\.stats\.firstPressForced\) \|\| 0/);
+  assert.match(SRC, /firstPressHeldForced: \(F\.stats && F\.stats\.firstPressHeldForced\) \|\| 0/);
+});
+
+test('a cast-prompt loss diagnostic survives into the exported run row', () => {
+  const start = SRC.indexOf('F.exportRun = function');
+  const end = SRC.indexOf('\n  };', start);
+  assert.ok(start >= 0 && end > start, 'F.exportRun must be present');
+  const rs = SRC.indexOf('function runRowOf');
+  const re = SRC.indexOf('function loadRunRows');
+  assert.ok(rs >= 0 && re > rs, 'runRowOf must be present');
+  const runRowOf = new Function(SRC.slice(rs, re) + '\nreturn runRowOf;')();
+  const diag = {
+    promptChannel: 'box', glyph: true, confirmed: true,
+    x: 104, y: 250, w: 90, h: 40, catchCardPending: false,
+  };
+  const F = {
+    version: '3.9.52',
+    attempts: [{
+      n: 444, verdict: 'lost', why: 'cast prompt', ms: 5522,
+      presses: 2, wallAt: 1760000000000, lossDiag: diag,
+    }],
+    perf: () => ({
+      fps: null, p50: null, p95: null, worst: null, longtasks: null,
+      snapshot: null, readback: null, rates: null,
+    }),
+    opts: {}, runStoreError: null, cutReason: null, stats: {},
+  };
+  const exportRun = new Function(
+    'F', 'loadRunRows', 'runRowOf', 'runSummary', 'pressAcceptSummary', 'predictionSummary', 'logProfile',
+    SRC.slice(start, end + 5) + '\nreturn F.exportRun;'
+  )(F, () => [], runRowOf, () => ({}), () => ({}), () => ({}), 'test');
+  const out = JSON.parse(exportRun());
+  assert.equal(out.attempts.length, 1);
+  assert.deepEqual(out.attempts[0].lossDiag, diag);
+});
+
 test('prediction error is reported in degrees and in milliseconds', () => {
   // The number that decides a marginal narrow press. Measured without pressing: a press makes the
   // game spawn a new triangle, and the frame after one jumps for a reason that is not model error.

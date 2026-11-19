@@ -303,6 +303,30 @@ window.__autofishInstalled = true;
   }
 
   /**
+   * Read-only snapshot of a cast-prompt loss. Deliberately does not call bubbleConfirmed():
+   * that helper updates F.bubblePrev, and logging must not change what the next tap sees.
+   * `promptChannel` is the detector channel (box/anywhere), not the CAST!/REEL! text.
+   */
+  function lossDiagnostics(b, t, prev, cardPending) {
+    if (!b) return { promptChannel: null, glyph: null, confirmed: false, x: null, y: null, w: null, h: null, catchCardPending: !!cardPending };
+    const p = prev || null;
+    // Same 12 px / 2 s window as bubbleConfirmed().
+    const same = !!p && Math.abs(p.x - b.cx) <= 12 && Math.abs(p.y - b.cy) <= 12 && (t - p.at) <= 2000;
+    const confirmed = b.via !== "anywhere" && b.glyph !== false && same &&
+      !(p.blockedUntil && t < p.blockedUntil) && (p.n || 0) + 1 >= 2;
+    return {
+      promptChannel: b.via === "anywhere" ? "anywhere" : "box",
+      glyph: b.glyph === true,
+      confirmed: !!confirmed,
+      x: b.cx != null ? b.cx : null,
+      y: b.cy != null ? b.cy : null,
+      w: b.w != null ? b.w : null,
+      h: b.h != null ? b.h : null,
+      catchCardPending: !!cardPending,
+    };
+  }
+
+  /**
    * How long to wait before the next whole-surface dial recovery pass, in ms.
    *
    * Measured live 2026-11-02 (3.9.10): one recovery pass is a ~257k-test annulus sweep costing
@@ -632,6 +656,15 @@ window.__autofishInstalled = true;
   }
   // </timing-core>
 
+  /**
+   * Apply the latest prompt sighting to an attempt without touching its loss decision. A pending
+   * loss keeps pendingLoss and every decision field; only lossDiag is replaced.
+   */
+  function refreshLossDiagnostic(attempt, b, t, prev, cardPending) {
+    if (!attempt) return null;
+    return (attempt.lossDiag = lossDiagnostics(b, t, prev, cardPending));
+  }
+
   /* ---- doctor ----------------------------------------------------------
    * One verdict about why fishing is or is not happening, from state the bot already collects:
    * no DOM, no timers, no reads. tests/doctor.test.js feeds it the states this project has actually
@@ -776,6 +809,11 @@ window.__autofishInstalled = true;
       // How many dials arrived with the press gate shut. Above zero after the arming fix means the
       // gate is being closed mid-dial and never reopened, which is a different bug.
       locksDisarmed: cfg.locksDisarmed != null ? cfg.locksDisarmed : null,
+      // Session counters are page-global, like locksDisarmed. null means an older export did
+      // not carry them; zero is a real observed count.
+      firstPressHeld: cfg.firstPressHeld != null ? cfg.firstPressHeld : null,
+      firstPressForced: cfg.firstPressForced != null ? cfg.firstPressForced : null,
+      firstPressHeldForced: cfg.firstPressHeldForced != null ? cfg.firstPressHeldForced : null,
       catchRate: n ? caught / n : null,
       catchCi: wilson(caught, n),
       presses, accepted, rejected,
@@ -3859,12 +3897,15 @@ const SPECIES = [
       // The cast prompt means the minigame is over, so an attempt still open is a fish that got
       // away. But the prompt is a bubble-shaped sprite and the card of a WIN is read up to ~3 s
       // after the last press, so a loss is only declared once no card can still be on its way.
-      if (F.attempt && !F.attempt.pendingLoss) {
-        if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
-          resolveAttempt('lost', t, 'cast prompt');
-        } else {
-          F.attempt.pendingLoss = t;
-          L('attempt loss pending', { n: F.attempt.n });
+      if (F.attempt) {
+        const diag = refreshLossDiagnostic(F.attempt, b, t, F.bubblePrev, awaitingCard);
+        if (!F.attempt.pendingLoss) {
+          if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
+            resolveAttempt('lost', t, 'cast prompt');
+          } else {
+            F.attempt.pendingLoss = t;
+            L('attempt loss pending', Object.assign({ n: F.attempt.n }, diag));
+          }
         }
       }
       // A blob that never produces a dial is not a button. Every fruitless CAST ATTEMPT walks one
@@ -4207,11 +4248,12 @@ const SPECIES = [
     L(verdict === 'caught' ? 'attempt caught' : 'attempt lost', {
       n: a.n, ms: a.ms, presses: a.presses, dials: a.dials, skipped: a.skipped,
       arm: a.arm, band, width: a.avgWidth, widthBand: a.widthBand, why: a.why,
+      lossDiag: a.lossDiag || null,
       species: a.species || null, rarity: a.rarity || null,
     });
     // A lost fish must stay attributable after the 8-entry tail expires: the reason, the
     // attempt number, and the dial score persist on status until the next loss (or start).
-    if (verdict === 'lost') F.lastAttemptLoss = { n: a.n, why: a.why, ms: a.ms, dials: a.dials, presses: a.presses, dialHits: a.dialHits, dialMisses: a.dialMisses, avgWidth: a.avgWidth, at: t };
+    if (verdict === 'lost') F.lastAttemptLoss = { n: a.n, why: a.why, ms: a.ms, dials: a.dials, presses: a.presses, dialHits: a.dialHits, dialMisses: a.dialMisses, avgWidth: a.avgWidth, lossDiag: a.lossDiag || null, at: t };
     return a;
   }
 
@@ -4522,7 +4564,7 @@ const SPECIES = [
       // reload (measured live: n=1 three times in one run). The id pairs the wall clock with n and
       // is what the merge dedupes on.
       id: wall != null ? wall + '-' + (a.n || 0) : 'x-' + (a.n || 0),
-      n: a.n, v: a.verdict || null, why: a.why || null, ms: a.ms || 0,
+      n: a.n, v: a.verdict || null, why: a.why || null, lossDiag: a.lossDiag || null, ms: a.ms || 0,
       p: a.presses || 0, pa: a.pressAccepted || 0, pr: a.pressRejected || 0,
       d: a.dials || 0, w: (a.avgWidth != null && isFinite(a.avgWidth)) ? +a.avgWidth.toFixed(1) : null,
       wb: a.widthBand || null, b: a.band || null,
@@ -4608,7 +4650,13 @@ const SPECIES = [
       presses: pressAcceptSummary(F.pressLog),
       prediction: predictionSummary(F.predLog),
       pressLog: (F.pressLog || []).slice(-60),
-      run: runSummary(asAttempts, { cut: F.cutReason || null, locksDisarmed: (F.stats && F.stats.locksDisarmed) || 0 }),
+      run: runSummary(asAttempts, {
+        cut: F.cutReason || null,
+        locksDisarmed: (F.stats && F.stats.locksDisarmed) || 0,
+        firstPressHeld: (F.stats && F.stats.firstPressHeld) || 0,
+        firstPressForced: (F.stats && F.stats.firstPressForced) || 0,
+        firstPressHeldForced: (F.stats && F.stats.firstPressHeldForced) || 0,
+      }),
       perf: {
         fps: p.fps, p50: p.p50, p95: p.p95, worst: p.worst,
         longtasks: p.longtasks, snapshot: p.snapshot, readback: p.readback, rates: p.rates,
