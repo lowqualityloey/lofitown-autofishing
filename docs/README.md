@@ -5,6 +5,7 @@
 | [STATE.md](STATE.md) | Living project tracker: current position, locked invariants, decisions, next actions, continuity log. |
 | [specs/2026-10-28-catch-log.md](specs/2026-10-28-catch-log.md) | Approved spec for the local catch ledger, embedded catalogue and rarity strip. |
 | [specs/2026-11-18-overnight-capture.md](specs/2026-11-18-overnight-capture.md) | Contract for overnight capture (3.9.45-3.9.47): origin resolution, self-healing, the amber address line, row controls and the morning report's coverage verdict. |
+| [specs/2026-11-19-3.9.52-held-forced-prereg.md](specs/2026-11-19-3.9.52-held-forced-prereg.md) | Pre-registered read-only telemetry plan for 3.9.52: metrics, strengthened sample, one-sided 95% Wilson bound, and the 20% cap retirement rule. |
 | [specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md) | Panel design spec: intent, goals, anti-goals, and the control surface chosen on 2026-10-27. |
 | [tasks/autofish-panel.md](tasks/autofish-panel.md) | Task record for the panel milestone (T1-T10, acceptance criteria). Its design spec is [specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md); its decisions live in [STATE.md §6](STATE.md). |
 | [tasks/TASK-2026-10-28-catch-log.md](tasks/TASK-2026-10-28-catch-log.md) | Task record for Catch log v1, with its verify commands. |
