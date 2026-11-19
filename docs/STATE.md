@@ -48,7 +48,9 @@
   **3.9.52** is tagged `v3.9.52` (commit `c8afff3`) and installed/verified in the live tab
   (`__fish.version` 3.9.52 after reload; panel mounted): read-only first-press telemetry
   (`firstPressHeldForced`) and cast-prompt loss diagnostics, with no fishing behavior or
-  loss-decision change. The 20% held cap remains the interim gate.
+  loss-decision change. The source release and public mirror are published with the 370,861-byte
+  asset at sha256 `64e20a3bfb12ead5c128f5bc7f2c05b069f4832c7f26c2731bf6f2261f1e15b2`; both match
+  and `node scripts/release.js --check` passes. The 20% held cap remains the interim gate.
 - **Current Working Branch**: `proto/focus-prompt-mask` carries the 3.9.49 release work; `main`
   carries its release and docs merges; tag `v3.9.52` on `c8afff3`, `v3.9.51` on `8220a54`,
   `v3.9.49` on `de34fd9`,
