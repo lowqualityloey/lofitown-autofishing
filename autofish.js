@@ -2435,6 +2435,10 @@ const SPECIES = [
     const rec = F.parseCatch();
     if (!rec) return 'pending';
     F.txtAt = now();
+    // A parsed catch proves the character was seated and fishing, whatever the watchdog last
+    // concluded. Without this, a long attempt or a slow card leaves the flag set and the session
+    // pauses on seat until a prompt (or the seat probe) clears it.
+    F.needsSeat = false;                                    // a parsed catch: the character is seated
     const info = describeCatch(rec);
     // The card prints a rarity word only for non-common fish. Fill the blank from the catalogue
     // and carry the source, never a pixel guess.
@@ -3254,6 +3258,7 @@ const SPECIES = [
       castRungResetMs: 10000,       // the prompt was gone this long: the recovery ladder starts over
       castRetryMs: 5000,            // nothing has happened this long: cast with the game's own keybind
       seatWatchdogMs: 45000,        // no dial, no press, no prompt this long -> the character is not seated
+      seatHoldRetryMs: 60000,       // a seat hold probes the keybind this often, so a stuck line can recover
       lossGraceMs: 2500,            // a cast prompt right after a press may still be a win landing
       dialCheckMs: 120,
       dialFallbackMs: 2500,         // no dial this long -> one whole-surface search (0 disables)
@@ -3356,13 +3361,14 @@ const SPECIES = [
   };
 
   /**
-   * Forbid cast retries without stopping the loop. A seat pause deliberately keeps the core alive
-   * to spot the returning prompt, and this is what stops that core from casting: a retry puts a
-   * line in the water, which removes the prompt the hold is waiting for. Measured live 2026-11-02:
-   * 69 retries while paused on seat, line out, no prompt, and no way back without a manual reel.
+   * Throttle cast retries without stopping the loop. A seat pause deliberately keeps the core alive
+   * to spot the returning prompt, and an unthrottled retry would put a line in the water, removing
+   * the prompt the hold is waiting for (measured live 2026-11-02: 69 retries, line out, no way back
+   * without a manual reel). The hold still probes the keybind once a minute (seatHoldRetryMs).
    */
   F.holdCasts = function (on) {
     F.castHold = !!on;
+    F.castHoldAt = F.castHold ? now() : 0;   // the seat-hold probe waits a full interval from here
     // Clearing the hold must not fire a retry on the very next frame: give the passive prompt
     // detector its usual window first, so a Resume does not start with a blind Space press.
     if (!F.castHold) F.lastCastTry = now();
@@ -4128,10 +4134,17 @@ const SPECIES = [
     // nothing at all happens and the run silently stops fishing (observed: 60+ s of no dial and no
     // press while frames kept advancing). The game's own fishing keybind casts whenever its cast
     // button is visible and is ignored while chat has focus, so it is a safe fallback.
-    // ... but never while the session holds the core for a seat. The retry would cast, the prompt
-    // would vanish, and only the prompt can lift the hold - a deadlock. `lastCastTry` is refreshed
-    // when the hold clears, so the retry cannot fire on the first frame after a Resume.
-    if (!F.castHold && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
+    // ... and a seat hold probes at most once a minute. The hold used to suppress the retry
+    // forever: if a line is already out the prompt never appears, the hold stops the only retry
+    // that could reel it back in, and nothing in the loop can recover (measured live 2026-11-20:
+    // 60 minutes with no dial, needsSeat latched, every Resume re-paused within a second). The
+    // probe is the game's own keybind, which it ignores when no cast is available; if it does
+    // reel a stuck line, the returning prompt clears the hold by itself. The first probe waits a
+    // full interval after the hold is applied. `lastCastTry` is refreshed when the hold clears, so
+    // the retry still cannot fire on the first frame after a Resume.
+    const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs &&
+      t - Math.max(F.castHoldAt || 0, F.lastCastTry || 0) > F.opts.seatHoldRetryMs);
+    if ((!F.castHold || seatProbe) && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
       F.lastCastTry = t;
       F.stats.castRetries = (F.stats.castRetries || 0) + 1;
       const tries = (F.stallRetry = (F.stallRetry || 0) + 1);
@@ -4139,7 +4152,7 @@ const SPECIES = [
       // ladder governs the bubble branch, where the prompt's coordinates exist. Calling it here
       // and dropping the answer only made the ladder look wired to a path that ignored it.
       const consumed = !space(F.opts.spaceTarget);
-      L('cast retry', { consumed, tries });
+      L('cast retry', { consumed, tries, seatHold: !!F.castHold });
     }
 
     // The game shows a cast prompt only while the character is SEATED on a seat whose raycast

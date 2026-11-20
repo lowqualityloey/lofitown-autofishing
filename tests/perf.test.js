@@ -328,13 +328,19 @@ test('a blank layer is not adopted without a prompt on the other canvas', () => 
   assert.match(CORE, /return \{ ink: n > 0, density: n \/ 256 \};/, 'density is what separates the world layer from the UI layer');
 });
 
-test('a seat hold suppresses cast retries, and clearing it does not fire on the first frame', () => {
-  // Paused on seat the core is deliberately alive to watch for the prompt. A retry would cast, the
-  // prompt would vanish, and only the prompt can lift the hold: 69 retries and a line out is the
-  // measured deadlock this guards against.
-  assert.match(CORE, /if \(!F\.castHold && F\.opts\.castRetryMs/);
+test('a seat hold only probes casts once a minute, and clearing it does not fire on the first frame', () => {
+  // Paused on seat the core is deliberately alive to watch for the prompt. An unthrottled retry
+  // would cast, the prompt would vanish, and only the prompt can lift the hold: 69 retries and a
+  // line out is the measured deadlock that guard fixed. But a hold that never retries deadlocks
+  // too when a line is already out (60 minutes, 2026-11-20), so the hold now probes once a minute
+  // with the game's own keybind: ignored when there is nothing to cast, and a reel if there is.
+  assert.ok(CORE.includes('const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs'), 'the seat hold has its own retry interval');
+  assert.ok(CORE.includes('seatProbe) && F.opts.castRetryMs'), 'the seat probe gates a retry');
+  assert.match(CORE, /seatHoldRetryMs: \d+/);
+  assert.match(CORE, /L\('cast retry', \{ consumed, tries, seatHold: !!F\.castHold \}\)/);
   const api = CORE.slice(CORE.indexOf('F.holdCasts = function'), CORE.indexOf('F.resetStats = function'));
   assert.match(api, /F\.castHold = !!on/);
+  assert.match(api, /F\.castHoldAt = F\.castHold \? now\(\) : 0/, 'the probe waits a full interval after the hold is applied');
   assert.match(api, /if \(!F\.castHold\) F\.lastCastTry = now\(\)/, 'clearing must restart the retry timer');
   // start and stop both clear it, so a later run cannot inherit a stale hold
   const start = CORE.slice(CORE.indexOf('F.start = function'), CORE.indexOf('F.stop = function'));
@@ -362,6 +368,8 @@ test('a missing cast prompt is named, not clicked at forever', () => {
   // the flag has to clear again once a prompt or a dial proves the character is seated
   assert.match(CORE, /F\.needsSeat = false;[^\n]*the character is seated/);
   assert.match(CORE, /F\.needsSeat = false;[^\n]*the cast took/);
+  // ...and a parsed catch is proof too: without this the flag outlives the fish it interrupted
+  assert.match(CORE, /F\.needsSeat = false;[^\n]*a parsed catch: the character is seated/);
   const status = CORE.slice(CORE.indexOf('F.status = function'), CORE.indexOf('F.status = function') + 1600);
   assert.match(status, /needsSeat:/);
 });

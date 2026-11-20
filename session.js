@@ -132,7 +132,7 @@
   var ERR_WINDOW_MS = 60 * 1000;
   var ERR_LIMIT = 20;
   var SEAT_STOP_MS = 30 * 60 * 1000;   // an unseated character cannot bite; give up rather than sit there forever
-  var SEAT_OVERRIDE_MS = 15 * 1000;    // a user Resume runs this long despite the seat fact, then re-checks
+  var SEAT_OVERRIDE_MS = 15 * 1000;    // a Resume or retry runs this long despite the seat fact
 
   function paused(s, at, reason) {
     s.phase = 'paused';
@@ -142,9 +142,9 @@
     if (retryable(reason)) s.retryAt = at + RETRY_DELAY_MS;
     // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
     // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
-    // Keeping it alive is only safe if it cannot ACT while it waits: a cast retry puts a line in the
-    // water, which removes the prompt the pause is waiting for, so the two would wait forever
-    // (measured live 2026-11-02: 69 retries, paused on seat, line out, no prompt, no recovery).
+    // Keeping it alive is only safe if it cannot ACT while it waits: an unthrottled cast retry puts
+    // a line in the water, which removes the prompt the pause is waiting for, so the two would wait
+    // forever (measured live 2026-11-02: 69 retries, paused on seat, line out, no recovery).
     var actions = [];
     if (reason === 'seat') {
       s.seatSince = at;
@@ -218,6 +218,11 @@
         if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, s.pauseReason) };
         s.retries += 1;
         s.lastCatchAt = at;
+        // The seat fact can still be true because the watchdog saw a line already out, not a
+        // standing character. A user Resume gets a grace window for exactly that reason; an
+        // automatic retry needs one too, or its very next tick pauses on seat before the retry's
+        // cast can bring the prompt back, leaving the seat probe to recover it a minute later.
+        s.seatOverrideUntil = at + SEAT_OVERRIDE_MS;
         return runningAgain(s, at);
       }
     }

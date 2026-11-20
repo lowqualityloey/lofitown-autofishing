@@ -1,6 +1,9 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.52) - read-only first-press telemetry records a held dial that later forced
+Status: **WORKING (3.9.53) - a seat hold can no longer deadlock the run: a parsed catch clears
+`needsSeat`, an automatic retry gets the same 15 s seat grace a user Resume gets, and a held seat
+probes the game's own cast keybind once a minute so a line already out can recover. The rest is
+3.9.52's read-only first-press telemetry: it records a held dial that later forced
 (`firstPressHeldForced`) separately from one that matured, and cast-prompt losses record the
 detector channel, confirmation, coordinates and catch-card state without changing fishing behavior.
 A proven new triangle is pressed as soon as it appears instead of after

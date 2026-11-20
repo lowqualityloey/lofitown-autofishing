@@ -273,6 +273,27 @@ test('the retry resumes once, then a fourth failure stops the session', () => {
   assert.equal(r.state.stopReason, 'no-catch');
 });
 
+test('an automatic retry gets a seat grace instead of re-pausing at once', () => {
+  // The seat watchdog can still say "unseated" because a line is already out, not because the
+  // character stood up. A retry that resumes into that fact without a grace window re-pauses on
+  // its first tick, before its cast can bring the prompt back - and the held casts can never
+  // clear the flag. Measured live 2026-11-20: resume -> pause in 0.4 s, for 60 minutes.
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 601_000));
+  assert.equal(state.phase, 'paused');
+  assert.equal(state.pauseReason, 'no-catch');
+  const retryAt = state.retryAt;
+  const r = tick(state, retryAt, { seat: true });
+  assert.equal(r.state.phase, 'running');
+  assert.equal(r.state.seatOverrideUntil, retryAt + 15_000, 'the retry buys the same 15 s a Resume does');
+  const soon = tick(r.state, retryAt + 14_000, { seat: true });
+  assert.equal(soon.state.phase, 'running', 'the retry must get its cast window');
+  const after = tick(soon.state, retryAt + 15_001, { seat: true });
+  assert.equal(after.state.phase, 'paused');
+  assert.equal(after.state.pauseReason, 'seat');
+  assert.deepEqual(after.actions.find(a => a.type === 'holdCasts'), { type: 'holdCasts', on: true });
+});
+
 test('an error burst stops the session', () => {
   let { state } = reduce(createState(), { type: 'start', at: T0 });
   ({ state } = tick(state, T0 + 1000, { errors: 5 }));
