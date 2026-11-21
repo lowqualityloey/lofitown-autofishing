@@ -231,6 +231,25 @@ test('GET /autofish.user.js serves the standalone build, and the build in dist i
   } finally { server.close(); }
 });
 
+test('GET /install pins the release URL and the Import-from-URL fallback', async () => {
+  const { server, port } = await boot();
+  try {
+    const res = await fetch('http://127.0.0.1:' + port + '/install');
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /^text\/html/);
+    const html = await res.text();
+    const release = 'https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js';
+    assert.ok(html.includes('href="' + release + '"'), 'the release build is the linked install path');
+    assert.ok(html.includes('Import from URL'), 'the local fallback is Import from URL');
+    assert.ok(html.includes("For a local build, don't open the raw URL directly"), 'the page warns against opening the raw local URL');
+    assert.match(html, /<code id="userscript">\/autofish\.user\.js<\/code>/, 'the local address is a code snippet');
+    assert.doesNotMatch(html, /<a[^>]*id="userscript"/, 'the local address is not a clickable link');
+    assert.ok(html.includes('If importing from URL also fails, use the release URL above.'), 'the final fallback points back at the release build');
+    assert.ok(html.indexOf(release) < html.indexOf('Import from URL'), 'the release URL is presented before the local fallback');
+    assert.ok(!html.includes('only the direct handoff stalls'), 'the page does not promise the local handoff');
+  } finally { server.close(); }
+});
+
 test('GET /panel.user.js still points the legacy panel loader at the serving port', async () => {
   const { server, port } = await boot();
   try {
