@@ -17,6 +17,7 @@
   a.bookmark { display: inline-block; margin: 6px 0 2px; padding: 11px 18px; border-radius: 10px; background: #2f7d5a; color: #eafff2;
                text-decoration: none; font-weight: 600; cursor: grab; }
   code { background: #0c1014; border: 1px solid #232a33; border-radius: 6px; padding: 1px 6px; font-size: 13px; }
+  a { color: #7fd6a1; }
   .note { color: #9aa4ae; font-size: 13px; }
   .warn { color: #f2c14e; }
   .ok { color: #5ad18b; }
@@ -58,7 +59,8 @@
 
   <div class="card">
     <h2 style="font-size:16px;margin:0 0 10px">Want to skip the server?</h2>
-    <p class="note" style="margin:0">Install Tampermonkey once, then open <code id="userscript">/autofish.user.js</code> and press <b>Install</b>. From then on a small <b>🐟 AutoFish</b> chip sits in the bottom-left corner of lofi.town — click it once to start fishing. No terminal, no bookmarklet, and this page only has to exist for that one install.</p>
+    <p class="note" style="margin:0">Install Tampermonkey once, then open the <a href="https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js">public release build</a> and press <b>Install</b>. That fixed URL always serves the newest build and is the reliable path in BrowserOS Neo. From then on a small <b>🐟 AutoFish</b> chip sits in the bottom-left corner of lofi.town — click it once to start fishing. No terminal, no bookmarklet, and this page only has to exist for that one install.</p>
+    <p class="note warn" style="margin:10px 0 0">For a local build, don't open the raw URL directly: Tampermonkey can stop on its generic <b>SCRIPT INSTALLATION</b> page instead of the install prompt. In Tampermonkey, open <b>Dashboard → Utilities → Import from URL</b> and paste <code id="userscript">/autofish.user.js</code>, or import <code>dist/autofish.user.js</code> from file. The local server serves the file. If importing from URL also fails, use the release URL above.</p>
   </div>
 </main>
 <script>
