@@ -1,9 +1,12 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.53) - a seat hold can no longer deadlock the run: a parsed catch clears
-`needsSeat`, an automatic retry gets the same 15 s seat grace a user Resume gets, and a held seat
-probes the game's own cast keybind once a minute so a line already out can recover. The rest is
-3.9.52's read-only first-press telemetry: it records a held dial that later forced
+Status: **WORKING (3.9.54) - the session log tells the truth about a reload: an interrupted row
+carries the catches it had and the start time the heartbeat recorded, so fishserve files it under
+the day it began instead of counting a 110 minute night against a 5 minute day, and an inlined
+install reads its own rows back from the capture address it already posts to. The rest is 3.9.53's
+seat-hold fix: a parsed catch clears `needsSeat`, an automatic retry gets the same 15 s seat grace
+a user Resume gets, and a held seat probes the game's own cast keybind once a minute so a line
+already out can recover. Then 3.9.52's read-only first-press telemetry: it records a held dial that later forced
 (`firstPressHeldForced`) separately from one that matured, and cast-prompt losses record the
 detector channel, confirmation, coordinates and catch-card state without changing fishing behavior.
 A proven new triangle is pressed as soon as it appears instead of after

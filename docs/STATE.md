@@ -1,7 +1,7 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.53 tagged v3.9.53; 3.9.53 installed + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.54 tagged v3.9.54; 3.9.54 published + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
@@ -57,7 +57,7 @@
   `v3.9.48` on `82da2b3`;
   3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
   modification and stays out of every commit.
-- **Last Updated**: 2026-11-20
+- **Last Updated**: 2026-11-21
 - **Engine Version**: v2.3.0 @ unknown
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 

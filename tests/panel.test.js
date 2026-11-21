@@ -67,10 +67,53 @@ test('the panel never assumes a local server it was not served from', () => {
 
 test('the daily cap survives a reload and a second session in the same page', () => {
   const load = src.slice(src.indexOf('async function loadToday()'), src.indexOf('function postSessionRow'));
-  assert.match(load, /if \(!BASE\) return;/, 'the server is optional, the local budget is not');
+  // An inlined userscript has no BASE, so it reads back from the same capture address it posts to;
+  // returning on !BASE made the panel write rows it could never read (live 2026-11-21: the panel
+  // showed 5.4 minutes today while its own fishserve held 115 for the same profile and day).
+  assert.match(load, /var origin = BASE \|\| captureServer\(\);/, 'the read-back uses the address the rows were posted to');
+  assert.match(load, /if \(!origin\) return;/, 'the server is optional, the local budget is not');
+  assert.ok(!/if \(!BASE\) return;/.test(load), 'an inlined install no longer skips its own rows');
+  assert.ok(load.includes("origin + '/sessions?day='"), 'the day is asked for by profile, from that origin');
   const start = src.slice(src.indexOf('startCore: function'), src.indexOf('stopCore:'));
   assert.match(start, /baseTodayMs = loadBudget\(\)\.ms/, 'a new session must re-read the day');
   assert.match(src, /var BUDGET_KEY = 'autofish:budget:v1'/);
+});
+
+test('a reload row carries the interrupted session it ended', () => {
+  // Live 2026-11-21: both reload rows in sessions.csv read `catches 0`, because the heartbeat never
+  // recorded the count and checkInterrupted posted a literal 0. The morning report reads those rows
+  // to bound a night, so a session that caught fish was recorded as having caught none.
+  const hb = src.slice(src.indexOf('function writeHeartbeat()'), src.indexOf('function checkInterrupted'));
+  assert.match(hb, /catches: state\.catchCount/, 'the heartbeat records the session catch count');
+  const fn = src.slice(src.indexOf('function checkInterrupted()'), src.indexOf('/* -------------------------------------------------------------- DOM'));
+  assert.ok(fn.length > 0, 'checkInterrupted exists');
+  assert.match(fn, /var catches = typeof live\.catches === 'number' \? live\.catches : 0;/, 'the row takes the recorded count');
+  assert.match(fn, /postSessionRow\('reload', minutes, catches, startedAt\)/, 'the row is posted with that count');
+  assert.ok(!/postSessionRow\('reload', minutes, 0\)/.test(fn), 'the hard-coded zero is gone');
+});
+
+test('a reload row is dated by the heartbeat, not by the moment it is posted', () => {
+  // The same live rows: started_at 05:08:07.212Z, logged 05:08:07.856Z - a 110 minute session that
+  // began 0.6 s before it was written. started_at came from state.startedAt, which mount has not set
+  // when the interrupted row is posted, so || Date.now() faked every one of them.
+  const fn = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
+  assert.match(fn, /function postSessionRow\(reason, minutes, catches, startedAt\)/, 'the caller owns the start time');
+  assert.match(fn, /new Date\(startedAt \|\| state\.startedAt \|\| Date\.now\(\)\)\.toISOString\(\)/, 'a supplied start wins over the mount-time fallback');
+  assert.ok(!/started_at: new Date\(state\.startedAt \|\| Date\.now\(\)\)/.test(fn), 'the faked start is gone from the body');
+  const check = src.slice(src.indexOf('function checkInterrupted()'), src.indexOf('/* -------------------------------------------------------------- DOM'));
+  assert.match(check, /var startedAt = typeof live\.startedAt === 'number' \? live\.startedAt : null;/, 'the heartbeat start is passed through');
+});
+
+test('a reload row is filed on the day it started, which is how the server reads a day', () => {
+  // The 110 minute row landed in 2026-11-21's log beside a 5.4 minute local budget, so the day read
+  // 115 minutes. It was not a missing day check that did that: fishserve buckets a row on
+  // localDay(started_at), and started_at had been faked to "now". An honest start is the whole fix,
+  // so the reload path needs no second day check to keep an overnight record out of today's total.
+  const serve = fs.readFileSync(path.join(__dirname, '..', 'fishserve.js'), 'utf8');
+  assert.match(serve, /localDay\(r\[1\] \|\| r\[0\]\) === day/, 'a row belongs to the day its started_at names');
+  const check = src.slice(src.indexOf('function checkInterrupted()'), src.indexOf('/* -------------------------------------------------------------- DOM'));
+  assert.match(check, /postSessionRow\('reload', minutes, catches, startedAt\)/, 'the panel sends that start');
+  assert.ok(!/dayKey\(/.test(check), 'so the reload path carries no day check of its own');
 });
 
 test('the session, cooldown and cap steppers reach overnight ranges', () => {

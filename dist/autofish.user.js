@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.53
+// @version      3.9.54
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.53" };
+  const F = { version: "3.9.54" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -6037,13 +6037,16 @@ const SPECIES = [
   }
 
   async function loadToday() {
-    // The local budget already answered; the server is only a mirror and may not exist at all
-    // (the inlined userscript has BASE null by design). Rows carry a profile, so ask for this
-    // profile's day instead of summing every account in the file into this cap.
+    // The local budget already answered; the server is only a mirror and may not exist at all.
+    // An inlined userscript has no BASE of its own, so the address the owner gave "Overnight
+    // capture" is the one server this page knows - the same fallback postSessionRow uses. Without
+    // it the page wrote its session rows and never read them back, so a lost budget reset the day.
+    // Rows carry a profile, so ask for this profile's day instead of summing every account.
     var local = baseTodayMs || 0;
-    if (!BASE) return;
+    var origin = BASE || captureServer();
+    if (!origin) return;
     try {
-      var r = await fetch(BASE + '/sessions?day=' + dayKey() + '&profile=' + encodeURIComponent(profileName()), { cache: 'no-store' });
+      var r = await fetch(origin + '/sessions?day=' + dayKey() + '&profile=' + encodeURIComponent(profileName()), { cache: 'no-store' });
       var j = await r.json();
       var server = (j.minutes || 0) * 60000;
       // Whichever knows about more fishing today wins; a failed fetch keeps the local budget.
@@ -6051,7 +6054,7 @@ const SPECIES = [
     } catch (e) { baseTodayMs = local; }
   }
 
-  function postSessionRow(reason, minutes, catches) {
+  function postSessionRow(reason, minutes, catches, startedAt) {
     // fishserve is also where the overnight sampler posts. An inlined panel has no BASE of its own,
     // so the address the owner gave the capture is the one server this page knows; without it there
     // is nowhere to log and the local budget has to answer alone.
@@ -6060,10 +6063,14 @@ const SPECIES = [
     // Every profile logs its own row: sessions.csv ends with a profile column, so the morning
     // report can bound a named profile's night and loadToday() reads back only this profile.
     try {
+      // The caller owns the start time: a reload row has no state.startedAt yet (mount has not run
+      // a session), so the old || Date.now() fallback made every interrupted row claim to begin at
+      // page load. Measured live 2026-11-21: started_at 05:08:07.212Z, logged 05:08:07.856Z.
+      var started = new Date(startedAt || state.startedAt || Date.now()).toISOString();
       fetch(server + '/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ started_at: new Date(state.startedAt || Date.now()).toISOString(), minutes: minutes, catches: catches, reason: reason, profile: profileName() })
+        body: JSON.stringify({ started_at: started, minutes: minutes, catches: catches, reason: reason, profile: profileName() })
       }).then(function (r) { if (!r.ok) banner = 'session log rejected the row'; }).catch(function () { banner = 'session log offline — the session still works'; });
     } catch (e) { banner = 'session log offline — the session still works'; }
   }
@@ -6234,7 +6241,8 @@ const SPECIES = [
 
   function writeHeartbeat() {
     if (state.phase === 'running' || state.phase === 'paused' || state.phase === 'waiting') {
-      writeJSON(LIVE_KEY, { startedAt: state.startedAt, phase: state.phase, minutes: Math.round(state.fishingMs / 60000), at: Date.now() });
+      // catches travels with the heartbeat: a reload row cannot report what the record never kept.
+      writeJSON(LIVE_KEY, { startedAt: state.startedAt, phase: state.phase, minutes: Math.round(state.fishingMs / 60000), catches: state.catchCount, at: Date.now() });
     } else {
       try { localStorage.removeItem(LIVE_KEY); } catch (e) {}
     }
@@ -6245,7 +6253,14 @@ const SPECIES = [
     if (!live) return '';
     try { localStorage.removeItem(LIVE_KEY); } catch (e) {}
     var minutes = typeof live.minutes === 'number' ? live.minutes : 0;
-    postSessionRow('reload', minutes, 0);
+    var catches = typeof live.catches === 'number' ? live.catches : 0;
+    var startedAt = typeof live.startedAt === 'number' ? live.startedAt : null;
+    // The row is dated by the session's own start, not by this page load. fishserve buckets a row
+    // on localDay(started_at), so an honest start files an overnight record under the day it began
+    // and keeps those minutes out of today's cap. The old fallback made every interrupted row claim
+    // to start now (live 2026-11-21: started_at 05:08:07.212Z, logged 05:08:07.856Z), which is how
+    // a 110 minute night was counted against a 5.4 minute day.
+    postSessionRow('reload', minutes, catches, startedAt);
     if (!loadPrefs().resumeAfterReload) return 'session interrupted by a reload — not resumed';
     // A hold is explicit: a reload must not turn a paused session into a running one.
     if (live.phase === 'paused') return 'paused session ended by the reload — start again when ready';
@@ -7392,6 +7407,9 @@ const SPECIES = [
 
     var S = window.AutoFishSession;
     var prefs = loadPrefs();
+    // Resolved here, before loadToday(): captureServer() reads this, and the day's read-back would
+    // otherwise see no address on an inlined install and stay silent on the very first mount.
+    captureBase = BASE || prefs.overnightBase || '';
     // The ledger key is per profile, and the choice has to survive a reload with the history it names.
     if (prefs.profile && fish() && fish().logProfile) fish().logProfile(prefs.profile);
     var budget = loadBudget();
@@ -7431,7 +7449,6 @@ const SPECIES = [
     // zero dial presses until the toggle was clicked. focusTick() engages the hold when a session
     // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
-    captureBase = BASE || prefs.overnightBase || '';
     overnightPref = !!prefs.overnight;
     captureClearBackoff();
     // The night a reload used to end: with the setting on, mount loads the sampler again. It posts
