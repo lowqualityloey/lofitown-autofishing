@@ -295,6 +295,8 @@ test('the budget is local: today and the cooldown survive a reload', () => {
   assert.ok(src.includes('} catch (e) { baseTodayMs = local; }'), 'an offline fetch keeps the local budget');
   assert.ok(src.includes('state.todayMs = baseTodayMs'), 'mount restores the day before the first tick');
   assert.ok(src.includes("phase: budget.cooldownUntil ? 'cooldown' : 'idle'"), 'a live cooldown is restored, not bypassed');
+  assert.ok(src.includes('function todaySessionMs()'), 'the live session is split from the day it carried');
+  assert.match(src, /fishingMs \|\| 0\) - \(state\.carriedMs \|\| 0\)/, 'only today\'s share is stored and shown');
 });
 
 test('the panel separates all-time totals from today and lets a profile be cleared', () => {

@@ -455,6 +455,58 @@ test('a stop folds the session into today, so a restart cannot forget it', () =>
   assert.equal(r.actions.find(a => a.type === 'sessionRow').minutes, 10, 'the row still reports the session');
 });
 
+test('a run that crosses midnight spends only its own day against the new cap', () => {
+  // 23:30 to 01:00 is one 90 minute session but two fishing days. Charging all of it to the new day
+  // burned the cap an hour early, and the panel wrote the whole run under the new day's key.
+  const start = new Date(2026, 10, 21, 23, 30).getTime();
+  const midnight = new Date(2026, 10, 22, 0, 0).getTime();
+  const cap = 60 * 60_000;
+  let { state } = reduce(createState({ dailyCapMs: cap, durationMs: 3 * 60 * 60_000 }), { type: 'start', at: start });
+  assert.equal(state.dayStartMs, new Date(2026, 10, 21).getTime(), 'the session starts on its own day');
+
+  ({ state } = tick(state, midnight - 30_000, { catches: 1 }));   // 29.5 minutes fished
+  assert.equal(state.fishingMs, 29.5 * 60_000);
+  assert.equal(state.carriedMs, 0);
+
+  // The stretch over midnight is split: 30 s before, 60 s after.
+  ({ state } = tick(state, midnight + 60_000, { catches: 2 }));
+  assert.equal(state.fishingMs, 31 * 60_000, 'the whole stretch is still session time');
+  assert.equal(state.fishingMs - state.carriedMs, 60_000, 'only the minute after midnight is today');
+
+  // 00:30: the new day has spent 30 minutes, not 60, so the cap is still open.
+  ({ state } = tick(state, midnight + 30 * 60_000, { catches: 3 }));
+  assert.equal(state.phase, 'running');
+  assert.equal(state.fishingMs - state.carriedMs, 30 * 60_000);
+
+  // 01:00: exactly the new day's hour is spent, and the cap stops the run here.
+  const r = tick(state, midnight + 60 * 60_000, { catches: 4 });
+  assert.equal(r.state.stopReason, 'daily-cap');
+  assert.equal(r.state.todayMs, cap, 'the new day is charged only its own hour');
+  assert.equal(r.state.fishingMs, 0);
+  assert.equal(r.state.carriedMs, 0);
+  assert.equal(r.actions.find(a => a.type === 'sessionRow').minutes, 90, 'the row still reports the whole session');
+});
+
+test('a run paused across midnight resumes without yesterday on today\'s cap', () => {
+  const start = new Date(2026, 10, 21, 23, 30).getTime();
+  const midnight = new Date(2026, 10, 22, 0, 0).getTime();
+  let { state } = reduce(createState({ dailyCapMs: 60 * 60_000 }), { type: 'start', at: start });
+  ({ state } = tick(state, midnight - 60_000, { catches: 1 }));   // 29 minutes fished
+  ({ state } = reduce(state, { type: 'pause', at: midnight - 60_000 }));
+  assert.equal(state.fishingMs, 29 * 60_000);
+
+  // Midnight passes while the user hold is up: the reducer carries the whole session, and the
+  // resume is not refused for time today has not spent.
+  ({ state } = tick(state, midnight + 10 * 60_000));
+  assert.equal(state.phase, 'paused');
+  assert.equal(state.carriedMs, state.fishingMs, 'yesterday is carried out of today');
+  const back = reduce(state, { type: 'resume', at: midnight + 10 * 60_000 });
+  assert.equal(back.state.phase, 'running');
+
+  const after = tick(back.state, midnight + 11 * 60_000, { catches: 2 });
+  assert.equal(after.state.fishingMs - after.state.carriedMs, 60_000, 'only the new minute is today');
+});
+
 test('a second session counts against the cap the first one spent', () => {
   let { state } = reduce(createState({ dailyCapMs: 630_000 }), { type: 'start', at: T0 });
   ({ state } = tick(state, T0 + 600_000, { todayMs: 0 }));

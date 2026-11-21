@@ -153,12 +153,18 @@
     return { day: today, ms: ms, cooldownUntil: cd };
   }
 
+  /** The part of the live session that belongs to the current local day. A run that started before
+   * midnight carries the rest; only today's share may spend today's cap or be stored under today. */
+  function todaySessionMs() {
+    return Math.max(0, (state.fishingMs || 0) - (state.carriedMs || 0));
+  }
+
   function syncBudget() {
     if (!state) return;
     baseTodayMs = state.todayMs || 0;
     writeJSON(budgetKey(), {
       day: dayKey(),
-      ms: Math.round((state.todayMs || 0) + (state.fishingMs || 0)),
+      ms: Math.round((state.todayMs || 0) + todaySessionMs()),
       cooldownUntil: state.phase === 'cooldown' && state.cooldownUntil ? state.cooldownUntil : null
     });
   }
@@ -1648,7 +1654,7 @@
     else ui.mLeft.textContent = minutesText(state.durationMs);
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));
     ui.mPresses.textContent = String(stats.presses || 0);
-    ui.mToday.textContent = minutesText((state.todayMs || 0) + state.fishingMs) + ' / ' + minutesText(state.dailyCapMs);
+    ui.mToday.textContent = minutesText((state.todayMs || 0) + todaySessionMs()) + ' / ' + minutesText(state.dailyCapMs);
     renderLog();
     renderPerf();
 
@@ -1873,7 +1879,6 @@
       budgetDay = dayNow;
       baseTodayMs = 0;
       state.todayMs = 0;
-      syncBudget();
     }
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}

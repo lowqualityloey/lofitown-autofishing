@@ -29,6 +29,8 @@
       window: { on: DEFAULTS.window.on, start: DEFAULTS.window.start, stop: DEFAULTS.window.stop },
       fishingMs: 0,
       todayMs: 0,
+      carriedMs: 0,          // session time fished before the current local day began
+      dayStartMs: 0,         // local midnight of the day todayMs belongs to
       startedAt: null,
       lastTickAt: null,
       pauseReason: null,
@@ -92,13 +94,54 @@
     return phase === 'running' || phase === 'paused' || phase === 'waiting';
   }
 
+  /** Local midnight for 'at'. A run can outlive the day it began, and only the time after this
+   * instant belongs to the new day's cap. */
+  function localDayStart(at) {
+    var d = new Date(at);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  }
+
+  /** Credit [from, at] as fishing. The whole stretch is session time, but only its tail after local
+   * midnight is today's, so one night that crosses midnight cannot spend two days' cap. */
+  function credit(s, from, at) {
+    var delta = Math.max(0, at - from);
+    if (!delta) return;
+    var day = localDayStart(at);
+    if (!s.dayStartMs) {
+      s.dayStartMs = day;
+    } else if (s.dayStartMs !== day) {
+      // Everything fished before this midnight, plus the pre-midnight part of this stretch.
+      s.carriedMs = (s.fishingMs || 0) + Math.max(0, Math.min(delta, day - from));
+      s.dayStartMs = day;
+    }
+    s.fishingMs += delta;
+  }
+
+  /** A paused run can cross midnight without fishing a frame; its carry still moves. */
+  function rollDay(s, at) {
+    var day = localDayStart(at);
+    if (!s.dayStartMs) s.dayStartMs = day;
+    else if (s.dayStartMs !== day) {
+      s.carriedMs = s.fishingMs || 0;
+      s.dayStartMs = day;
+    }
+  }
+
+  /** How much of the live session may spend the current day's cap. */
+  function todayFishingMs(s) {
+    return Math.max(0, (s.fishingMs || 0) - (s.carriedMs || 0));
+  }
+
   function stopSession(s, at, reason) {
-    if (s.phase === 'running' && s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
-    // The session's minutes become today's minutes. Keeping them in fishingMs meant a restart
-    // forgot them: the cap under-counted and the panel's "today" dropped back to the base.
+    if (s.phase === 'running' && s.lastTickAt != null) credit(s, s.lastTickAt, at);
+    rollDay(s, at);
+    // The session's minutes become today's minutes - but only the part fished after local midnight.
+    // Keeping them in fishingMs meant a restart forgot them: the cap under-counted and the panel's
+    // "today" dropped back to the base.
     var sessionMs = s.fishingMs;
-    s.todayMs = (s.todayMs || 0) + sessionMs;
+    s.todayMs = (s.todayMs || 0) + todayFishingMs(s);
     s.fishingMs = 0;
+    s.carriedMs = 0;
     // A schedule boundary is not a rest. The clock window and the daily cap end the run until the
     // next window or the next day; forcing a 30-minute cooldown on top made the panel look stuck and
     // could make a second session collide with a closed window. Only a real stop rests.
@@ -173,6 +216,7 @@
 
   function tickPaused(s, at, fact) {
     if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
+    rollDay(s, at);
     // A user pause is an explicit hold: the tab coming back, a seat appearing or a catch landing
     // must not resume it behind the user's back. Only the Resume button (or a fresh Start) does.
     if (s.pauseReason === 'user') return { state: s, actions: [] };
@@ -263,6 +307,8 @@
         return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
       }
       s.fishingMs = 0;
+      s.carriedMs = 0;
+      s.dayStartMs = localDayStart(at);
       s.catchCount = 0;
       s.retries = 0;
       s.retryAt = null;
@@ -302,7 +348,7 @@
       // Pause is a hold, not a stop: the session, its length and today's budget all survive, and no
       // cooldown is started. Time up to this instant is credited; the hold itself is not fishing.
       if (s.phase !== 'running') return { state: s, actions: [] };
-      if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+      if (s.lastTickAt != null) credit(s, s.lastTickAt, at);
       s.phase = 'paused';
       s.pauseReason = fact.reason === 'focus' ? 'focus' : 'user';
       s.lastTickAt = null;
@@ -315,9 +361,10 @@
 
     if (fact.type === 'resume') {
       if (s.phase !== 'paused') return { state: s, actions: [] };
+      rollDay(s, at);
       // Do not resume straight into a boundary: the next tick would stop the session immediately and
       // the user would see a resume that did nothing. The cap and the window are checked up front.
-      if (s.todayMs + s.fishingMs >= s.dailyCapMs) return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
+      if (s.todayMs + todayFishingMs(s) >= s.dailyCapMs) return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
       if (s.window.on && !withinWindow(s.window, at)) return { state: s, actions: [{ type: 'refuse', reason: 'window' }] };
       var fromSeat = s.pauseReason === 'seat';
       s.phase = 'running';
@@ -356,6 +403,8 @@
             s.cooldownUntil = null;
             s.stopReason = null;
             s.fishingMs = 0;
+            s.carriedMs = 0;
+            s.dayStartMs = localDayStart(at);
             s.catchCount = 0;
             s.retries = 0;
             s.errCount = 0;
@@ -403,7 +452,7 @@
       // 0. a focus session is a hold the user asked for: credit the time fished so far, then stop
       // the clock and the core. Not retryable - nothing is broken, the player is focusing.
       if (fact.focus) {
-        if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+        if (s.lastTickAt != null) credit(s, s.lastTickAt, at);
         return paused(s, at, 'focus');
       }
 
@@ -434,7 +483,7 @@
         s.lastTickAt = at;                 // no credit: no frames, no fishing time
       } else {
         s.stalled = false;
-        if (s.lastTickAt != null) s.fishingMs += Math.max(0, at - s.lastTickAt);
+        if (s.lastTickAt != null) credit(s, s.lastTickAt, at);
         s.lastTickAt = at;
       }
 
@@ -462,7 +511,7 @@
       if (s.window.on && !withinWindow(s.window, at)) {
         return { state: s, actions: stopSession(s, at, 'window') };
       }
-      if (typeof fact.todayMs === 'number' && s.todayMs + s.fishingMs >= s.dailyCapMs) {
+      if (typeof fact.todayMs === 'number' && s.todayMs + todayFishingMs(s) >= s.dailyCapMs) {
         return { state: s, actions: stopSession(s, at, 'daily-cap') };
       }
 
