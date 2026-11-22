@@ -57,8 +57,8 @@
   `v3.9.48` on `82da2b3`;
   3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
   modification and stays out of every commit.
-- **Last Updated**: 2026-11-21
-- **Engine Version**: v2.3.0 @ unknown
+- **Last Updated**: 2026-11-22
+- **Engine Version**: v2.4.0 @ unknown
 - **Runtime**: Node v24.22.1, no dependencies, no bundler
 
 ---
