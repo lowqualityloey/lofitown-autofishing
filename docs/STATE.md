@@ -51,15 +51,16 @@
   loss-decision change. The source release and public mirror are published with the 370,861-byte
   asset at sha256 `64e20a3bfb12ead5c128f5bc7f2c05b069f4832c7f26c2731bf6f2261f1e15b2`; both match
   and `node scripts/release.js --check` passes. The 20% held cap remains the interim gate. **3.9.53** is tagged `v3.9.53` and published: it breaks the seat-hold deadlock with a parsed-catch clear, a 60 s keybind probe and the auto-retry seat grace; source release and public mirror carry the 372,510-byte build (sha256 `e0a76aa9962b`), notes at `docs/releases/3.9.53.md`. It supersedes the 3.9.52 telemetry sample, which is closed and must not be resumed. **3.9.55** is tagged `v3.9.55` and published: it splits a session at local midnight so only the post-midnight share spends the new day's cap; source release and public mirror carry the 376,149-byte build (sha256 `5544671ed0c0`), notes at `docs/releases/3.9.55.md`.
-- **Current Working Branch**: `proto/focus-prompt-mask` carries the 3.9.49 release work; `main`
-  includes 3.9.53 as merge `d7ae5a9` (release `6396284` + PromptKit `6cc3a77`); tag `v3.9.53` on `6396284`, `v3.9.52` on `c8afff3`, `v3.9.51` on `8220a54`,
-  `v3.9.49` on `de34fd9`,
-  `v3.9.48` on `82da2b3`;
-  3.9.44 tagged `ee1ecd2`. `run.sh` is a pre-existing unstaged
-  modification and stays out of every commit.
+- **Current Working Branch**: `main` at `71b07ef` (PromptKit OS 2.4.0 stamp), fast-forwarded into the
+  Orca workspace `lowqualityloey/fishing-pole-lofitown`; tags `v3.9.55`, `v3.9.53`, `v3.9.52`,
+  `v3.9.51`, `v3.9.49`, `v3.9.48` and `v3.9.44` remain. The PromptKit scaffolding (`AGENTS.md`,
+  `PROMPTKIT.md`, `.promptkit`) is gitignored; the workspace links to the main checkout's 2.4.0
+  courier install. `run.sh` is a pre-existing unstaged modification in the main checkout and stays
+  out of every commit.
 - **Last Updated**: 2026-11-22
 - **Engine Version**: v2.4.0 @ unknown
-- **Runtime**: Node v24.22.1, no dependencies, no bundler
+- **Runtime**: Node v26.13.1 in the current WSL workspace (earlier notes said v24.22.1), no
+  dependencies, no bundler
 
 ---
 
@@ -122,9 +123,9 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-11-18-overnight-capture.md` (the catch-log and panel design specs remain the earlier approved decisions)
-- **Active Task Spec**: `docs/tasks/TASK-2026-11-18-overnight-capture.md` (the panel milestone record stays in `docs/tasks/autofish-panel.md`)
-- **Key Source Files in Flight**: `panel.js`, `scripts/overnight-export.js`, `scripts/overnight-report.js`, `fishserve.js`, `build-userscript.js`, `scripts/release.js`, `dist/autofish.user.js`, `tests/overnight-export.test.js`, `tests/overnight-report.test.js`, `tests/panel.test.js`
+- **Active RFC / Spec**: none new; `docs/specs/2026-11-18-overnight-capture.md` remains the last approved feature spec
+- **Active Task Spec**: none new; the overnight-capture record stays at `docs/tasks/TASK-2026-11-18-overnight-capture.md`
+- **Key Source Files in Flight**: none — no source changes in this checkpoint. The only changes are the gitignored PromptKit scaffolding (`AGENTS.md`, `PROMPTKIT.md`, `.promptkit`) and this tracker update. Next engineering target: measure the Zen frame budget with `__fish.perf()` before changing any scan throttle.
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
   - Build: `node build-userscript.js`; a test fails when the committed `dist/` is stale
@@ -326,39 +327,17 @@ Staging area for rules observed during sessions but not yet approved as invarian
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. **Done - releases v3.9.47, v3.9.48 and v3.9.49.** `v3.9.47` (commit `6dfbbab`, `main` merge
-   `946a36b`) and `v3.9.48` (commit `82da2b3`, `main` merge `fc2ae5a`) carry the required
-   `HeyLoey-Milestone:` trailer, are tagged and pushed, and have GitHub releases. `v3.9.49` (commit
-   `de34fd9`, `main` merge `64deb80`) also carries the trailer and has its GitHub release. The 3.9.48
-   source asset and public mirror are the 360,908-byte build (sha256 `2774e9e90770`); the 3.9.49
-   source and mirror are the 366,910-byte build (sha256 `820c91061e41`), `releases/latest` matches
-   anonymously, and `node scripts/release.js --check` passes.
-2. **Done - 3.9.47 installed; 3.9.48 and 3.9.49 are not.** Tampermonkey lists 3.9.47 (360 KB) and
-   the overnight tab keeps running it; both later builds were deliberately not installed or reloaded
-   while the night is live.
-3. **In progress - one real night.** Fishserve is on 8731 and the installed panel is armed, with the
-   first snapshot at 06:39:13Z (`data/runs/export-2026-11-18T06-39-13-390Z.json`, 250 attempts). The
-   old stored address (8732) was corrected through the amber line; the panel is running and the
-   first new attempt caught an Alligator Gar. The game window is visible and the capture line green.
-4. **Next morning - read the report.** `node scripts/overnight-report.js`; record the `## Coverage`
-   verdict and exit status in the task record, the live review and §8. Exit 1 means the night is
-   truncated - report it, do not round it up.
-5. Extend the 112-attempt run to 200 catches if a long seated session is available; 103/112 is a real
-   sample and the README quotes it, so a larger one is worth having.
-6. Watch for false positives from the for-anywhere prompt scan on other white UI (name tags, chat
-   bubbles) at window sizes nobody has tested yet. Measure the Zen frame budget with `__fish.perf()`
-   (bot stopped, then running) before changing any scan throttle; a Gecko readback is not a Chromium
-   one.
-
-7. **Done in 3.9.27:** `adoptSurface()` requires a **found prompt** twice instead of a blank count;
-   a dense renderer is considered only when the current surface has already read blank, which keeps
-   the merged layout working. A resize or `fullscreenchange` re-resolves the canvases, and the card
-   box follows the live surface. Native-F11 confirmation passed at 1920x1080, with 7/8 catches and
-   no false cards; the panel stayed at x=12.
-
-Items 1-4 are the release and overnight sequence; items 5-6 are field experiments that need a live
-game tab and a human. Item 7 is the last known surface defect and is cheap: same evidence rule,
-different call site.
+1. **Done - PromptKit OS 2.4.0 alignment.** `main` and the Orca workspace carry the 2.4.0 stamp at
+   `71b07ef`; the workspace links to the main checkout's courier install, `AGENTS.md` carries the
+   directive, `PROMPTKIT.md` is populated, and `node --test` passes 369/369. The three docs/test
+   commits and the 2.4.0 stamp are on `origin/main` with this checkpoint.
+2. **Field-run 3.9.55 across local midnight.** The midnight split is unit-tested but has not been
+   exercised by a live overnight session; verify that only the post-midnight share spends the new
+   day's cap.
+3. **Measure the Zen frame budget.** Every timing figure since 3.8.2 is Chromium; a Gecko readback is
+   not a Chromium one. Use `__fish.perf()` before changing any scan throttle.
+4. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat
+   bubbles) at window sizes nobody has tested yet.
 
 ---
 
@@ -432,6 +411,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-20 | lead (Freebuff session) | A seat hold cannot deadlock the run: 3.9.53 | Live report from BrowserOS neo: 60 minutes with no dial, `needsSeat: true`, `castHold: true`, `phase: paused` with `pauseReason: seat`, and every Resume re-paused within 0.4-1 s; the character could not move and the panel kept saying "sit on a chair". Three guards break the loop: a parsed catch clears `needsSeat` (a catch proves the character was seated), an automatic retry after a retryable pause gets the same 15 s seat grace a user Resume gets, and a seat hold probes the game's own keybind once a minute (`seatHoldRetryMs`, logged as `seatHold`) so a line already out can be reeled and the returning prompt can clear the hold. Tests: a reducer test for the retry grace and source guards for the catch clear and the probe; 363/363. `dist/` rebuilt with `@version 3.9.53` (372,510 bytes on disk; the builder reports 372,371 characters). Installed and verified live in BrowserOS neo: the paused session resumed, six catches landed, and one seat probe recovered a line; 363/363. Tagged/published as v3.9.53; it supersedes the 3.9.52 telemetry sample. | `autofish.js`; `session.js`; `tests/session.test.js`; `tests/perf.test.js` |
 | 2026-11-20 | lead (Freebuff session) | 3.9.53 merged into main | `main` now includes the 3.9.53 release as merge `d7ae5a9`: first parent `6396284` (the `v3.9.53` release commit), second parent `6cc3a77` (the unpushed PromptKit `v2.3.0` stamp), so the unrelated commit is preserved. The only conflict was `docs/STATE.md`'s Last Updated / Engine Version block; resolved to 2026-11-20 plus `Engine Version: v2.3.0 @ unknown`. The merge tree carries `package.json` 3.9.53 and the 372,510-byte dist (sha256 `e0a76aa9962b`); 363/363 tests and `release.js --check` still green. `main` and `origin/main` contain `d7ae5a9`; this docs record follows it. | `docs/STATE.md` |
 | 2026-11-21 | lead (Freebuff session) | Tampermonkey Import-from-URL verified | DevTools Network on the background service worker showed `GET http://127.0.0.1:8731/autofish.user.js` returning HTTP 200 `text/javascript`; no GitHub asset request. The Reinstall prompt was cancelled, so settings were not changed. |
+| 2026-11-22 | lead (Freebuff session) | PromptKit OS 2.4.0 alignment and project profile | Fast-forwarded the Orca workspace `lowqualityloey/fishing-pole-lofitown` from `813c8ff` to `71b07ef` (the 2.4.0 stamp plus the install-URL fix, its test guard, and the Tampermonkey verification record). Linked `.promptkit` to the main checkout's 2.4.0 courier install, copied the generated `AGENTS.md` directive, and populated the previously stock `PROMPTKIT.md` with the detected stack, commands, paths, and guardrails (`size: small`, `intake-status: legacy-partial`). `node --test` 369/369; worktree clean; no source changes. `origin/main` updated. | `AGENTS.md`; `PROMPTKIT.md`; `docs/STATE.md` |
 
 ---
 
@@ -440,8 +420,8 @@ Compact record of pairing sessions to enable instant chat resumption:
 
 | Session | Turns | Measured in/out | Estimated context payload | Note |
 | :--- | :--- | :--- | :--- | :--- |
-| not tracked | not tracked | not tracked | not tracked | not tracked |
+| 2026-11-22 (PromptKit sync) | ~16 | host telemetry unavailable | 128k–240k heuristic context payload | duration=not tracked; repairs=1; interventions=3; verification=`node --test` 369/369; outcome=accepted |
 
-- **Running total**: not tracked — refreshed by `pk:checkpoint`; keep measured tokens and heuristic context-payload ranges as separate totals and never add them together. One row per real work session (trivial sessions under ~5 turns with no workflow usage write nothing). When host metering is unavailable, compute the lower and upper bounds independently via the heuristic (`turns × 8k` through `turns × 15k tok/turn`) rather than emitting a midpoint or `not measured`.
+- **Running total**: 128k–240k heuristic context payload across 1 recorded session; host telemetry unavailable. This is an engineering estimate, not provider billing telemetry, and is kept separate from any measured-token total. Refreshed by `pk:checkpoint`; one row per real work session.
 - **Note evidence**: use `duration=<value>; repairs=<count or not tracked>; interventions=<count or not tracked>; verification=<result or not tracked>; outcome=<accepted | rejected | incomplete | blocked | not tracked>`. Never infer `0`, `passed`, or `accepted` from missing evidence.
 - **Evidence boundary**: this ledger is operational telemetry, not CPAC benchmark evidence. Heuristic context payload is not provider billing telemetry or actual spend; avoided rework remains `not measured` without comparative evidence. Preserve historical rows and the five-column shape without silent backfill.
