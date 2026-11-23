@@ -362,8 +362,43 @@ test('reload resume and catch POSTs are opt-in, and resume no longer needs a clo
   assert.ok(live.includes('state.todayMs >= state.dailyCapMs'), 'a spent cap is respected');
   assert.ok(src.includes('prefs.postCatches = !!p.postCatches'), 'the POST pref is read');
   assert.ok(src.includes('postCatches: !!window.__panel.postCatches'), 'the POST pref is saved');
-  assert.ok(src.includes("var post = (window.__panel && window.__panel.postCatches && BASE) ? BASE + '/catch' : null"), 'the URL is only passed when opted in');
-  assert.ok(src.includes('logUrl: post'), 'startCore carries the opt-in URL');
+  const start = src.slice(src.indexOf('startCore: function'), src.indexOf('stopCore:'));
+  assert.match(start, /var server = BASE \|\| captureServer\(\);/, 'the catch URL uses the same capture address as the rows');
+  assert.ok(start.includes("var post = (window.__panel && window.__panel.postCatches && server) ? server + '/catch' : null"), 'the URL is only passed when opted in');
+  assert.ok(start.includes('logUrl: post'), 'startCore carries the opt-in URL');
+});
+
+test('a userscript catch POST uses the capture address fallback, not BASE', () => {
+  const block = src.slice(src.indexOf('startCore: function'), src.indexOf('stopCore:'));
+  const fn = block.slice(block.indexOf('function'), block.lastIndexOf('}') + 1);
+  assert.ok(fn.indexOf('captureServer') > 0, 'the start path resolves the capture address');
+
+  function startWith(BASE, server, postCatches) {
+    let started = null;
+    const sandbox = {
+      BASE: BASE,
+      captureServer: function () { return server; },
+      loadBudget: function () { return { ms: 0 }; },
+      fish: function () { return { start: function (o) { started = o; } }; },
+      window: { __panel: { postCatches: postCatches } }
+    };
+    vm.runInNewContext('(' + fn + ')({ maxMinutes: 62 });', sandbox);
+    return started;
+  }
+
+  const fallback = 'http://127.0.0.1:8731';
+  let started = startWith(null, fallback, true);
+  assert.equal(started.logUrl, fallback + '/catch', 'the userscript uses the address the session rows use');
+  assert.equal(started.maxMinutes, 62, 'the start options still carry the backstop');
+
+  started = startWith('http://127.0.0.1:9999', fallback, true);
+  assert.equal(started.logUrl, 'http://127.0.0.1:9999/catch', 'a served panel keeps its own origin');
+
+  started = startWith(null, fallback, false);
+  assert.equal(started.logUrl, null, 'the toggle still opts out');
+
+  started = startWith(null, '', true);
+  assert.equal(started.logUrl, null, 'no address means no POST');
 });
 
 test('overnight capture survives a reload and says in the panel whether it is armed', () => {

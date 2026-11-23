@@ -731,7 +731,8 @@
       // A second Start in the same page must see the minutes the first session just logged; the
       // reducer has already reset fishingMs, so the day's total has to come from the store.
       baseTodayMs = loadBudget().ms;
-      var post = (window.__panel && window.__panel.postCatches && BASE) ? BASE + '/catch' : null;
+      var server = BASE || captureServer();
+      var post = (window.__panel && window.__panel.postCatches && server) ? server + '/catch' : null;
       fish().start({ maxMinutes: a.maxMinutes, logUrl: post });
     },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
