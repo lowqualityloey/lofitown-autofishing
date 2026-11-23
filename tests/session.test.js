@@ -355,6 +355,35 @@ test('a seat pause holds the casts, and Resume overrides the seat fact for a gra
   assert.deepEqual(after.actions.find(a => a.type === 'holdCasts'), { type: 'holdCasts', on: true });
 });
 
+test('a focus hold takes over a seat pause and releases the cast hold', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 60_000));
+  const seat = tick(state, T0 + 90_000, { seat: true });
+  assert.equal(seat.state.pauseReason, 'seat');
+  assert.deepEqual(seat.actions.find(a => a.type === 'holdCasts'), { type: 'holdCasts', on: true });
+
+  const focus = tick(seat.state, T0 + 120_000, { seat: true, focus: true });
+  assert.equal(focus.state.phase, 'paused');
+  assert.equal(focus.state.pauseReason, 'focus', 'the focus decision owns the pause');
+  assert.equal(focus.state.fishingMs, 60_000, 'the seat wait stayed uncharged');
+  assert.deepEqual(focus.actions, [
+    { type: 'holdCasts', on: false },
+    { type: 'pauseCore' },
+    { type: 'persist' }
+  ], 'the seat hold is released before the core is paused');
+  assert.ok(!focus.actions.some(a => a.type === 'resumeCore'), 'nothing resumes mid-focus');
+
+  const seated = tick(focus.state, T0 + 150_000, { seat: false, focus: true });
+  assert.equal(seated.state.phase, 'paused');
+  assert.equal(seated.state.pauseReason, 'focus', 'a cleared seat fact cannot lift the focus hold');
+  assert.deepEqual(seated.actions, []);
+
+  const back = tick(focus.state, T0 + 180_000, { seat: false, focus: false });
+  assert.equal(back.state.phase, 'running');
+  assert.equal(back.state.pauseReason, null);
+  assert.ok(back.actions.some(a => a.type === 'resumeCore'), 'the focus end still resumes');
+});
+
 test('the daily cap counts fishing time, not waiting for a chair', () => {
   // the pause credits nothing, so an unseated hour cannot creep the day's budget toward the cap
   let { state } = reduce(createState({ dailyCapMs: 10 * 60_000 }), { type: 'start', at: T0 });

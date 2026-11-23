@@ -220,6 +220,18 @@
     // A user pause is an explicit hold: the tab coming back, a seat appearing or a catch landing
     // must not resume it behind the user's back. Only the Resume button (or a fresh Start) does.
     if (s.pauseReason === 'user') return { state: s, actions: [] };
+
+    // A focus hold is a decision, not a guard: it takes over a hidden or seat pause before
+    // those branches can resume or stop the run. The user hold above still wins.
+    if (fact.focus) {
+      if (s.pauseReason === 'focus') return { state: s, actions: [] };
+      var wasSeat = s.pauseReason === 'seat';
+      var focusPaused = paused(s, at, 'focus');
+      s.seatSince = null;
+      s.hiddenSince = null;
+      if (wasSeat) focusPaused.actions.unshift({ type: 'holdCasts', on: false });
+      return focusPaused;
+    }
     var visible = fact.visible !== false;
     if (s.pauseReason === 'hidden') {
       if (!visible) {
@@ -250,13 +262,8 @@
     }
     if (s.pauseReason === 'focus') {
       // A focus hold ends when the session does, never on a timer: the panel clears the fact.
-      if (fact.focus) return { state: s, actions: [] };
       return runningAgain(s, at);
     }
-    // A focus hold is a decision, not a stall. If the hold engages while a guard already has the run
-    // paused (player-block, no-catch), it takes the pause over, so that guard's retry can never slip
-    // a tick of fishing through mid-session. A user pause still outranks it, above.
-    if (fact.focus) return paused(s, at, 'focus');
     if (retryable(s.pauseReason)) {
       if (s.retryAt != null && at >= s.retryAt) {
         if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, s.pauseReason) };
