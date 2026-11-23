@@ -5074,6 +5074,18 @@ const SPECIES = [
     // A user pause is an explicit hold: the tab coming back, a seat appearing or a catch landing
     // must not resume it behind the user's back. Only the Resume button (or a fresh Start) does.
     if (s.pauseReason === 'user') return { state: s, actions: [] };
+
+    // A focus hold is a decision, not a guard: it takes over a hidden or seat pause before
+    // those branches can resume or stop the run. The user hold above still wins.
+    if (fact.focus) {
+      if (s.pauseReason === 'focus') return { state: s, actions: [] };
+      var wasSeat = s.pauseReason === 'seat';
+      var focusPaused = paused(s, at, 'focus');
+      s.seatSince = null;
+      s.hiddenSince = null;
+      if (wasSeat) focusPaused.actions.unshift({ type: 'holdCasts', on: false });
+      return focusPaused;
+    }
     var visible = fact.visible !== false;
     if (s.pauseReason === 'hidden') {
       if (!visible) {
@@ -5104,13 +5116,8 @@ const SPECIES = [
     }
     if (s.pauseReason === 'focus') {
       // A focus hold ends when the session does, never on a timer: the panel clears the fact.
-      if (fact.focus) return { state: s, actions: [] };
       return runningAgain(s, at);
     }
-    // A focus hold is a decision, not a stall. If the hold engages while a guard already has the run
-    // paused (player-block, no-catch), it takes the pause over, so that guard's retry can never slip
-    // a tick of fishing through mid-session. A user pause still outranks it, above.
-    if (fact.focus) return paused(s, at, 'focus');
     if (retryable(s.pauseReason)) {
       if (s.retryAt != null && at >= s.retryAt) {
         if (s.retries >= MAX_RETRIES) return { state: s, actions: stopSession(s, at, s.pauseReason) };
@@ -6240,7 +6247,8 @@ const SPECIES = [
       // A second Start in the same page must see the minutes the first session just logged; the
       // reducer has already reset fishingMs, so the day's total has to come from the store.
       baseTodayMs = loadBudget().ms;
-      var post = (window.__panel && window.__panel.postCatches && BASE) ? BASE + '/catch' : null;
+      var server = BASE || captureServer();
+      var post = (window.__panel && window.__panel.postCatches && server) ? server + '/catch' : null;
       fish().start({ maxMinutes: a.maxMinutes, logUrl: post });
     },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
@@ -7112,6 +7120,14 @@ const SPECIES = [
     ui.perfRate.textContent = 'dial ' + share('lockDial') + ' · card ' + share('findCatch') + ' ms';
   }
 
+  /** The chair warning is only for a seat problem; an engaged focus hold owns the banner. */
+  function seatNoteFor(status, phase, focusOn) {
+    if (status && status.needsSeat && !focusOn && (phase === 'running' || phase === 'paused')) {
+      return 'clock paused — nothing to bite: sit on a chair by the water';
+    }
+    return '';
+  }
+
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
@@ -7213,10 +7229,7 @@ const SPECIES = [
     // A stall outranks everything: the session is not running however the phase reads, and the
     // clock has stopped, so the player needs to know before the budget does.
     var stallNote = stalled ? 'loop stalled — the game stopped giving the bot frames; the clock is paused' : '';
-    var seatNote = '';
-    if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
-      seatNote = 'clock paused — nothing to bite: sit on a chair by the water';
-    }
+    var seatNote = seatNoteFor(status, phase, focusOn);
     // A focus session outranks the log-offline chatter: the run will look alive while the game
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
