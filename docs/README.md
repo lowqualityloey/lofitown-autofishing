@@ -18,6 +18,7 @@
 | [tasks/TASK-2026-11-18-install-3.9.51.md](tasks/TASK-2026-11-18-install-3.9.51.md) | Post-night install checklist for 3.9.51: restart fishserve first, install the userscript second, and the counters that prove the re-arm change. |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
+| [reviews/2026-11-23-catch-and-focus-live.md](reviews/2026-11-23-catch-and-focus-live.md) | Live verification of the rebuilt userscript's catch POST, focus takeover, seat warning and next catch. |
 | [reviews/2026-10-27-event-card-freeze.md](reviews/2026-10-27-event-card-freeze.md) | Review of the stuck catch-card bug and its fix. |
 | [reviews/2026-10-28-performance-review.md](reviews/2026-10-28-performance-review.md) | Performance review: where the frame budget actually goes, the findings ranked, and the smallest useful fixes. |
 | [reviews/2026-11-02-lag-and-first-press-review.md](reviews/2026-11-02-lag-and-first-press-review.md) | Two-axis review of the 3.9.10-3.9.12 work, including the snapshot path that silently never ran. |

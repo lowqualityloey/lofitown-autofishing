@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.55) - a session that crosses midnight spends only the new day's share
+Status: **WORKING (3.9.56) - the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
 against the new day's cap: the reducer carries the pre-midnight minutes, the panel stores and shows
 the same share, and the session row still reports the whole run. The rest is 3.9.54's session-log
 fix: an interrupted row carries the catches it had and the start time the heartbeat recorded, so

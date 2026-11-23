@@ -1,7 +1,7 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.55 tagged v3.9.55; 3.9.55 published + in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.56 prepared; 3.9.55 published + in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
@@ -51,7 +51,7 @@
   loss-decision change. The source release and public mirror are published with the 370,861-byte
   asset at sha256 `64e20a3bfb12ead5c128f5bc7f2c05b069f4832c7f26c2731bf6f2261f1e15b2`; both match
   and `node scripts/release.js --check` passes. The 20% held cap remains the interim gate. **3.9.53** is tagged `v3.9.53` and published: it breaks the seat-hold deadlock with a parsed-catch clear, a 60 s keybind probe and the auto-retry seat grace; source release and public mirror carry the 372,510-byte build (sha256 `e0a76aa9962b`), notes at `docs/releases/3.9.53.md`. It supersedes the 3.9.52 telemetry sample, which is closed and must not be resumed. **3.9.55** is tagged `v3.9.55` and published: it splits a session at local midnight so only the post-midnight share spends the new day's cap; source release and public mirror carry the 376,149-byte build (sha256 `5544671ed0c0`), notes at `docs/releases/3.9.55.md`.
-- **Current Working Branch**: `freebuff/lofitown-autofish-behavior-review` — four behavior commits through `466b163` plus the verification docs; ahead of
+- **Current Working Branch**: `freebuff/lofitown-autofish-behavior-review` — four behavior commits through `466b163` plus the verification docs and the prepared 3.9.56 release; ahead of
   `main` (`2640df0`); live-verified but unmerged and unpushed. The branch carries the seat-warning,
   capture-address and focus-takeover fixes plus the rebuilt dist. The Orca workspace
   `lowqualityloey/fishing-pole-lofitown` links to the main checkout's PromptKit 2.4.0 courier install;
@@ -125,7 +125,7 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
 - **Active RFC / Spec**: none new; `docs/specs/2026-11-18-overnight-capture.md` remains the last approved feature spec
 - **Active Task Spec**: none new; the overnight-capture record stays at `docs/tasks/TASK-2026-11-18-overnight-capture.md`
-- **Key Source Files in Flight**: `panel.js`, `session.js`, `tests/panel.test.js`, `tests/session.test.js`, and `dist/autofish.user.js` on the behavior-review branch; live evidence is in `docs/reviews/2026-11-23-catch-and-focus-live.md`. No behavior edits remain; the next decision is a patch release (3.9.56) before the queued field work.
+- **Key Source Files in Flight**: `panel.js`, `session.js`, `tests/panel.test.js`, `tests/session.test.js`, `dist/autofish.user.js`, `package.json`, and `docs/releases/3.9.56.md`; live evidence is in `docs/reviews/2026-11-23-catch-and-focus-live.md`. The 3.9.56 checkpoint is prepared and awaits approval to tag/push; the queued field work follows.
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
   - Build: `node build-userscript.js`; a test fails when the committed `dist/` is stale
@@ -331,10 +331,8 @@ Staging area for rules observed during sessions but not yet approved as invarian
    `71b07ef`; the workspace links to the main checkout's courier install, `AGENTS.md` carries the
    directive, `PROMPTKIT.md` is populated, and `node --test` passes 369/369. The three docs/test
    commits and the 2.4.0 stamp are on `origin/main` with this checkpoint.
-2. **Seal the behavior-review branch.** Four commits (`78c106f`, `5a3dd76`, `c3db0bb`, `466b163`) are live-verified; 372/372 tests, build
-   clean, and `dist/` is 376,535 bytes / sha256 `d76f94acd67a`; this build differs from published
-   v3.9.55. Decide whether to ship a 3.9.56 patch; no version bump/tag/push without approval.
-3. **Field-run 3.9.55 across local midnight.** The midnight split is unit-tested but has not been
+2. **3.9.56 is prepared.** The four commits (`78c106f`, `5a3dd76`, `c3db0bb`, `466b163`) are live-verified; version bumped, dist rebuilt at 376,535 bytes / sha256 `26a4ba93d1bc`; release notes at `docs/releases/3.9.56.md`. Await approval to tag/push; no tag or push yet.
+3. **Field-run 3.9.56 across local midnight.** The midnight split is unit-tested but has not been
    exercised by a live overnight session; verify that only the post-midnight share spends the new
    day's cap.
 4. **Measure the Zen frame budget.** Every timing figure since 3.8.2 is Chromium; a Gecko readback is
@@ -416,6 +414,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-21 | lead (Freebuff session) | Tampermonkey Import-from-URL verified | DevTools Network on the background service worker showed `GET http://127.0.0.1:8731/autofish.user.js` returning HTTP 200 `text/javascript`; no GitHub asset request. The Reinstall prompt was cancelled, so settings were not changed. |
 | 2026-11-22 | lead (Freebuff session) | PromptKit OS 2.4.0 alignment and project profile | Fast-forwarded the Orca workspace `lowqualityloey/fishing-pole-lofitown` from `813c8ff` to `71b07ef` (the 2.4.0 stamp plus the install-URL fix, its test guard, and the Tampermonkey verification record). Linked `.promptkit` to the main checkout's 2.4.0 courier install, copied the generated `AGENTS.md` directive, and populated the previously stock `PROMPTKIT.md` with the detected stack, commands, paths, and guardrails (`size: small`, `intake-status: legacy-partial`). `node --test` 369/369; worktree clean; no source changes. `origin/main` updated. | `AGENTS.md`; `PROMPTKIT.md`; `docs/STATE.md` |
 | 2026-11-23 | lead (Freebuff session) | Catch and focus live verification (behavior-review branch) | Commits `78c106f`, `5a3dd76`, `c3db0bb`, `466b163`. Reinstalled the rebuilt 3.9.55 from `127.0.0.1:8731`; `/recent` gained rows at `23:07:27Z` (Asian Swamp Eel) and `23:07:43Z` (Nurse Shark) after Start. A trusted movement hold produced a real `needsSeat: true` seat pause; focus on changed `pauseReason` to `focus` and released the cast hold, focus off restored `pauseReason: seat`, the cast hold, and the seat warning. The next catch after Resume was an Axolotl at `23:21:44.679Z`, and the panel count advanced 3 -> 4. `node --test` 372/372; build clean; `git diff --check main...HEAD` clean; dist 376,535 bytes / sha256 `d76f94acd67a`. No version bump, tag or push; mode-only diffs untouched. | `docs/reviews/2026-11-23-catch-and-focus-live.md`; `panel.js`; `session.js`; `dist/autofish.user.js` |
+| 2026-11-23 | lead (Freebuff session) | 3.9.56 patch release prepared | Bumped `package.json` to 3.9.56 and rebuilt `dist/autofish.user.js` with `node build-userscript.js`: 376,535 bytes / sha256 `26a4ba93d1bc`; added `docs/releases/3.9.56.md` and the review index entry. `node --test` 372/372; release notes cover the capture-address catch POST, focus takeover, focus-owned seat warning and rebuilt dist. No tag or push; release-mirror check is deferred until the tag exists. | `package.json`; `dist/autofish.user.js`; `docs/releases/3.9.56.md`; `docs/README.md`; `docs/STATE.md` |
 
 ---
 
