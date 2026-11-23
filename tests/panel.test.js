@@ -3,6 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 // panel.js mounts itself and needs a DOM, so these are source-level guards on the interactions that
 // cannot be exercised in node. They exist because a dead-looking-alive button shipped once: the drag
@@ -147,12 +148,34 @@ test('a running session that cannot bite says so: sit down, the game is seat-bas
   // at, so the condition has to be visible there and not just in the event log.
   const fn = src.slice(src.indexOf('function render()'), src.indexOf('/* ------------------------------------------------------------ layout'));
   assert.ok(fn.length > 0, 'render() exists');
-  assert.ok(fn.includes('status.needsSeat'), 'render() reads needsSeat from the core status');
+  assert.ok(fn.includes('var seatNote = seatNoteFor(status, phase, focusOn);'), 'render() uses the tested seat-note helper');
   assert.ok(fn.includes("'paused'"), 'the notice also shows while paused, not only while running');
   assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| castNote \|\| banner/, 'the seat notice outranks the log-offline banner');
   assert.ok(fn.includes("'banner seat'"), 'the seat notice gets its own colour, not the amber warning style');
   assert.ok(fn.includes("host.dataset.needsSeat = '1'"), 'needsSeat is observable from outside the shadow root');
   assert.match(src, /\.banner\.seat\{/, 'the seat style exists');
+});
+
+test('the seat notice is suppressed only while focus is on', () => {
+  // The warning belongs to a standing character, not to a focus hold: while focus owns the run,
+  // the panel must not tell the player to sit down, but turning focus off must bring the warning
+  // back if the seat is still missing.
+  const start = src.indexOf('function seatNoteFor(');
+  const end = src.indexOf('function render()');
+  assert.ok(start > 0 && end > start, 'seatNoteFor is present and testable');
+  const sandbox = {};
+  vm.runInNewContext(src.slice(start, end), sandbox);
+  const seatNoteFor = sandbox.seatNoteFor;
+  assert.equal(typeof seatNoteFor, 'function', 'the helper is loaded from panel.js');
+  const seated = { needsSeat: true };
+  assert.match(seatNoteFor(seated, 'running', false), /sit on a chair by the water/, 'a running seat pause warns');
+  assert.match(seatNoteFor(seated, 'paused', false), /sit on a chair by the water/, 'a paused seat pause warns');
+  assert.equal(seatNoteFor(seated, 'running', true), '', 'focus suppresses the running seat warning');
+  assert.equal(seatNoteFor(seated, 'paused', true), '', 'focus suppresses the paused seat warning');
+  assert.match(seatNoteFor(seated, 'running', false), /sit on a chair by the water/, 'turning focus off brings the warning back');
+  assert.equal(seatNoteFor(seated, 'idle', false), '', 'there is no seat warning outside a live session');
+  assert.equal(seatNoteFor({ needsSeat: false }, 'running', false), '', 'a non-seat status produces no warning');
+  assert.equal(seatNoteFor(null, 'running', false), '', 'a missing status produces no warning');
 });
 
 test('the seat fact reaches the reducer so the clock pauses instead of burning', () => {

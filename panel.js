@@ -1603,6 +1603,14 @@
     ui.perfRate.textContent = 'dial ' + share('lockDial') + ' · card ' + share('findCatch') + ' ms';
   }
 
+  /** The chair warning is only for a seat problem; an engaged focus hold owns the banner. */
+  function seatNoteFor(status, phase, focusOn) {
+    if (status && status.needsSeat && !focusOn && (phase === 'running' || phase === 'paused')) {
+      return 'clock paused — nothing to bite: sit on a chair by the water';
+    }
+    return '';
+  }
+
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
@@ -1704,10 +1712,7 @@
     // A stall outranks everything: the session is not running however the phase reads, and the
     // clock has stopped, so the player needs to know before the budget does.
     var stallNote = stalled ? 'loop stalled — the game stopped giving the bot frames; the clock is paused' : '';
-    var seatNote = '';
-    if (status && status.needsSeat && (phase === 'running' || phase === 'paused')) {
-      seatNote = 'clock paused — nothing to bite: sit on a chair by the water';
-    }
+    var seatNote = seatNoteFor(status, phase, focusOn);
     // A focus session outranks the log-offline chatter: the run will look alive while the game
     // refuses every cast, which is the most expensive way to spend a budget.
     var focus = inFocusSession();
