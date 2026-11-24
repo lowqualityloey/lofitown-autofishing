@@ -94,8 +94,13 @@ pause, the panel shows a persistent banner — "detector blind for 3 min — rel
 sit on a chair by the water" — which outranks the cast-stall retry and log-offline lines but yields
 to stall, result-missing, seat, focus and player/profile notices. The state is exposed as
 `host.dataset.blind`, the style is `.banner.blind`, and the 3-minute boundary, newer-signal choice,
-reload restart, cast-stall pause and resets are covered in `tests/blind.test.js`;
-`session.blindWarning()` is pure.
+reload restart, pause-aware resume cases, cast-stall/no-catch pauses and resets are covered in
+`tests/blind.test.js`; `session.blindWarning()` is pure. Deliberate hidden, user, seat and focus
+holds are subtracted from the silence. The reducer credits a hidden pause it sees; a throttled
+background tab that never ticked hands its hidden wall time to the reducer on the browser's
+visibility return instead. A fresh prompt or dial clears the pause credit, a watchdog/core restart
+clears it because the new detector has no history, and cast-stall/no-catch remain detector failures
+that still count.
 
 ## 2026-11-24 Crash-loop breaker (3.9.61)
 

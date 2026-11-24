@@ -5023,7 +5023,12 @@ const SPECIES = [
       errCount: 0,
       errTotal: 0,
       stopReason: null,
-      stalled: false
+      stalled: false,
+      blindPauseMs: 0,       // deliberate pause time since the last prompt/dial
+      blindPauseAt: null,    // start of a deliberate pause that is still open
+      blindBubbleMs: null,
+      blindDialMs: null,
+      blindHiddenPause: false // this hidden episode was seen and credited by the reducer
     };
     if (overrides) {
       for (var k in overrides) {
@@ -5145,6 +5150,7 @@ const SPECIES = [
   function retryable(reason) {
     return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block' || reason === 'profile-open';
   }
+
   var RETRY_DELAY_MS = 60 * 1000;
   var MAX_RETRIES = 3;
   var HIDDEN_PAUSE_MS = 5000;         // the game freezes while the tab is hidden
@@ -5155,12 +5161,56 @@ const SPECIES = [
   var SEAT_STOP_MS = 30 * 60 * 1000;   // an unseated character cannot bite; give up rather than sit there forever
   var SEAT_OVERRIDE_MS = 15 * 1000;    // a Resume or retry runs this long despite the seat fact
 
+  /** A hold the user asked for, not a detector stall. Its time does not count as blindness. */
+  function deliberatePause(reason) {
+    return reason === 'hidden' || reason === 'user' || reason === 'seat' || reason === 'focus';
+  }
+
+  function beginBlindPause(s, at) {
+    if (s.blindPauseAt == null) s.blindPauseAt = at;
+  }
+
+  function endBlindPause(s, at) {
+    if (s.blindPauseAt == null) return;
+    s.blindPauseMs = (s.blindPauseMs || 0) + Math.max(0, at - s.blindPauseAt);
+    s.blindPauseAt = null;
+  }
+
+  /** A new prompt or dial starts a fresh blind interval, so earlier deliberate pauses no longer count. */
+  function observeBlindSignals(s, fact, at) {
+    var bubble = typeof fact.sinceBubbleMs === 'number' ? fact.sinceBubbleMs : null;
+    var dial = typeof fact.sinceDialMs === 'number' ? fact.sinceDialMs : null;
+    var fresh = (bubble != null && (s.blindBubbleMs == null || bubble < s.blindBubbleMs)) ||
+                (dial != null && (s.blindDialMs == null || dial < s.blindDialMs));
+    if (bubble != null) s.blindBubbleMs = bubble;
+    if (dial != null) s.blindDialMs = dial;
+    if (fresh) {
+      s.blindPauseMs = 0;
+      if (s.blindPauseAt != null) s.blindPauseAt = at;
+    }
+  }
+
+  /** A new core has no pause history, even when a watchdog started it without a reducer action. */
+  function clearBlindPause(s) {
+    s.blindPauseMs = 0;
+    s.blindPauseAt = null;
+    s.blindBubbleMs = null;
+    s.blindDialMs = null;
+    s.blindHiddenPause = false;
+    return s;
+  }
+
   function paused(s, at, reason) {
+    var wasDeliberate = deliberatePause(s.pauseReason);
+    var willBeDeliberate = deliberatePause(reason);
+    if (!wasDeliberate && willBeDeliberate) beginBlindPause(s, at);
+    else if (wasDeliberate && !willBeDeliberate) endBlindPause(s, at);
     s.phase = 'paused';
     s.pauseReason = reason;
     s.pausedAt = at;
     s.lastTickAt = null;
     s.visibleSince = null;
+    if (reason === 'hidden') s.blindHiddenPause = true;
     if (retryable(reason)) s.retryAt = at + RETRY_DELAY_MS;
     // 'seat' is the one pause that must NOT stop the core: the core is the only thing watching for
     // the cast prompt to come back, and it is what clears needsSeat when the player sits down again.
@@ -5182,6 +5232,7 @@ const SPECIES = [
 
   function runningAgain(s, at) {
     var wasSeat = s.pauseReason === 'seat';
+    if (deliberatePause(s.pauseReason)) endBlindPause(s, at);
     s.phase = 'running';
     s.pauseReason = null;
     s.pausedAt = null;
@@ -5308,6 +5359,7 @@ const SPECIES = [
       s.errTotal = 0;
       s.pauseReason = null;
       s.pausedAt = null;
+      clearBlindPause(s);
       s.seatOverrideUntil = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -5335,6 +5387,24 @@ const SPECIES = [
       return { state: s, actions: stopSession(s, at, fact.reason, fact.diag) };
     }
 
+    if (fact.type === 'hidden-start') {
+      // A new hidden episode. Do not clear the marker if the reducer is already inside the hidden
+      // pause; only a fresh episode should hand the gap back to the visibility return.
+      if (!(s.phase === 'paused' && s.pauseReason === 'hidden')) s.blindHiddenPause = false;
+      return { state: s, actions: [] };
+    }
+
+    if (fact.type === 'hidden-return') {
+      // If the reducer saw the hidden pause, it credits that pause on resume. The panel only fills
+      // in a gap the reducer never saw (a throttled background tab). A user/seat/focus hold already
+      // has its own pause credit, so it covers the gap as well.
+      if (s.blindHiddenPause) return { state: s, actions: [] };
+      var hiddenMs = Math.max(0, Number(fact.hiddenMs) || 0);
+      var active = s.phase === 'running' || s.phase === 'paused';
+      var covered = s.phase === 'paused' && deliberatePause(s.pauseReason);
+      if (hiddenMs && active && !covered) s.blindPauseMs = (s.blindPauseMs || 0) + hiddenMs;
+      return { state: s, actions: [] };
+    }
 
     if (fact.type === 'pause') {
       // Pause is a hold, not a stop: the session, its length and today's budget all survive, and no
@@ -5343,6 +5413,7 @@ const SPECIES = [
       if (s.lastTickAt != null) credit(s, s.lastTickAt, at);
       s.phase = 'paused';
       s.pauseReason = fact.reason === 'focus' ? 'focus' : 'user';
+      if (deliberatePause(s.pauseReason)) beginBlindPause(s, at);
       s.pausedAt = at;
       s.lastTickAt = null;
       s.hiddenSince = null;
@@ -5362,6 +5433,7 @@ const SPECIES = [
       // the user would see a resume that did nothing. The cap and the window are checked up front.
       if (s.todayMs + todayFishingMs(s) >= s.dailyCapMs) return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
       if (s.window.on && !withinWindow(s.window, at)) return { state: s, actions: [{ type: 'refuse', reason: 'window' }] };
+      if (deliberatePause(s.pauseReason)) endBlindPause(s, at);
       var fromSeat = s.pauseReason === 'seat';
       s.phase = 'running';
       s.pauseReason = null;
@@ -5394,6 +5466,7 @@ const SPECIES = [
     }
 
     if (fact.type === 'tick') {
+      observeBlindSignals(s, fact, at);
       if (s.phase === 'cooldown') {
         if (s.cooldownUntil != null && at >= s.cooldownUntil) {
           // Optional chaining: rest, then run again, for an unattended night. It is still bounded
@@ -5413,6 +5486,7 @@ const SPECIES = [
             s.startedAt = at;
             s.lastTickAt = at;
             s.lastCatchAt = at;
+            clearBlindPause(s);
             return {
               state: s,
               actions: [
@@ -5433,6 +5507,7 @@ const SPECIES = [
           s.phase = 'running';
           s.startedAt = at;
           s.lastTickAt = at;
+          clearBlindPause(s);
           return {
             state: s,
             actions: [
@@ -5599,8 +5674,9 @@ const SPECIES = [
    * last prompt and the last dial, or the current core run when neither has been seen. The age is
    * capped at that run's own age (and the session's) because the core keeps `geoAt` across a new
    * session and a reload starts a fresh detector; without the cap, a dial from yesterday could make
-   * a fresh run look blind at once. Returns the age worth a warning, or null. Pure, so the
-   * three-minute boundary is testable.
+   * a fresh run look blind at once. Deliberate user/seat/focus holds, and hidden gaps reported by the
+   * panel's visibility return, are subtracted; cast-stall and no-catch are detector failures and
+   * still count. Returns the age worth a warning, or null. Pure, so the boundary is testable.
    */
   function blindWarning(s) {
     if (!s || s.running !== true || s.stalled || s.visible === false) return null;
@@ -5617,10 +5693,12 @@ const SPECIES = [
     if (typeof s.sinceDialMs === 'number') ages.push(s.sinceDialMs);
     var blindMs = ages.length ? Math.min.apply(null, ages) : cap;
     if (blindMs != null && cap != null) blindMs = Math.min(blindMs, cap);
+    var pauseMs = typeof s.pauseMs === 'number' && isFinite(s.pauseMs) ? Math.max(0, s.pauseMs) : 0;
+    if (blindMs != null) blindMs = Math.max(0, blindMs - pauseMs);
     return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindWarning: blindWarning };
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
 });
 
 /* layout.js — where the panel may sit so it never covers the fishing UI.
@@ -5767,6 +5845,7 @@ const SPECIES = [
   var guardTimer = null;      // its own timer: a throw inside tick() must not also disable the check
   var TICK_GUARD_MS = 5000;
   var lastTickAt = 0;         // when tick() was last entered
+  var hiddenAt = null;        // wall clock when the tab went hidden; visibility events survive timer throttling
   var tickErrors = 0;
   var lastTickError = '';
   var zombieRevives = 0;
@@ -6489,6 +6568,11 @@ const SPECIES = [
 
   var RUNNERS = {
     startCore: function (a) {
+      // A new core has a fresh detector. The watchdog starts it without a reducer action, so clear
+      // the old pause credit here rather than carrying it across the restart.
+      if (window.AutoFishSession && state && window.AutoFishSession.clearBlindPause) {
+        window.AutoFishSession.clearBlindPause(state);
+      }
       // A second Start in the same page must see the minutes the first session just logged; the
       // reducer has already reset fishingMs, so the day's total has to come from the store.
       baseTodayMs = loadBudget().ms;
@@ -7505,6 +7589,7 @@ const SPECIES = [
           sinceDialMs: status ? status.sinceDialMs : null,
           startedAt: state.startedAt,
           runAgeMs: status ? status.runAgeMs : null,
+          pauseMs: state.blindPauseMs || 0,
           now: Date.now()
         });
       }
@@ -7971,6 +8056,7 @@ const SPECIES = [
     guardTimer = setInterval(health, TICK_GUARD_MS);
     placeTimer = setInterval(place, 250);
     window.addEventListener('resize', place);
+    hiddenAt = document.visibilityState === 'hidden' ? Date.now() : null;
     document.addEventListener('visibilitychange', onVisible);
 
     window.__panel.mounted = true;
@@ -7991,7 +8077,23 @@ const SPECIES = [
   }
 
   function onVisible() {
-    if (document.visibilityState === 'visible' && (state.phase === 'running' || state.phase === 'waiting')) acquireWakeLock();
+    if (document.visibilityState === 'visible') {
+      var hiddenMs = hiddenAt != null ? Math.max(0, Date.now() - hiddenAt) : 0;
+      hiddenAt = null;
+      // A throttled background tab can miss every hidden tick. This visibility event still knows the
+      // wall time; the reducer decides whether a deliberate hold already covers it.
+      if (hiddenMs && state) {
+        try { dispatch({ type: 'hidden-return', at: Date.now(), hiddenMs: hiddenMs }); }
+        catch (e) { noteTickError('hidden-return', e); }
+      }
+      if (state && (state.phase === 'running' || state.phase === 'waiting')) acquireWakeLock();
+    } else {
+      hiddenAt = Date.now();
+      if (state) {
+        try { dispatch({ type: 'hidden-start', at: Date.now() }); }
+        catch (e) { noteTickError('hidden-start', e); }
+      }
+    }
   }
 
   function mountAdoption() {
@@ -8013,6 +8115,7 @@ const SPECIES = [
 
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', onVisible);
+    hiddenAt = null;
     releaseWakeLock();
     if (host && host.parentNode) host.parentNode.removeChild(host);
     if (window.__panel) window.__panel.mounted = false;

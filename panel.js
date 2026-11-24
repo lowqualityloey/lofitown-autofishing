@@ -42,6 +42,7 @@
   var guardTimer = null;      // its own timer: a throw inside tick() must not also disable the check
   var TICK_GUARD_MS = 5000;
   var lastTickAt = 0;         // when tick() was last entered
+  var hiddenAt = null;        // wall clock when the tab went hidden; visibility events survive timer throttling
   var tickErrors = 0;
   var lastTickError = '';
   var zombieRevives = 0;
@@ -764,6 +765,11 @@
 
   var RUNNERS = {
     startCore: function (a) {
+      // A new core has a fresh detector. The watchdog starts it without a reducer action, so clear
+      // the old pause credit here rather than carrying it across the restart.
+      if (window.AutoFishSession && state && window.AutoFishSession.clearBlindPause) {
+        window.AutoFishSession.clearBlindPause(state);
+      }
       // A second Start in the same page must see the minutes the first session just logged; the
       // reducer has already reset fishingMs, so the day's total has to come from the store.
       baseTodayMs = loadBudget().ms;
@@ -1780,6 +1786,7 @@
           sinceDialMs: status ? status.sinceDialMs : null,
           startedAt: state.startedAt,
           runAgeMs: status ? status.runAgeMs : null,
+          pauseMs: state.blindPauseMs || 0,
           now: Date.now()
         });
       }
@@ -2246,6 +2253,7 @@
     guardTimer = setInterval(health, TICK_GUARD_MS);
     placeTimer = setInterval(place, 250);
     window.addEventListener('resize', place);
+    hiddenAt = document.visibilityState === 'hidden' ? Date.now() : null;
     document.addEventListener('visibilitychange', onVisible);
 
     window.__panel.mounted = true;
@@ -2266,7 +2274,23 @@
   }
 
   function onVisible() {
-    if (document.visibilityState === 'visible' && (state.phase === 'running' || state.phase === 'waiting')) acquireWakeLock();
+    if (document.visibilityState === 'visible') {
+      var hiddenMs = hiddenAt != null ? Math.max(0, Date.now() - hiddenAt) : 0;
+      hiddenAt = null;
+      // A throttled background tab can miss every hidden tick. This visibility event still knows the
+      // wall time; the reducer decides whether a deliberate hold already covers it.
+      if (hiddenMs && state) {
+        try { dispatch({ type: 'hidden-return', at: Date.now(), hiddenMs: hiddenMs }); }
+        catch (e) { noteTickError('hidden-return', e); }
+      }
+      if (state && (state.phase === 'running' || state.phase === 'waiting')) acquireWakeLock();
+    } else {
+      hiddenAt = Date.now();
+      if (state) {
+        try { dispatch({ type: 'hidden-start', at: Date.now() }); }
+        catch (e) { noteTickError('hidden-start', e); }
+      }
+    }
   }
 
   function mountAdoption() {
@@ -2288,6 +2312,7 @@
 
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', onVisible);
+    hiddenAt = null;
     releaseWakeLock();
     if (host && host.parentNode) host.parentNode.removeChild(host);
     if (window.__panel) window.__panel.mounted = false;
