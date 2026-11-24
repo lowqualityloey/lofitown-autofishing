@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.58
+// @version      3.9.59
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.58" };
+  const F = { version: "3.9.59" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -379,6 +379,29 @@ window.__autofishInstalled = true;
     const maxWidth = cfg.ghostMaxWidthDeg != null ? cfg.ghostMaxWidthDeg : 60;
     const minShrink = cfg.ghostMinShrinkDeg != null ? cfg.ghostMinShrinkDeg : 5;
     return held >= 0 && held < maxHeld && width > 0 && width < maxWidth && shrink >= minShrink;
+  }
+
+  /**
+   * Is this close a stalled ring rather than a press miss or a fade?
+   *
+   * A stuck waiting-for-result ring stays up for 10-13 s after a press the game never settled, and
+   * closeDial used to score it as a miss (press older than hitMs) or a ghost (no spin measured,
+   * travel < 15). Opt-in stallDialMs names that ring instead. Narrow only: a genuinely missed wide
+   * dial reaches its 15.9 s timeout in the same shape. 0 (the default) keeps the old verdicts.
+   */
+  function dialStalled(st, o) {
+    const s = st || {};
+    const cfg = o || {};
+    const stallMs = Number(cfg.stallDialMs) || 0;
+    if (!(stallMs > 0)) return false;
+    const width = Number(s.width) || 0;
+    if (!(width > 0 && width < (cfg.ghostMaxWidthDeg || 60))) return false;   // narrow only
+    const held = Number(s.heldMs);
+    if (!(held >= stallMs)) return false;
+    const presses = Number(s.presses) || 0;
+    if (presses === 0) return !!s.ghost;          // only a fade-shaped ring can be rescued from 'ghost'
+    const since = s.sincePress;
+    return since != null && since > (cfg.hitMs || 1500);
   }
 
   /**
@@ -3118,6 +3141,11 @@ const SPECIES = [
     });
   }
 
+  /* One list, not a five-deep ternary: a new verdict has to name its counter here. */
+  const DIAL_COUNTER = {
+    hit: 'hits', miss: 'misses', ghost: 'ghosts', skipped: 'skipped', stalled: 'stalled', 'no-press': 'noPress',
+  };
+
   /**
    * End of a dial. A press the game acts on ends the dial within ~1.5 s; a press that misses
    * leaves it spinning to its ~15.9 s timeout, and an unpressed dial just times out. That is
@@ -3147,13 +3175,15 @@ const SPECIES = [
     // its wedge sits still (omega 0) and no press is ever due. Count it apart so the loss tally
     // stays honest.
     const ghost = dialGhost({ presses, heldMs, width, widthShrink, travel: F.dialTravel }, F.opts);
+    const stalled = dialStalled({ presses, heldMs, sincePress, ghost, width }, F.opts);
     const skipped = !ghost && presses === 0 && heldMs >= (F.opts.skipMs || 300);
-    const verdict = ghost ? 'ghost'
+    const verdict = stalled ? 'stalled'
+      : ghost ? 'ghost'
       : presses === 0 ? (skipped ? 'skipped' : 'no-press')
       : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
     F.stats.dialsClosed++;
-    F.stats[verdict === 'hit' ? 'hits' : verdict === 'miss' ? 'misses' : verdict === 'ghost' ? 'ghosts' : verdict === 'skipped' ? 'skipped' : 'noPress']++;
-    if (ghost && F.geo) {
+    F.stats[DIAL_COUNTER[verdict]]++;
+    if (ghost && !stalled && F.geo) {
       F.ghostGeo = {
         cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width,
         until: t + (F.opts.ghostCooldownMs || 2000),
@@ -3338,6 +3368,7 @@ const SPECIES = [
       relockGraceMs: 450,           // hold a dial's geometry this long after a press (the ring blinks)
       maxPressPerDial: 12,          // safety cap on presses per dial lock (one per rotation is normal)
       hitMs: 1500,                  // a press the game acts on ends the dial within this
+      stallDialMs: 0,               // opt-in: name a narrow ring held this long 'stalled' instead of miss/ghost
       skipMs: 300,                  // an unpressed dial that lived this long lost a fish (fades are ~100 ms)
       attemptIdleMs: 25000,         // an attempt with no dial and no press this long is over
       resultMissingMs: 8000,        // a win-like attempt with no card or prompt this long -> the game is waiting for a result
@@ -3367,7 +3398,7 @@ const SPECIES = [
     watchLongTasks();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
-      hits: 0, misses: 0, noPress: 0,
+      hits: 0, misses: 0, noPress: 0, stalled: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
@@ -3473,7 +3504,7 @@ const SPECIES = [
     resetPerf();
     F.stats = {
       bubbles: 0, dials: 0, presses: 0, dialsClosed: 0,
-      hits: 0, misses: 0, noPress: 0,
+      hits: 0, misses: 0, noPress: 0, stalled: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
       shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
@@ -4536,7 +4567,7 @@ const SPECIES = [
         firstPressMinN: opts.firstPressMinN, firstPressMinSpanMs: opts.firstPressMinSpanMs,
         fastFirstPress: !!opts.fastFirstPress,
         firstPressMaxRms: opts.firstPressMaxRms, firstPressMaxWaitMs: opts.firstPressMaxWaitMs,
-        insideNowMs: opts.insideNowMs,
+        insideNowMs: opts.insideNowMs, stallDialMs: opts.stallDialMs,
         firstPressMaxWidthDeg: opts.firstPressMaxWidthDeg, firstPressFastOmega: opts.firstPressFastOmega,
       },
       press: {
@@ -4560,7 +4591,7 @@ const SPECIES = [
     if (patch.fastFirstPress != null) F.opts.fastFirstPress = !!patch.fastFirstPress;
     ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs',
       'firstPressMinN', 'firstPressMinSpanMs', 'firstPressMaxRms', 'firstPressMaxWaitMs',
-      'firstPressMaxWidthDeg', 'firstPressFastOmega', 'insideNowMs'].forEach((k) => {
+      'firstPressMaxWidthDeg', 'firstPressFastOmega', 'insideNowMs', 'stallDialMs'].forEach((k) => {
       const n = Number(patch[k]);
       if (patch[k] != null && isFinite(n)) F.opts[k] = n;
     });

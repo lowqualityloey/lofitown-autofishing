@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive, lossDiagnostics };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics };')();
 const refreshStart = SRC.indexOf('function refreshLossDiagnostic');
 const refreshEnd = SRC.indexOf('\n  }', refreshStart);
 if (refreshStart < 0 || refreshEnd < refreshStart) throw new Error('refreshLossDiagnostic is missing from autofish.js');
@@ -36,7 +36,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'firstPressGate', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive', 'lossDiagnostics']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'firstPressGate', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'dialStalled', 'ghostBlocked', 'spinAlive', 'lossDiagnostics']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -182,6 +182,31 @@ test('fast first press is an opt-in bypass of the first-press gate', () => {
   assert.match(SRC, /if \(patch\.fastFirstPress != null\) F\.opts\.fastFirstPress = !!patch\.fastFirstPress/,
     'tune() can switch the live run without a restart');
   assert.match(SRC, /fastFirstPress: !!opts\.fastFirstPress/, 'calibration reports the opt-in state');
+});
+
+test('a stalled ring can be named instead of charged as a miss or a ghost, opt-in only', () => {
+  // 2026-11-24 ledger: all 167 narrow first-dial misses and 245 of 282 narrow ghosts came from
+  // 3.9.55's stuck result sessions (34 s attempts, 10-13 s rings); 3.9.56/57 had none in 1,277
+  // narrow dials. closeDial scored those rings as aiming errors. stallDialMs names them instead.
+  const on = { stallDialMs: 9000 };
+  const cases = [
+    ['off by default: the old miss verdict is unchanged', { presses: 2, heldMs: 13000, sincePress: 12500, width: 55 }, {}, false],
+    ['a press the game never settled, on a long-held narrow ring, is a stall', { presses: 2, heldMs: 13000, sincePress: 12500, width: 55 }, on, true],
+    ['a fresh press is not a stall, however long the ring has lived', { presses: 2, heldMs: 13000, sincePress: 500, width: 55 }, on, false],
+    ['a normal 15.9 s dial with a miss is not a stall before the threshold', { presses: 2, heldMs: 5000, sincePress: 4500, width: 55 }, on, false],
+    ['a genuine wide miss keeps its miss verdict', { presses: 2, heldMs: 13000, sincePress: 12500, width: 100 }, on, false],
+    ['a long still ring is a stall, not the ~2.7 s fade the ghost rule is for', { presses: 0, heldMs: 10000, ghost: true, width: 45 }, on, true],
+    ['a real fade stays a ghost', { presses: 0, heldMs: 2000, ghost: true, width: 45 }, on, false],
+    ['an unpressed fish that is not ghost-shaped is untouched', { presses: 0, heldMs: 10000, ghost: false, width: 45 }, on, false],
+  ];
+  for (const [why, st, opts, want] of cases) assert.equal(T.dialStalled(st, opts), want, why);
+  assert.match(SRC, /const stalled = dialStalled\(\{ presses, heldMs, sincePress, ghost, width \}, F\.opts\)/,
+    'closeDial asks the helper');
+  assert.match(SRC, /F\.stats\[DIAL_COUNTER\[verdict\]\]\+\+/, 'the verdict names its counter through one map');
+  assert.match(SRC, /const verdict = stalled \? 'stalled'/, 'the verdict is named before ghost/miss');
+  assert.match(SRC, /if \(ghost && !stalled && F\.geo\)/, 'a stall must not start the ghost cooldown');
+  assert.match(SRC, /stalled: 0/, 'the counter is initialized');
+  assert.match(SRC, /stallDialMs: 0/, 'the option is off in the shipped defaults');
 });
 
 test('the first-press hold is a fraction of one pass, not a fixed ceiling', () => {
