@@ -83,6 +83,20 @@ The fast arm caught 16/16 attempts versus 7/9 in the default arm, but the defaul
 unseated pause and the samples are too small for an accuracy claim. This run verifies the opt-in
 path live; the default stable-fit hold remains the conservative choice.
 
+## 2026-11-24 Stall verdict replay (3.9.59)
+
+`stallDialMs` (default 0, off) names a long-held narrow ring `stalled` instead of a press miss or a
+ghost. Replaying the overnight ledger (548 runs, 11,891 narrow first dials) at 9000 ms: **122 of 167
+narrow misses (73%)** and **166 of 282 narrow ghosts (59%)** would have been relabelled, and **zero of
+14,753 narrow hits** - a hit cannot qualify (its last press is <= `hitMs` old), and no hit was even
+held 9000 ms. Only 3.9.55's stuck result sessions were affected; 3.9.56/57 first dials were untouched.
+
+If it is ever enabled, prefer **7900 ms**: the 45 misses left at 9000 all closed at 7986 ms and 42
+more ghosts at ~8 s, while every real fade lasted <= 328 ms and nothing sat between 1 s and 6 s. 7900
+catches the whole stuck-ring cluster and still leaves the brief fades as ghosts. A genuine narrow
+miss closes at the ~15.9 s dial timeout, so it is relabelled at either threshold - that ambiguity
+belongs to the rule, not the cutoff. The default stays 0 until a live session needs it.
+
 ## Install once, run forever (userscript - panel included, no server, no console)
 
 The easiest path by a wide margin: **one file, and the whole HUD is inside it**. The panel, the
