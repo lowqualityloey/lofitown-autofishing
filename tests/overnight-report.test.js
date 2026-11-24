@@ -57,6 +57,28 @@ test('the night reports its own gaps, caps and totals', () => {
   assert.match(out, /Attempts per hour: /);
 });
 
+test('the report summarizes guard and blind diagnostics', () => {
+  const older = snapshot('export-2026-11-17T19-00-00-000Z.json', '2026-11-17T19:00:00Z', [row(1, 0, 'caught')]);
+  older.data.guard = { revives: 1, windowRevives: 1, tickErrors: 0 };
+  older.data.blind = { silenceMs: 120000, warning: false };
+  const newer = snapshot('export-2026-11-17T19-05-00-000Z.json', '2026-11-17T19:05:00Z', [row(2, 5, 'caught')]);
+  newer.data.guard = { revives: 3, windowRevives: 2, tickErrors: 1 };
+  newer.data.blind = { silenceMs: 312000, warning: true };
+
+  const out = report([older, newer]);
+  assert.match(out, /## Guard and blind/);
+  assert.match(out, /detector silence: 5\.2 min max at /);
+  assert.match(out, /warnings: 1 snapshot/);
+  assert.match(out, /guard revives: 3 peak/);
+});
+
+test('older snapshots report guard and blind as not recorded', () => {
+  const out = report([snapshot('export-2026-11-17T19-00-00-000Z.json', '2026-11-17T19:00:00Z', [row(1, 0, 'caught')])]);
+  assert.match(out, /## Guard and blind/);
+  assert.match(out, /_not recorded in these snapshots \(pre-3\.9\.63\)\._/);
+  assert.doesNotMatch(out, /detector silence: 0/);
+});
+
 test('a gap below the threshold is not a stall', () => {
   assert.deepEqual(gaps([row(1, 0, 'caught'), row(2, 9, 'caught')]), []);
   assert.equal(gaps([row(1, 0, 'caught'), row(2, 10, 'caught')]).length, 1, 'ten minutes is the threshold');
