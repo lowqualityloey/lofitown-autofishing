@@ -71,6 +71,14 @@ test('press verdicts are reported by their evidence', () => {
   assert.equal(v.timing.rate, null, 'no evidence is a null rate, not a perfect one');
 });
 
+test('status exposes the current core run age for the blind warning', () => {
+  const F = {
+    running: true, startedAt: 4000,
+    stats: {}, events: [], widthReport: () => [],
+  };
+  assert.equal(mkStatus(F)().runAgeMs, 1000, 'a reload restarts this clock with the new core');
+});
+
 test('accuracy is a whole-session number even when the attempts ring is capped', () => {
   const F = {
     stats: {

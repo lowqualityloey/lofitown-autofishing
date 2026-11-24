@@ -4381,6 +4381,7 @@ const SPECIES = [
       stalled: !!F.stalled,
       postRender: !!F._postRender,
       lastTickAgoMs: F.lastTickAt ? Math.round(now() - F.lastTickAt) : null,
+      runAgeMs: F.running && F.startedAt ? Math.round(now() - F.startedAt) : null,
       catchCount: s.catchSeq || 0,
       hidden: !!F.hidden,
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,

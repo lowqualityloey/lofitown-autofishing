@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.61) - A crash-loop breaker stops reviving a core that keeps dying: three restarts in ten minutes, then a `core-crash` stop whose session row carries the guard diagnostics. Then 3.9.60's watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
+Status: **WORKING (3.9.62) - A detector blind for three minutes on a visible page is escalated into a persistent reload-and-sit warning, even through the cast-stall retries. Then 3.9.61's crash-loop breaker stops reviving a core that keeps dying: three restarts in ten minutes, then a `core-crash` stop whose session row carries the guard diagnostics. Then 3.9.60's watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
 against the new day's cap: the reducer carries the pre-midnight minutes, the panel stores and shows
 the same share, and the session row still reports the whole run. The rest is 3.9.54's session-log
 fix: an interrupted row carries the catches it had and the start time the heartbeat recorded, so
@@ -82,6 +82,20 @@ maximum stayed at 0.264; its own held count was 0. Both arms had zero dial misse
 The fast arm caught 16/16 attempts versus 7/9 in the default arm, but the default arm includes the
 unseated pause and the samples are too small for an accuracy claim. This run verifies the opt-in
 path live; the default stable-fit hold remains the conservative choice.
+
+## 2026-11-24 Blind-game escalation (3.9.62)
+
+`doctor()` names `detector-blind` after 45 s, but the panel only put it in the phase chip, and a real
+blind run pauses as `cast-stall` at 90 s, so the retry loop hid the condition. 3.9.62 measures the
+silence itself: the newer of `sinceBubbleMs` and `sinceDialMs`, or the current core run when neither
+has been seen; the age is capped at that run, so a reload starts a fresh three-minute clock. Once
+that is three minutes on a visible page during a running or cast-stall/no-catch
+pause, the panel shows a persistent banner — "detector blind for 3 min — reload the game tab, then
+sit on a chair by the water" — which outranks the cast-stall retry and log-offline lines but yields
+to stall, result-missing, seat, focus and player/profile notices. The state is exposed as
+`host.dataset.blind`, the style is `.banner.blind`, and the 3-minute boundary, newer-signal choice,
+reload restart, cast-stall pause and resets are covered in `tests/blind.test.js`;
+`session.blindWarning()` is pure.
 
 ## 2026-11-24 Crash-loop breaker (3.9.61)
 

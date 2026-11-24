@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.61
+// @version      3.9.62
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.61" };
+  const F = { version: "3.9.62" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -4399,6 +4399,7 @@ const SPECIES = [
       stalled: !!F.stalled,
       postRender: !!F._postRender,
       lastTickAgoMs: F.lastTickAt ? Math.round(now() - F.lastTickAt) : null,
+      runAgeMs: F.running && F.startedAt ? Math.round(now() - F.startedAt) : null,
       catchCount: s.catchSeq || 0,
       hidden: !!F.hidden,
       geo: F.geo ? { cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width: F.geo.width && Math.round(F.geo.width) } : null,
@@ -5590,7 +5591,36 @@ const SPECIES = [
     return { allow: true, times: kept };
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate };
+  var BLIND_WARN_MS = 3 * 60 * 1000;   // a detector this blind is not waiting for a bite
+
+  /**
+   * A blind detector is not a slow bite. doctor() names it after 45 s, but a real blind run pauses
+   * as cast-stall at 90 s and keeps retrying, so this measures the silence itself: the newer of the
+   * last prompt and the last dial, or the current core run when neither has been seen. The age is
+   * capped at that run's own age (and the session's) because the core keeps `geoAt` across a new
+   * session and a reload starts a fresh detector; without the cap, a dial from yesterday could make
+   * a fresh run look blind at once. Returns the age worth a warning, or null. Pure, so the
+   * three-minute boundary is testable.
+   */
+  function blindWarning(s) {
+    if (!s || s.running !== true || s.stalled || s.visible === false) return null;
+    var active = s.phase === 'running' ||
+      (s.phase === 'paused' && (s.pauseReason === 'cast-stall' || s.pauseReason === 'no-catch'));
+    if (!active) return null;
+    var sessionAge = typeof s.startedAt === 'number' && typeof s.now === 'number'
+      ? s.now - s.startedAt : null;
+    var runAge = typeof s.runAgeMs === 'number' ? s.runAgeMs : null;
+    var cap = runAge != null ? runAge : sessionAge;
+    if (sessionAge != null && cap != null) cap = Math.min(cap, sessionAge);
+    var ages = [];
+    if (typeof s.sinceBubbleMs === 'number') ages.push(s.sinceBubbleMs);
+    if (typeof s.sinceDialMs === 'number') ages.push(s.sinceDialMs);
+    var blindMs = ages.length ? Math.min.apply(null, ages) : cap;
+    if (blindMs != null && cap != null) blindMs = Math.min(blindMs, cap);
+    return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
+  }
+
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindWarning: blindWarning };
 });
 
 /* layout.js — where the panel may sit so it never covers the fishing UI.
@@ -6611,6 +6641,7 @@ const SPECIES = [
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-top-color:rgba(255,145,80,.34)}',
+    '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-top-color:rgba(255,120,60,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.loghead{display:flex;align-items:center;gap:6px}',
     '.logmeta{font-size:10px;color:#8b95a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -7457,6 +7488,32 @@ const SPECIES = [
 
     var stats = (status && status.stats) || {};
 
+    // A long-blind detector is not a slow bite: after the doctor's 45 s warning the session pauses
+    // as cast-stall and retries, so the age of the silence has to outlive those pauses. The note
+    // stays in the banner chain below, ahead of the cast-stall retry and any transient log-offline
+    // line, so it remains visible until the detector sees something again.
+    var blindMs = null;
+    try {
+      if (window.AutoFishSession && window.AutoFishSession.blindWarning) {
+        blindMs = window.AutoFishSession.blindWarning({
+          phase: phase,
+          pauseReason: state.pauseReason,
+          running: !!(status && status.running),
+          stalled: !!(status && status.stalled),
+          visible: document.visibilityState === 'visible',
+          sinceBubbleMs: status ? status.sinceBubbleMs : null,
+          sinceDialMs: status ? status.sinceDialMs : null,
+          startedAt: state.startedAt,
+          runAgeMs: status ? status.runAgeMs : null,
+          now: Date.now()
+        });
+      }
+    } catch (e) {}
+    var blindNote = '';
+    if (blindMs != null) {
+      blindNote = 'detector blind for ' + Math.floor(blindMs / 60000) + ' min — reload the game tab, then sit on a chair by the water';
+    }
+
     if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
     else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' paused';
     else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cooling';
@@ -7557,12 +7614,13 @@ const SPECIES = [
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || castNote || pauseNote || banner || stopNote;
+    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || blindNote || castNote || pauseNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (resultNote) ui.banner.className = 'banner result';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (playerNote) ui.banner.className = 'banner seat';
+    else if (blindNote) ui.banner.className = 'banner blind';
     else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
     else if ((pauseNote || stopNote) && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
@@ -7578,6 +7636,7 @@ const SPECIES = [
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (focusOn) host.dataset.focusMode = '1'; else delete host.dataset.focusMode;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
+      if (blindMs != null) host.dataset.blind = '1'; else delete host.dataset.blind;
       if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
       if ((status && status.profileOpen) || state.pauseReason === 'profile-open') host.dataset.profileOpen = '1'; else delete host.dataset.profileOpen;
     }

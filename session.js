@@ -615,5 +615,34 @@
     return { allow: true, times: kept };
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate };
+  var BLIND_WARN_MS = 3 * 60 * 1000;   // a detector this blind is not waiting for a bite
+
+  /**
+   * A blind detector is not a slow bite. doctor() names it after 45 s, but a real blind run pauses
+   * as cast-stall at 90 s and keeps retrying, so this measures the silence itself: the newer of the
+   * last prompt and the last dial, or the current core run when neither has been seen. The age is
+   * capped at that run's own age (and the session's) because the core keeps `geoAt` across a new
+   * session and a reload starts a fresh detector; without the cap, a dial from yesterday could make
+   * a fresh run look blind at once. Returns the age worth a warning, or null. Pure, so the
+   * three-minute boundary is testable.
+   */
+  function blindWarning(s) {
+    if (!s || s.running !== true || s.stalled || s.visible === false) return null;
+    var active = s.phase === 'running' ||
+      (s.phase === 'paused' && (s.pauseReason === 'cast-stall' || s.pauseReason === 'no-catch'));
+    if (!active) return null;
+    var sessionAge = typeof s.startedAt === 'number' && typeof s.now === 'number'
+      ? s.now - s.startedAt : null;
+    var runAge = typeof s.runAgeMs === 'number' ? s.runAgeMs : null;
+    var cap = runAge != null ? runAge : sessionAge;
+    if (sessionAge != null && cap != null) cap = Math.min(cap, sessionAge);
+    var ages = [];
+    if (typeof s.sinceBubbleMs === 'number') ages.push(s.sinceBubbleMs);
+    if (typeof s.sinceDialMs === 'number') ages.push(s.sinceDialMs);
+    var blindMs = ages.length ? Math.min.apply(null, ages) : cap;
+    if (blindMs != null && cap != null) blindMs = Math.min(blindMs, cap);
+    return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
+  }
+
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindWarning: blindWarning };
 });

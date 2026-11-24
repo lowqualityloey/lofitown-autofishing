@@ -150,7 +150,7 @@ test('a running session that cannot bite says so: sit down, the game is seat-bas
   assert.ok(fn.length > 0, 'render() exists');
   assert.ok(fn.includes('var seatNote = seatNoteFor(status, phase, focusOn);'), 'render() uses the tested seat-note helper');
   assert.ok(fn.includes("'paused'"), 'the notice also shows while paused, not only while running');
-  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| castNote \|\| pauseNote \|\| banner/, 'the seat notice outranks the log-offline banner');
+  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| blindNote \|\| castNote \|\| pauseNote \|\| banner/, 'the seat notice outranks the blind notice and the log-offline banner');
   assert.ok(fn.includes("'banner seat'"), 'the seat notice gets its own colour, not the amber warning style');
   assert.ok(fn.includes("host.dataset.needsSeat = '1'"), 'needsSeat is observable from outside the shadow root');
   assert.match(src, /\.banner\.seat\{/, 'the seat style exists');
@@ -199,7 +199,7 @@ test('a focus session is announced, because a free account cannot fish in one', 
   assert.match(src, /var FOCUS_NOTE = 'focus session active/, 'the notice names the state');
   assert.ok(src.includes('needs Cozier'), 'and says why fishing will not happen');
   const fn = src.slice(src.indexOf('function render()'), src.indexOf('/* ------------------------------------------------------------ layout'));
-  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| castNote \|\| pauseNote \|\| banner/, 'the focus notice outranks the log-offline banner');
+  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| blindNote \|\| castNote \|\| pauseNote \|\| banner/, 'the focus notice outranks the blind notice and the log-offline banner');
   assert.ok(fn.includes("'banner focus'"), 'it gets its own colour, not the amber seat warning');
   assert.ok(fn.includes("host.dataset.focus = '1'"), 'the state is observable from outside the shadow root');
   assert.match(src, /\.banner\.focus\{/, 'the focus style exists');

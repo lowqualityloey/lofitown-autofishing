@@ -916,6 +916,7 @@
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-top-color:rgba(255,145,80,.34)}',
+    '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-top-color:rgba(255,120,60,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.loghead{display:flex;align-items:center;gap:6px}',
     '.logmeta{font-size:10px;color:#8b95a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -1762,6 +1763,32 @@
 
     var stats = (status && status.stats) || {};
 
+    // A long-blind detector is not a slow bite: after the doctor's 45 s warning the session pauses
+    // as cast-stall and retries, so the age of the silence has to outlive those pauses. The note
+    // stays in the banner chain below, ahead of the cast-stall retry and any transient log-offline
+    // line, so it remains visible until the detector sees something again.
+    var blindMs = null;
+    try {
+      if (window.AutoFishSession && window.AutoFishSession.blindWarning) {
+        blindMs = window.AutoFishSession.blindWarning({
+          phase: phase,
+          pauseReason: state.pauseReason,
+          running: !!(status && status.running),
+          stalled: !!(status && status.stalled),
+          visible: document.visibilityState === 'visible',
+          sinceBubbleMs: status ? status.sinceBubbleMs : null,
+          sinceDialMs: status ? status.sinceDialMs : null,
+          startedAt: state.startedAt,
+          runAgeMs: status ? status.runAgeMs : null,
+          now: Date.now()
+        });
+      }
+    } catch (e) {}
+    var blindNote = '';
+    if (blindMs != null) {
+      blindNote = 'detector blind for ' + Math.floor(blindMs / 60000) + ' min — reload the game tab, then sit on a chair by the water';
+    }
+
     if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
     else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' paused';
     else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cooling';
@@ -1862,12 +1889,13 @@
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || castNote || pauseNote || banner || stopNote;
+    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || blindNote || castNote || pauseNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (resultNote) ui.banner.className = 'banner result';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (playerNote) ui.banner.className = 'banner seat';
+    else if (blindNote) ui.banner.className = 'banner blind';
     else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
     else if ((pauseNote || stopNote) && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
@@ -1883,6 +1911,7 @@
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (focusOn) host.dataset.focusMode = '1'; else delete host.dataset.focusMode;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
+      if (blindMs != null) host.dataset.blind = '1'; else delete host.dataset.blind;
       if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
       if ((status && status.profileOpen) || state.pauseReason === 'profile-open') host.dataset.profileOpen = '1'; else delete host.dataset.profileOpen;
     }
