@@ -60,6 +60,12 @@ test('a tag with no vault trailer is refused, so a release cannot publish unreco
   assert.equal(legacy.exempt, true, 'the one hand-logged tag stays verifiable');
   assert.match(legacy.reason, /logged by hand/);
 
+  // 3.9.63 was published on the merge commit, so its tag cannot move; the exemption records the gap.
+  const merged = milestoneFor('v3.9.63', 'Merge pull request #33\n');
+  assert.equal(merged.exempt, true, 'the published 3.9.63 tag stays verifiable');
+  assert.match(merged.reason, /c639a7f/, 'the exemption names the tagged commit');
+  assert.match(merged.reason, /2026-11-24/, 'the exemption is dated');
+
   // The gate reads the source release first only to know which repair is safe, so the invariant is
   // that it stands before the publish path - a refused release must never reach the mirror.
   const src = fs.readFileSync(SCRIPT, 'utf8');
