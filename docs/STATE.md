@@ -51,8 +51,8 @@
   loss-decision change. The source release and public mirror are published with the 370,861-byte
   asset at sha256 `64e20a3bfb12ead5c128f5bc7f2c05b069f4832c7f26c2731bf6f2261f1e15b2`; both match
   and `node scripts/release.js --check` passes. The 20% held cap remains the interim gate. **3.9.53** is tagged `v3.9.53` and published: it breaks the seat-hold deadlock with a parsed-catch clear, a 60 s keybind probe and the auto-retry seat grace; source release and public mirror carry the 372,510-byte build (sha256 `e0a76aa9962b`), notes at `docs/releases/3.9.53.md`. It supersedes the 3.9.52 telemetry sample, which is closed and must not be resumed. **3.9.55** is tagged `v3.9.55` and published: it splits a session at local midnight so only the post-midnight share spends the new day's cap; source release and public mirror carry the 376,149-byte build (sha256 `5544671ed0c0`), notes at `docs/releases/3.9.55.md`. **3.9.56** is tagged `v3.9.56` (commit `b40bcbd`) and published: source release and public mirror carry the 376,535-byte build (sha256 `26a4ba93d1bc`), notes at `docs/releases/3.9.56.md`; `release.js --check` is green, including the anonymous latest URL. The release branch was fast-forwarded into `main` at `967e646`; the installed Tampermonkey copy updated through the public latest URL to 3.9.56 and posted catch rows at `00:04:47Z` and `00:04:56Z`; tag `v3.9.56` remains on `b40bcbd`.
-- **Current Working Branch**: `main` — the release branch was fast-forwarded into it at `967e646`
-  (from `2640df0`); this docs record is the follow-up commit. The merged branch carries the seat-warning,
+- **Current Working Branch**: `main` — PR #29 merged the README claim fixes into it at `9667f1e`
+  (from `967e646`); this docs record is the follow-up commit. The merged branch carries the seat-warning,
   capture-address and focus-takeover fixes plus the rebuilt dist. The installed Tampermonkey copy
   updated from the public latest URL to 3.9.56 and posted a panel-started catch. The Orca workspace
   `lowqualityloey/fishing-pole-lofitown` links to the main checkout's PromptKit 2.4.0 courier install;
