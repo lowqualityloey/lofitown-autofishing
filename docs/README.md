@@ -24,6 +24,19 @@
 | [reviews/2026-11-02-lag-and-first-press-review.md](reviews/2026-11-02-lag-and-first-press-review.md) | Two-axis review of the 3.9.10-3.9.12 work, including the snapshot path that silently never ran. |
 | [images/](images/) | README screenshots: the panel in-game and close up from 3.9.31, plus the live 3.9.47 capture states (`capture-armed-3.9.47.png`, `capture-stale-3.9.47.png`). |
 
+## Releases
+
+| File | What it is |
+| :--- | :--- |
+| [releases/3.9.63.md](releases/3.9.63.md) | 3.9.63: guard and blind diagnostics in the overnight export and morning report. |
+| [releases/3.9.62.md](releases/3.9.62.md) | 3.9.62: combined 3.9.57-3.9.62 release. |
+| [releases/3.9.56.md](releases/3.9.56.md) | 3.9.56: catch upload and focus/seat behavior patch. |
+| [releases/3.9.55.md](releases/3.9.55.md) | 3.9.55: daily budget across midnight. |
+| [releases/3.9.54.md](releases/3.9.54.md) | 3.9.54: interrupted-session logging fix. |
+| [releases/3.9.53.md](releases/3.9.53.md) | 3.9.53: seat-hold deadlock fix. |
+| [releases/3.9.52.md](releases/3.9.52.md) | 3.9.52: read-only first-press telemetry. |
+| [releases/3.9.51.md](releases/3.9.51.md) | 3.9.51: profile-scoped session rows and press cadence. |
+
 The lab notebook is not here: every measurement, fix and retraction lives in
 [AUTOFISH.md](../AUTOFISH.md), in the order it happened. Start at "Measured facts", then read the
 dated sections above it.
