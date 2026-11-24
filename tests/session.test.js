@@ -83,6 +83,33 @@ test('focus is not retryable and never overwrites an explicit user hold', () => 
   assert.equal(r.state.phase, 'paused');
 });
 
+test('a missing fishing result pauses on its own reason and cannot auto-resume', () => {
+  // The game locks input with "waiting-for-result" and only its own result event clears it. A tick
+  // must not turn that into a seat pause or a retryable no-catch, and the retry timer must not
+  // bring the core back while the game is still locked.
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = tick(state, T0 + 60_000));
+  const r = tick(state, T0 + 120_000, { resultMissing: true, seat: true });
+  assert.equal(r.state.phase, 'paused');
+  assert.equal(r.state.pauseReason, 'result-missing', 'the distinct reason outranks the seat fact');
+  assert.equal(r.state.fishingMs, 120_000, 'time before the lock is still session time');
+  assert.equal(r.state.retryAt, null, 'there is nothing to retry: the game owns the lock');
+  assert.deepEqual(r.actions.map(a => a.type), ['pauseCore', 'persist']);
+  assert.ok(!r.actions.some(a => a.type === 'holdCasts'), 'this is a full pause, not a cast hold');
+
+  // A later tick with the flag cleared (or a seat/focus fact) does not lift the pause.
+  const held = tick(r.state, T0 + 300_000, { resultMissing: false, seat: false, focus: true });
+  assert.equal(held.state.phase, 'paused');
+  assert.equal(held.state.pauseReason, 'result-missing');
+  assert.deepEqual(held.actions, []);
+
+  // Resume cannot deliver the missing result; refuse it and keep the pause for a reload.
+  const resume = reduce(held.state, { type: 'resume', at: T0 + 360_000 });
+  assert.equal(resume.state.phase, 'paused');
+  assert.equal(resume.state.pauseReason, 'result-missing');
+  assert.deepEqual(resume.actions, [{ type: 'refuse', reason: 'result-missing' }]);
+});
+
 test('a pause fact carries its reason, so a focus hold is labelled', () => {
   let { state } = reduce(createState(), { type: 'start', at: T0 });
   const r = reduce(state, { type: 'pause', at: T0 + 1000, reason: 'focus' });

@@ -220,6 +220,10 @@
     // A user pause is an explicit hold: the tab coming back, a seat appearing or a catch landing
     // must not resume it behind the user's back. Only the Resume button (or a fresh Start) does.
     if (s.pauseReason === 'user') return { state: s, actions: [] };
+    // A missing result is the game's own input lock, not a temporary guard: no tick and no
+    // automatic retry can clear it. The panel tells the player to reload the tab; Stop still ends
+    // the session normally.
+    if (s.pauseReason === 'result-missing') return { state: s, actions: [] };
 
     // A focus hold is a decision, not a guard: it takes over a hidden or seat pause before
     // those branches can resume or stop the run. The user hold above still wins.
@@ -368,6 +372,9 @@
 
     if (fact.type === 'resume') {
       if (s.phase !== 'paused') return { state: s, actions: [] };
+      // Resume cannot deliver the game's missing result; it would re-pause on the next tick. Refuse
+      // it explicitly so the panel can say to reload the game tab instead.
+      if (s.pauseReason === 'result-missing') return { state: s, actions: [{ type: 'refuse', reason: 'result-missing' }] };
       rollDay(s, at);
       // Do not resume straight into a boundary: the next tick would stop the session immediately and
       // the user would see a resume that did nothing. The cap and the window are checked up front.
@@ -472,6 +479,14 @@
         return { state: s, actions: [] };
       }
       s.hiddenSince = null;
+
+      // 1a. A win-like attempt that never produced a catch card or a cast prompt leaves the game
+      // waiting for its fishing result. It disables input until that result arrives, so no retry or
+      // seat probe can help; pause the clock and the core with a distinct, non-retryable reason.
+      if (fact.resultMissing === true) {
+        if (s.lastTickAt != null) credit(s, s.lastTickAt, at);
+        return paused(s, at, 'result-missing');
+      }
 
       // 1b. not seated means the game will never offer a cast prompt: pause before crediting any
       // time, so an overnight session does not spend its budget waiting for a chair. A user Resume
