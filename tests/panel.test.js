@@ -98,7 +98,7 @@ test('a reload row is dated by the heartbeat, not by the moment it is posted', (
   // began 0.6 s before it was written. started_at came from state.startedAt, which mount has not set
   // when the interrupted row is posted, so || Date.now() faked every one of them.
   const fn = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
-  assert.match(fn, /function postSessionRow\(reason, minutes, catches, startedAt\)/, 'the caller owns the start time');
+  assert.match(fn, /function postSessionRow\(reason, minutes, catches, startedAt, note\)/, 'the caller owns the start time');
   assert.match(fn, /new Date\(startedAt \|\| state\.startedAt \|\| Date\.now\(\)\)\.toISOString\(\)/, 'a supplied start wins over the mount-time fallback');
   assert.ok(!/started_at: new Date\(state\.startedAt \|\| Date\.now\(\)\)/.test(fn), 'the faked start is gone from the body');
   const check = src.slice(src.indexOf('function checkInterrupted()'), src.indexOf('/* -------------------------------------------------------------- DOM'));

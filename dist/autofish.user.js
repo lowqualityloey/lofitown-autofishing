@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.60
+// @version      3.9.61
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.60" };
+  const F = { version: "3.9.61" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -5108,7 +5108,7 @@ const SPECIES = [
     return Math.max(0, (s.fishingMs || 0) - (s.carriedMs || 0));
   }
 
-  function stopSession(s, at, reason) {
+  function stopSession(s, at, reason, diag) {
     if (s.phase === 'running' && s.lastTickAt != null) credit(s, s.lastTickAt, at);
     rollDay(s, at);
     // The session's minutes become today's minutes - but only the part fished after local midnight.
@@ -5133,7 +5133,7 @@ const SPECIES = [
     return [
       { type: 'stopCore' },
       { type: 'releaseWakeLock' },
-      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(sessionMs / 60000), catches: s.catchCount },
+      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(sessionMs / 60000), catches: s.catchCount, diag: diag || null },
       { type: 'persist' }
     ];
   }
@@ -5331,7 +5331,7 @@ const SPECIES = [
 
     if (fact.type === 'stop') {
       if (!isActive(s.phase)) return { state: s, actions: [] };
-      return { state: s, actions: stopSession(s, at, fact.reason) };
+      return { state: s, actions: stopSession(s, at, fact.reason, fact.diag) };
     }
 
 
@@ -5571,7 +5571,26 @@ const SPECIES = [
     return status.running === false ? 'revive' : null;
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard };
+  var REVIVE_WINDOW_MS = 10 * 60 * 1000;   // rolling window for crash-loop accounting
+  var REVIVE_CAP = 3;                      // restarts allowed inside it before the session stops
+
+  /**
+   * A core that keeps dying is not a liveness problem any more. Three restarts in ten minutes means
+   * the game (or the page) is broken, and restarting it for hours hides that. The window is rolling
+   * and times are pruned on every call; a refused revive is not recorded, so a stop at the cap keeps
+   * the three timestamps that caused it. Pure, so the cap has a unit test.
+   */
+  function reviveGate(times, now) {
+    var kept = [];
+    (times || []).forEach(function (t) {
+      if (typeof t === 'number' && now - t < REVIVE_WINDOW_MS) kept.push(t);
+    });
+    if (kept.length >= REVIVE_CAP) return { allow: false, times: kept };
+    kept.push(now);
+    return { allow: true, times: kept };
+  }
+
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate };
 });
 
 /* layout.js — where the panel may sit so it never covers the fishing UI.
@@ -5721,6 +5740,7 @@ const SPECIES = [
   var tickErrors = 0;
   var lastTickError = '';
   var zombieRevives = 0;
+  var reviveTimes = [];       // rolling window for the crash-loop cap; an accepted Start clears it
   var wakeSentinel = null;
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
@@ -6302,7 +6322,7 @@ const SPECIES = [
     } catch (e) { baseTodayMs = local; }
   }
 
-  function postSessionRow(reason, minutes, catches, startedAt) {
+  function postSessionRow(reason, minutes, catches, startedAt, note) {
     // fishserve is also where the overnight sampler posts. An inlined panel has no BASE of its own,
     // so the address the owner gave the capture is the one server this page knows; without it there
     // is nowhere to log and the local budget has to answer alone.
@@ -6318,7 +6338,7 @@ const SPECIES = [
       fetch(server + '/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ started_at: started, minutes: minutes, catches: catches, reason: reason, profile: profileName() })
+        body: JSON.stringify({ started_at: started, minutes: minutes, catches: catches, reason: reason, profile: profileName(), note: note || '' })
       }).then(function (r) { if (!r.ok) banner = 'session log rejected the row'; }).catch(function () { banner = 'session log offline — the session still works'; });
     } catch (e) { banner = 'session log offline — the session still works'; }
   }
@@ -6459,7 +6479,7 @@ const SPECIES = [
     wakeLock: function () { acquireWakeLock(); },
     releaseWakeLock: function () { releaseWakeLock(); },
     persist: function () { savePrefs(); writeHeartbeat(); syncBudget(); },
-    sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches); },
+    sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches, undefined, guardNote(a.diag)); },
     refuse: function (a) {
       if (a.reason === 'cooldown') banner = 'cooling down — wait for the timer, or use Start now';
       else if (a.reason === 'result-missing') banner = 'game is waiting for a fishing result — reload the game tab, then start again';
@@ -6477,7 +6497,11 @@ const SPECIES = [
   }
 
   function dispatch(fact) {
+    // Only an accepted Start begins a new crash-loop budget. A refused Start during cooldown used
+    // to clear the window too, erasing the evidence of the loop that put the session there.
+    var startedAt = state.startedAt;
     var out = window.AutoFishSession.reduce(state, fact);
+    if (fact.type === 'start' && out.state.startedAt !== startedAt) reviveTimes = [];
     state = out.state;
     apply(out.actions);
     return out;
@@ -7684,6 +7708,30 @@ const SPECIES = [
     try { render(); } catch (ignored) {}
   }
 
+  /** What the row should carry when the guard gives up: enough to diagnose the night without the tab. */
+  function guardDiag() {
+    var doctor = null;
+    try { doctor = fish() && fish().doctor ? fish().doctor().verdict : null; } catch (e) {}
+    return {
+      revives: zombieRevives,
+      windowRevives: reviveTimes.length,
+      tickErrors: tickErrors,
+      lastTickError: lastTickError,
+      doctor: doctor,
+      tickAgoMs: lastTickAt ? Date.now() - lastTickAt : null
+    };
+  }
+
+  /** One line, no commas: fishserve writes it as the sessions.csv note column. */
+  function guardNote(d) {
+    if (!d) return '';
+    var bits = ['guard revives=' + d.revives, 'windowRevives=' + d.windowRevives, 'tickErrors=' + d.tickErrors];
+    if (d.lastTickError) bits.push('lastError=' + String(d.lastTickError).slice(0, 90));
+    if (d.doctor) bits.push('doctor=' + d.doctor);
+    if (d.tickAgoMs != null) bits.push('tickAgoMs=' + d.tickAgoMs);
+    return bits.join(' ').slice(0, 200);
+  }
+
   /**
    * Runs on a timer that is not the tick loop. Two facts are enough: the phase says running while
    * the core reports stopped (revive it), or no tick has been entered for a full guard interval
@@ -7703,6 +7751,15 @@ const SPECIES = [
       var status = null;
       try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
       if (window.AutoFishSession.coreGuard(state, status) === 'revive') {
+        // A core that keeps dying is not a liveness problem any more: after three restarts in ten
+        // minutes the game is the problem, and an honest stop beats restarting for hours.
+        var gate = window.AutoFishSession.reviveGate(reviveTimes, Date.now());
+        reviveTimes = gate.times;
+        if (!gate.allow) {
+          banner = 'the fishing core kept stopping — session stopped';
+          dispatch({ type: 'stop', at: Date.now(), reason: 'core-crash', diag: guardDiag() });
+          return;
+        }
         banner = 'the fishing core had stopped — restarted';
         RUNNERS.startCore({ maxMinutes: Math.ceil(state.durationMs / 60000) + 2 });
         zombieRevives++;

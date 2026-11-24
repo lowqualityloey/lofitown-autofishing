@@ -133,7 +133,7 @@
     return Math.max(0, (s.fishingMs || 0) - (s.carriedMs || 0));
   }
 
-  function stopSession(s, at, reason) {
+  function stopSession(s, at, reason, diag) {
     if (s.phase === 'running' && s.lastTickAt != null) credit(s, s.lastTickAt, at);
     rollDay(s, at);
     // The session's minutes become today's minutes - but only the part fished after local midnight.
@@ -158,7 +158,7 @@
     return [
       { type: 'stopCore' },
       { type: 'releaseWakeLock' },
-      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(sessionMs / 60000), catches: s.catchCount },
+      { type: 'sessionRow', reason: s.stopReason, minutes: Math.round(sessionMs / 60000), catches: s.catchCount, diag: diag || null },
       { type: 'persist' }
     ];
   }
@@ -356,7 +356,7 @@
 
     if (fact.type === 'stop') {
       if (!isActive(s.phase)) return { state: s, actions: [] };
-      return { state: s, actions: stopSession(s, at, fact.reason) };
+      return { state: s, actions: stopSession(s, at, fact.reason, fact.diag) };
     }
 
 
@@ -596,5 +596,24 @@
     return status.running === false ? 'revive' : null;
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard };
+  var REVIVE_WINDOW_MS = 10 * 60 * 1000;   // rolling window for crash-loop accounting
+  var REVIVE_CAP = 3;                      // restarts allowed inside it before the session stops
+
+  /**
+   * A core that keeps dying is not a liveness problem any more. Three restarts in ten minutes means
+   * the game (or the page) is broken, and restarting it for hours hides that. The window is rolling
+   * and times are pruned on every call; a refused revive is not recorded, so a stop at the cap keeps
+   * the three timestamps that caused it. Pure, so the cap has a unit test.
+   */
+  function reviveGate(times, now) {
+    var kept = [];
+    (times || []).forEach(function (t) {
+      if (typeof t === 'number' && now - t < REVIVE_WINDOW_MS) kept.push(t);
+    });
+    if (kept.length >= REVIVE_CAP) return { allow: false, times: kept };
+    kept.push(now);
+    return { allow: true, times: kept };
+  }
+
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate };
 });

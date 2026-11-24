@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.60) - A watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
+Status: **WORKING (3.9.61) - A crash-loop breaker stops reviving a core that keeps dying: three restarts in ten minutes, then a `core-crash` stop whose session row carries the guard diagnostics. Then 3.9.60's watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
 against the new day's cap: the reducer carries the pre-midnight minutes, the panel stores and shows
 the same share, and the session row still reports the whole run. The rest is 3.9.54's session-log
 fix: an interrupted row carries the catches it had and the start time the heartbeat recorded, so
@@ -82,6 +82,17 @@ maximum stayed at 0.264; its own held count was 0. Both arms had zero dial misse
 The fast arm caught 16/16 attempts versus 7/9 in the default arm, but the default arm includes the
 unseated pause and the samples are too small for an accuracy claim. This run verifies the opt-in
 path live; the default stable-fit hold remains the conservative choice.
+
+## 2026-11-24 Crash-loop breaker (3.9.61)
+
+A watchdog that revives forever hides a game that no longer works. 3.9.61 keeps a rolling ten-minute
+window of revive times: three restarts are allowed, and a fourth stop dispatches `stop` with reason
+`core-crash` instead of starting the core again. That stop rests like any other, so the next tick
+cannot re-enter the loop. The session row carries the guard diagnostics in a new `note` column
+(`guard revives=3 windowRevives=3 tickErrors=1 lastError=... doctor=... tickAgoMs=...`), and fishserve
+sanitises it to one CSV-safe line; older five- and six-column files are upgraded in place and their
+rows still read back unchanged. `session.reviveGate` is pure and covered for the cap and the rolling
+edge in `tests/zombie.test.js`; the CSV column is covered in `tests/fishserve.test.js`.
 
 ## 2026-11-24 Zombie core guard (3.9.60)
 

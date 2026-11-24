@@ -82,7 +82,7 @@ test('a profile is stored as the safe token the panel writes', async () => {
   try {
     await post(port, '/session', { minutes: 4, catches: 1, reason: 'user', profile: 'nep, chur\n!' });
     const text = readFileSync(join(dir, 'sessions.csv'), 'utf8');
-    assert.match(text, /,user,nep chur\n/, 'a comma and a newline cannot add a column or a row');
+    assert.match(text, /,user,nep chur,\n/, 'a comma and a newline cannot add a column or a row');
     const body = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + localDay() + '&profile=nep%20chur')).json();
     assert.equal(body.minutes, 4);
     assert.equal(body.rows[0].profile, 'nep chur');
@@ -99,12 +99,38 @@ test('a five-column sessions.csv is read as default and upgraded without rewriti
     assert.equal(body.rows[0].profile, 'default');
 
     const text = readFileSync(join(dir, 'sessions.csv'), 'utf8');
-    assert.equal(text.split('\n')[0], 'time,started_at,minutes,catches,reason,profile');
+    assert.equal(text.split('\n')[0], 'time,started_at,minutes,catches,reason,profile,note');
     assert.match(text, new RegExp(when.replace(/\./g, '\\.') + ',,12,5,duration'), 'the old row is untouched');
 
     await post(port, '/session', { minutes: 3, catches: 1, reason: 'user', profile: 'alt' });
     const alt = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + localDay() + '&profile=alt')).json();
     assert.equal(alt.minutes, 3, 'a new row is written with its profile');
+  } finally { server.close(); }
+});
+
+test('a six-column sessions.csv from 3.9.60 gains the note column without rewriting its rows', async () => {
+  const when = '2026-11-23T09:00:00.000Z';
+  const old = 'time,started_at,minutes,catches,reason,profile\n' + when + ',,7,3,duration,default\n';
+  const { server, dir, port } = await boot({ sessions: old });
+  try {
+    const body = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + localDay(when) + '&profile=default')).json();
+    assert.equal(body.minutes, 7, 'the old row still counts');
+    assert.equal(body.rows[0].note, '', 'an old row simply has no note');
+    const text = readFileSync(join(dir, 'sessions.csv'), 'utf8');
+    assert.equal(text.split('\n')[0], 'time,started_at,minutes,catches,reason,profile,note');
+    assert.match(text, new RegExp(when.replace(/\./g, '\\.') + ',,7,3,duration,default'), 'the old row is untouched');
+  } finally { server.close(); }
+});
+
+test('a session note is its own column, on one line, without smuggling a comma', async () => {
+  const { server, dir, port } = await boot();
+  try {
+    await post(port, '/session', { minutes: 2, catches: 1, reason: 'core-crash', note: 'guard revives=3 tickErrors=1,\nboom' });
+    const text = readFileSync(join(dir, 'sessions.csv'), 'utf8');
+    assert.equal(text.split('\n')[0], 'time,started_at,minutes,catches,reason,profile,note');
+    assert.match(text, /,core-crash,default,guard revives=3 tickErrors=1 boom\n/, 'the note is one column and one line');
+    const body = await (await fetch('http://127.0.0.1:' + port + '/sessions?day=' + localDay())).json();
+    assert.equal(body.rows[0].note, 'guard revives=3 tickErrors=1 boom');
   } finally { server.close(); }
 });
 

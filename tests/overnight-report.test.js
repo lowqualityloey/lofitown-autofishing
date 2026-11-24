@@ -264,7 +264,7 @@ test("a named profile posted to a real fishserve bounds that profile's night", a
       reason: 'duration', profile,
     });
     assert.equal(posted.status, 200, 'fishserve accepted the row the panel posts');
-    assert.match(fs.readFileSync(process.env.FISHSERVE_SESSIONS, 'utf8'), /,duration,nepchur$/m, 'the row is stored with its profile');
+    assert.match(fs.readFileSync(process.env.FISHSERVE_SESSIONS, 'utf8'), /,duration,nepchur,/m, 'the row is stored with its profile and an empty note');
 
     const night = {
       file: 'export-now.json',
