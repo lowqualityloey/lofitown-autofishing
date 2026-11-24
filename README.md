@@ -6,7 +6,7 @@ A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no buil
 
 ## Status
 
-**Actively maintained.** Current release **3.9.56** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.56)) · **full test suite passing** on 2026-11-24 · [MIT](LICENSE)
+**Actively maintained.** Current release **3.9.57** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.57)) · **full test suite passing** on 2026-11-24 · [MIT](LICENSE)
 
 Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://www.tampermonkey.net/), the game open, and a character you can seat.
 
@@ -36,11 +36,11 @@ The obvious alternatives are doing the loop manually or using another lofi.town 
 4. Click a chair, bench or stool at the water's edge and wait for the game's own **CAST!** prompt. The bot cannot seat you.
 5. Press **Start** on the panel. The badge changes to **RUNNING** and `presses` starts climbing.
 
-There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.56`) or this browser-console command:
+There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.57`) or this browser-console command:
 
 ```js
 __fish.version
-// 3.9.56
+// 3.9.57
 ```
 
 ### Nothing happened?
@@ -57,11 +57,13 @@ __fish.version
 
 The bot reads the game's rendered frames to find the **CAST!** and **REEL!** prompts, then presses the spinning reel dial at the moment the wedge crosses the pin. It uses a predicted crossing, re-arms after a proven new triangle, and falls back to a full-surface search if its remembered dial is wrong. Detection runs inside a wrapper around the renderer, because the prompts are painted into the game's canvas.
 
-The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, session time, catches, presses and today's cap. **Session & guards** holds the session length, cooldown, daily cap, clock window, profile, CSV upload and optional overnight capture. **Diagnostics** shows fps, frame times and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
+The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, session time, catches, presses and today's cap. **Session & guards** holds the session length, cooldown, daily cap, clock window, profile, CSV upload and optional overnight capture.
+
+**Fast first press (opt-in).** By default the first press on a dial narrower than 60° or spinning at 300°/s or faster waits for a stable spin fit. Turn on **Fast first press** in **Session & guards** to tap the first pass anyway. It removes the visible first-turn delay, but skips the stability check and makes misses on high-tier fish more likely; it is off by default. **Diagnostics** shows fps, frame times and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
 
 ![The AutoFish panel](docs/images/panel.jpg)
 
-The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.56. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
+The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.57. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
 
 ## Limits and requirements
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.56
+// @version      3.9.58
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.56" };
+  const F = { version: "3.9.58" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -245,6 +245,21 @@ window.__autofishInstalled = true;
   function deltaOmega(midOmega) {
     if (midOmega == null || !isFinite(midOmega)) return null;
     return midOmega === 0 ? 0 : -midOmega;
+  }
+
+  /**
+   * Does the first press on this dial need the stable-fit hold?
+   *
+   * The default is deliberately conservative: a narrow or fast dial has the least evidence at
+   * lock time and the most to lose from a noisy fit. `fastFirstPress` is the opt-in escape hatch
+   * for a player who would rather tap the first pass: it bypasses the hold without changing the
+   * crossing planner or any later press. That trade is explicit and off by default.
+   */
+  function firstPressGate(width, omega, o) {
+    const cfg = o || {};
+    if (cfg.fastFirstPress) return false;
+    return Number(width) < (cfg.firstPressMaxWidthDeg || 60) ||
+      Math.abs(Number(omega) || 0) >= (cfg.firstPressFastOmega || 300);
   }
 
   /**
@@ -3310,6 +3325,7 @@ const SPECIES = [
       schedHorizonMs: 40,           // furthest ahead a press is put on a timer (2-3 frames)
       replanMs: 8,                  // re-aim the timer only when the plan moved this much
       pressGapMs: 120,
+      fastFirstPress: false,        // opt-in: tap the first pass on a hard dial instead of waiting for a stable fit
       firstPressMinN: 6,            // first press on a hard dial: enough fit points to trust it
       firstPressMinSpanMs: 150,     // ... spanning this long, with a residual under firstPressMaxRms
       firstPressMaxRms: 2,
@@ -4099,9 +4115,7 @@ const SPECIES = [
       // fit becomes reliable after a few frames; until then, skip the crossing and take the next
       // one. One skipped revolution is cheap next to a miss, which subtracts the last gain and
       // zeroes the streak. Wide/slow dials keep pressing immediately - their window forgives it.
-      if (F.pressesThisDial === 0 &&
-          (Number(s.width) < (F.opts.firstPressMaxWidthDeg || 60) ||
-           Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
+      if (F.pressesThisDial === 0 && firstPressGate(s.width, s.omega, F.opts)) {
         const stable = fitStable(s.fit, F.opts);
         // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
         // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
@@ -4520,6 +4534,7 @@ const SPECIES = [
         trigger: opts.trigger, pressWith: opts.pressWith, leadMs: opts.leadMs,
         marginDeg: opts.marginDeg, midDeg: opts.midDeg, biasMs: opts.biasMs,
         firstPressMinN: opts.firstPressMinN, firstPressMinSpanMs: opts.firstPressMinSpanMs,
+        fastFirstPress: !!opts.fastFirstPress,
         firstPressMaxRms: opts.firstPressMaxRms, firstPressMaxWaitMs: opts.firstPressMaxWaitMs,
         insideNowMs: opts.insideNowMs,
         firstPressMaxWidthDeg: opts.firstPressMaxWidthDeg, firstPressFastOmega: opts.firstPressFastOmega,
@@ -4542,6 +4557,7 @@ const SPECIES = [
   F.tune = function (patch) {
     if (!patch || typeof patch !== 'object') return F.calibration();
     if (!F.opts) F.opts = {};
+    if (patch.fastFirstPress != null) F.opts.fastFirstPress = !!patch.fastFirstPress;
     ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs',
       'firstPressMinN', 'firstPressMinSpanMs', 'firstPressMaxRms', 'firstPressMaxWaitMs',
       'firstPressMaxWidthDeg', 'firstPressFastOmega', 'insideNowMs'].forEach((k) => {
@@ -4962,6 +4978,7 @@ const SPECIES = [
       startedAt: null,
       lastTickAt: null,
       pauseReason: null,
+      pausedAt: null,
       hiddenSince: null,
       visibleSince: null,
       retryAt: null,
@@ -5078,6 +5095,7 @@ const SPECIES = [
     s.cooldownUntil = rest ? at + s.cooldownMs : null;
     s.stopReason = reason || 'user';
     s.pauseReason = null;
+    s.pausedAt = null;
     s.seatOverrideUntil = null;
     s.retryAt = null;
     s.lastTickAt = null;
@@ -5108,6 +5126,7 @@ const SPECIES = [
   function paused(s, at, reason) {
     s.phase = 'paused';
     s.pauseReason = reason;
+    s.pausedAt = at;
     s.lastTickAt = null;
     s.visibleSince = null;
     if (retryable(reason)) s.retryAt = at + RETRY_DELAY_MS;
@@ -5133,6 +5152,7 @@ const SPECIES = [
     var wasSeat = s.pauseReason === 'seat';
     s.phase = 'running';
     s.pauseReason = null;
+    s.pausedAt = null;
     s.retryAt = null;
     s.visibleSince = null;
     s.hiddenSince = null;
@@ -5255,6 +5275,7 @@ const SPECIES = [
       s.errWindowAt = null;
       s.errTotal = 0;
       s.pauseReason = null;
+      s.pausedAt = null;
       s.seatOverrideUntil = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -5290,6 +5311,7 @@ const SPECIES = [
       if (s.lastTickAt != null) credit(s, s.lastTickAt, at);
       s.phase = 'paused';
       s.pauseReason = fact.reason === 'focus' ? 'focus' : 'user';
+      s.pausedAt = at;
       s.lastTickAt = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -5311,6 +5333,11 @@ const SPECIES = [
       var fromSeat = s.pauseReason === 'seat';
       s.phase = 'running';
       s.pauseReason = null;
+      s.pausedAt = null;
+      // A hold is not a stretch without a bite: both the no-catch and cast-stall clocks start from
+      // this, and leaving the pre-pause catch time here made the first tick after a long hold pause
+      // again immediately (measured live 2026-11-24: resume, then pauseReason 'no-catch' 0.9 s later).
+      s.lastCatchAt = at;
       s.retryAt = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -5704,6 +5731,7 @@ const SPECIES = [
     prefs.postCatches = !!p.postCatches;
     prefs.hideUpsell = !!p.hideUpsell;
     prefs.focusMode = !!p.focusMode;
+    prefs.fastFirstPress = !!p.fastFirstPress;
     prefs.overnight = !!p.overnight;
     if (typeof p.overnightBase === 'string') prefs.overnightBase = p.overnightBase;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
@@ -5724,6 +5752,7 @@ const SPECIES = [
       postCatches: !!window.__panel.postCatches,
       hideUpsell: !!window.__panel.hideUpsell,
       focusMode: !!focusPref,
+      fastFirstPress: !!fastPref,
       overnight: !!overnightPref,
       overnightBase: captureBase || '',
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
@@ -5887,11 +5916,29 @@ const SPECIES = [
   var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
                              // the hold; it must never change this, or the next session never engages.
   var focusSawSession = false;
+  // Opt-in speed over the first-press fit. The core's default keeps the hold; this setting is
+  // deliberately surfaced as a trade-off, not as a free improvement.
+  var fastPref = false;
 
   function renderFocusToggle() {
     if (!ui.focusToggle) return;
     ui.focusToggle.textContent = focusOn ? 'on' : 'off';
     ui.focusToggle.style.color = focusOn ? '#5ad18b' : '#9aa4ae';
+  }
+
+  function renderFastToggle() {
+    if (!ui.fastToggle) return;
+    ui.fastToggle.textContent = fastPref ? 'on' : 'off';
+    // Amber, not green: this is a speed/accuracy trade, not a free upgrade.
+    ui.fastToggle.style.color = fastPref ? '#f2c14e' : '#9aa4ae';
+  }
+
+  function setFastFirstPress(on) {
+    fastPref = !!on;
+    if (window.__panel) window.__panel.fastFirstPress = fastPref;
+    try { if (window.__fish && window.__fish.tune) window.__fish.tune({ fastFirstPress: fastPref }); } catch (e) {}
+    savePrefs();
+    render();
   }
 
   /**
@@ -6347,7 +6394,11 @@ const SPECIES = [
       baseTodayMs = loadBudget().ms;
       var server = BASE || captureServer();
       var post = (window.__panel && window.__panel.postCatches && server) ? server + '/catch' : null;
-      fish().start({ maxMinutes: a.maxMinutes, logUrl: post });
+      fish().start({
+        maxMinutes: a.maxMinutes,
+        logUrl: post,
+        fastFirstPress: !!(window.__panel && window.__panel.fastFirstPress),
+      });
     },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
     pauseCore: function () { try { fish().pause(); } catch (e) {} },
@@ -6500,6 +6551,7 @@ const SPECIES = [
     '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.capture{font-size:10px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.capture.on{color:#5ad18b}.capture.warn{color:#f2c14e}',
+    '.fastnote{font-size:9.5px;line-height:1.35;color:#f2c14e;margin-top:-4px}',
     '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
     '.sec{border-top:1px solid rgba(255,255,255,.08)}',
     '.sechead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#aab4bf;font:inherit;font-size:11px;letter-spacing:.3px;padding:8px 0 7px;cursor:pointer;text-align:left}',
@@ -6589,6 +6641,17 @@ const SPECIES = [
     focusToggle.title = 'pause autofish while a focus session is active; the cast prompt is drawn by the game and stays visible';
     focusRow.append(focusLabel, focusToggle);
     setSec.body.appendChild(focusRow);
+
+    // Fast first press: opt in to tapping the first pass on a narrow or fast dial instead of
+    // waiting for the stable spin fit. The note is always visible so the trade is not hidden
+    // behind a tooltip; the default (off) keeps the measured zero-miss first-press gate.
+    var fastRow = el('div', 'row');
+    var fastLabel = el('div', 'label', 'Fast first press');
+    var fastToggle = el('button', 'icon', fastPref ? 'on' : 'off');
+    fastToggle.title = 'tap the first pass on narrow or fast dials without waiting for a stable spin fit; faster, but high-tier fish are more likely to be missed';
+    fastRow.append(fastLabel, fastToggle);
+    setSec.body.appendChild(fastRow);
+    setSec.body.appendChild(el('div', 'fastnote', 'Faster first taps on narrow/fast dials. Skips the fit check, so harder fish can be missed.'));
 
     // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
     // window and the cap still bound it.
@@ -6729,7 +6792,7 @@ const SPECIES = [
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
-      focusToggle: focusToggle,
+      focusToggle: focusToggle, fastToggle: fastToggle,
       chainToggle: chainToggle, reloadToggle: reloadToggle, postToggle: postToggle,
       captureToggle: captureToggle, captureLine: captureLine,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
@@ -6804,6 +6867,7 @@ const SPECIES = [
       setFocusMode(focusPref);
       savePrefs();
     });
+    fastToggle.addEventListener('click', function () { setFastFirstPress(!fastPref); });
     chainToggle.addEventListener('click', function () {
       dispatch({ type: 'config', at: Date.now(), patch: { chain: !state.chain } });
       savePrefs();
@@ -7239,6 +7303,41 @@ const SPECIES = [
     return '';
   }
 
+  /* The phase chip says "paused"; it never said why or since when, and that answer lived in
+   * __panel.state. This is the same fact, in the place the player is already looking. */
+  var PAUSE_WHY = {
+    user: 'you paused it',
+    hidden: 'the tab was hidden',
+    seat: 'the character was standing',
+    focus: 'a focus session is running',
+    'no-catch': 'nothing bit for 10 minutes',
+    'cast-stall': 'the cast never landed',
+    'player-block': 'a nearby player blocked the spot',
+    'profile-open': 'a player profile was open',
+    'result-missing': 'the game is waiting for a fishing result'
+  };
+
+  function clockTime(at) {
+    return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /** '' unless the run is paused: the reason in plain words plus the clock time it happened. */
+  function pauseNoteFor(s, now) {
+    if (!s || s.phase !== 'paused' || !s.pauseReason) return '';
+    now = now || Date.now();
+    var line = 'paused';
+    if (s.pausedAt) {
+      line += ' ' + clockTime(s.pausedAt);
+      var age = now - s.pausedAt;
+      if (age >= 90 * 60 * 1000) line += ' (' + Math.round(age / 3600000) + 'h ago)';
+      else if (age >= 90 * 1000) line += ' (' + Math.round(age / 60000) + ' min ago)';
+    }
+    line += ' · ' + (PAUSE_WHY[s.pauseReason] || s.pauseReason);
+    if (s.pauseReason === 'user') line += ' · press Resume';
+    else if (s.retryAt) line += ' · retrying ' + clockTime(s.retryAt);
+    return line;
+  }
+
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
@@ -7261,6 +7360,7 @@ const SPECIES = [
     ui.timeRow.style.display = state.window.on ? '' : 'none';
     renderUpsellToggle();
     renderFocusToggle();
+    renderFastToggle();
     renderCapture();
 
     if (!focused(ui.dur.val)) ui.dur.val.value = minutesText(state.durationMs);
@@ -7370,6 +7470,7 @@ const SPECIES = [
     if (state.pauseReason === 'cast-stall' && (phase === 'running' || phase === 'paused')) {
       castNote = 'cast stalled — retrying, check for a profile popup';
     }
+    var pauseNote = pauseNoteFor(state);
     // A stop is the thing the player most needs to understand, and it used to be invisible: the
     // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
     var stopNote = '';
@@ -7382,14 +7483,14 @@ const SPECIES = [
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || castNote || banner || stopNote;
+    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || castNote || pauseNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (resultNote) ui.banner.className = 'banner result';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (playerNote) ui.banner.className = 'banner seat';
     else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
-    else if (stopNote && !banner) ui.banner.className = 'banner info';
+    else if ((pauseNote || stopNote) && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
 
@@ -7399,6 +7500,7 @@ const SPECIES = [
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (resultMissing) host.dataset.resultMissing = '1'; else delete host.dataset.resultMissing;
+      if (state.pauseReason) host.dataset.pauseReason = state.pauseReason; else delete host.dataset.pauseReason;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (focusOn) host.dataset.focusMode = '1'; else delete host.dataset.focusMode;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
@@ -7643,6 +7745,8 @@ const SPECIES = [
     // zero dial presses until the toggle was clicked. focusTick() engages the hold when a session
     // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
+    fastPref = !!prefs.fastFirstPress;
+    window.__panel.fastFirstPress = fastPref;
     overnightPref = !!prefs.overnight;
     captureClearBackoff();
     // The night a reload used to end: with the setting on, mount loads the sampler again. It posts
@@ -7665,6 +7769,7 @@ const SPECIES = [
     window.__panel.focus = inFocusSession;
     window.__panel.focusMode = focusOn;
     window.__panel.setFocusMode = setFocusMode;
+    window.__panel.setFastFirstPress = setFastFirstPress;
     window.__panel.overnight = overnightPref;
     window.__panel.armOvernight = armOvernight;
     tick();

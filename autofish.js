@@ -230,6 +230,21 @@
   }
 
   /**
+   * Does the first press on this dial need the stable-fit hold?
+   *
+   * The default is deliberately conservative: a narrow or fast dial has the least evidence at
+   * lock time and the most to lose from a noisy fit. `fastFirstPress` is the opt-in escape hatch
+   * for a player who would rather tap the first pass: it bypasses the hold without changing the
+   * crossing planner or any later press. That trade is explicit and off by default.
+   */
+  function firstPressGate(width, omega, o) {
+    const cfg = o || {};
+    if (cfg.fastFirstPress) return false;
+    return Number(width) < (cfg.firstPressMaxWidthDeg || 60) ||
+      Math.abs(Number(omega) || 0) >= (cfg.firstPressFastOmega || 300);
+  }
+
+  /**
    * How long the first press may wait for a mature spin fit, in ms.
    *
    * The fixed 2500 ms ceiling is several rotations on a fast dial: at 700 deg/s a 45 deg arc is
@@ -3292,6 +3307,7 @@ const SPECIES = [
       schedHorizonMs: 40,           // furthest ahead a press is put on a timer (2-3 frames)
       replanMs: 8,                  // re-aim the timer only when the plan moved this much
       pressGapMs: 120,
+      fastFirstPress: false,        // opt-in: tap the first pass on a hard dial instead of waiting for a stable fit
       firstPressMinN: 6,            // first press on a hard dial: enough fit points to trust it
       firstPressMinSpanMs: 150,     // ... spanning this long, with a residual under firstPressMaxRms
       firstPressMaxRms: 2,
@@ -4081,9 +4097,7 @@ const SPECIES = [
       // fit becomes reliable after a few frames; until then, skip the crossing and take the next
       // one. One skipped revolution is cheap next to a miss, which subtracts the last gain and
       // zeroes the streak. Wide/slow dials keep pressing immediately - their window forgives it.
-      if (F.pressesThisDial === 0 &&
-          (Number(s.width) < (F.opts.firstPressMaxWidthDeg || 60) ||
-           Math.abs(Number(s.omega) || 0) >= (F.opts.firstPressFastOmega || 300))) {
+      if (F.pressesThisDial === 0 && firstPressGate(s.width, s.omega, F.opts)) {
         const stable = fitStable(s.fit, F.opts);
         // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
         // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
@@ -4502,6 +4516,7 @@ const SPECIES = [
         trigger: opts.trigger, pressWith: opts.pressWith, leadMs: opts.leadMs,
         marginDeg: opts.marginDeg, midDeg: opts.midDeg, biasMs: opts.biasMs,
         firstPressMinN: opts.firstPressMinN, firstPressMinSpanMs: opts.firstPressMinSpanMs,
+        fastFirstPress: !!opts.fastFirstPress,
         firstPressMaxRms: opts.firstPressMaxRms, firstPressMaxWaitMs: opts.firstPressMaxWaitMs,
         insideNowMs: opts.insideNowMs,
         firstPressMaxWidthDeg: opts.firstPressMaxWidthDeg, firstPressFastOmega: opts.firstPressFastOmega,
@@ -4524,6 +4539,7 @@ const SPECIES = [
   F.tune = function (patch) {
     if (!patch || typeof patch !== 'object') return F.calibration();
     if (!F.opts) F.opts = {};
+    if (patch.fastFirstPress != null) F.opts.fastFirstPress = !!patch.fastFirstPress;
     ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs',
       'firstPressMinN', 'firstPressMinSpanMs', 'firstPressMaxRms', 'firstPressMaxWaitMs',
       'firstPressMaxWidthDeg', 'firstPressFastOmega', 'insideNowMs'].forEach((k) => {

@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.56) - the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
+Status: **WORKING (3.9.58) - The panel now names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
 against the new day's cap: the reducer carries the pre-midnight minutes, the panel stores and shows
 the same share, and the session row still reports the whole run. The rest is 3.9.54's session-log
 fix: an interrupted row carries the catches it had and the start time the heartbeat recorded, so
@@ -40,6 +40,48 @@ dial ends early (see below), never by the coin total.
 
 Run with BrowserOS neo on the lofi.town tab, with the neo window genuinely uncovered
 (a covered window reports `hidden` and freezes the game).
+
+## 2026-11-24 Fast first press (3.9.57)
+
+`fastFirstPress` is opt-in. It bypasses the first-press stable-fit hold only on narrow or fast
+dials; the crossing planner and every later press are unchanged. The default remains the measured
+hold, so the zero-miss baseline is preserved. The panel exposes the setting with an always-visible
+amber warning: tapping the first pass is faster, but a hard fish the hold would have waited for can
+now be missed. It is off by default and stored as `fastFirstPress:false`.
+
+Verification:
+
+- Focused tests: `node --test tests/timing.test.js tests/panel.test.js tests/status.test.js` -
+  **84 pass, 0 fail**.
+- Full suite: `node --test` - **382 pass, 0 fail**.
+- `node build-userscript.js` - **386,159 bytes**, header and panel version **3.9.57**.
+- Tampermonkey was updated to 3.9.57 and a reloaded live tab reported
+  `__fish.version: "3.9.57"` with the panel header matching.
+
+**Live A/B (2026-11-24).** The original tab reconnected and 3.9.57 ran on the real game. The default
+arm started with fast first press off. At 5m06s the character briefly stood up (`doctor:
+not-seated`); the seat hold paused the run and it resumed without a page reload. No disconnect
+occurred during either arm. The fast arm ran in the same live session after
+`__panel.setFastFirstPress(true)`. Fast first press was restored off and the session paused at the
+end.
+
+| Arm | Elapsed | Dials | Hits | Misses | `firstPressHeld` | `firstPressForced` | Presses | Attempts (caught/lost) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default | 8:17 | 22 | 21 | 0 | 6 | 3 | 61/61 | 9 (7/2) |
+| Fast | 8:31 | 22 | 22 | 0 | 0 | 0 | 76/76 | 16 (16/0) |
+
+The full windows differ by 14 s, so a matched cut from the same counters at about 5m07s:
+
+| Arm | Elapsed | Dials | Hits | Misses | Held | Forced | Presses | Attempts (caught/lost) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default | 5:06.5 | 9 | 9 | 0 | 2 | 1 | 31/31 | 4 (3/1) |
+| Fast | 5:06.8 | 12 | 12 | 0 | 0 | 0 | 48/48 | 10 (10/0) |
+
+`holdPassesMax` was 0.264 turns in the default arm. The fast arm added no holds, so its cumulative
+maximum stayed at 0.264; its own held count was 0. Both arms had zero dial misses and zero errors.
+The fast arm caught 16/16 attempts versus 7/9 in the default arm, but the default arm includes the
+unseated pause and the samples are too small for an accuracy claim. This run verifies the opt-in
+path live; the default stable-fit hold remains the conservative choice.
 
 ## Install once, run forever (userscript - panel included, no server, no console)
 

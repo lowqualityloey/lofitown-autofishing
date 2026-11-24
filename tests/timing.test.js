@@ -15,7 +15,7 @@ const a = SRC.indexOf(OPEN);
 const b = SRC.indexOf(CLOSE);
 if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
 const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive, lossDiagnostics };')();
+const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, ghostBlocked, spinAlive, lossDiagnostics };')();
 const refreshStart = SRC.indexOf('function refreshLossDiagnostic');
 const refreshEnd = SRC.indexOf('\n  }', refreshStart);
 if (refreshStart < 0 || refreshEnd < refreshStart) throw new Error('refreshLossDiagnostic is missing from autofish.js');
@@ -36,7 +36,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive', 'lossDiagnostics']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'firstPressGate', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'ghostBlocked', 'spinAlive', 'lossDiagnostics']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -164,6 +164,26 @@ test('a ghost cooldown blocks the same fading circle but allows a wider real dia
   assert.match(SRC, /ghostBlocked\(geo, geo\.width, t, F\.ghostGeo, F\.opts\)/);
 });
 
+test('fast first press is an opt-in bypass of the first-press gate', () => {
+  // The default is unchanged: a narrow or fast dial still gets the stable-fit hold.
+  assert.equal(T.firstPressGate(45, 700, {}), true, 'a narrow, fast dial is gated');
+  assert.equal(T.firstPressGate(100, 320, {}), true, 'a wide, fast dial is gated');
+  assert.equal(T.firstPressGate(45, 120, {}), true, 'a narrow, slow dial is gated');
+  assert.equal(T.firstPressGate(90, 120, {}), false, 'a wide, slow dial is not gated');
+  assert.equal(T.firstPressGate(60, 299, {}), false, 'the boundary is width < 60 or omega >= 300');
+  assert.equal(T.firstPressGate(59.9, 299, {}), true);
+  assert.equal(T.firstPressGate(90, 300, {}), true);
+  // Opting in bypasses the gate without changing the crossing planner.
+  assert.equal(T.firstPressGate(45, 700, { fastFirstPress: true }), false);
+  assert.equal(T.firstPressGate(45, null, { fastFirstPress: true }), false);
+  assert.equal(T.firstPressGate(null, 700, { fastFirstPress: true }), false);
+  assert.match(SRC, /firstPressGate\(s\.width, s\.omega, F\.opts\)/, 'step() uses the shared gate');
+  assert.match(SRC, /fastFirstPress: false/, 'the mode is off by default');
+  assert.match(SRC, /if \(patch\.fastFirstPress != null\) F\.opts\.fastFirstPress = !!patch\.fastFirstPress/,
+    'tune() can switch the live run without a restart');
+  assert.match(SRC, /fastFirstPress: !!opts\.fastFirstPress/, 'calibration reports the opt-in state');
+});
+
 test('the first-press hold is a fraction of one pass, not a fixed ceiling', () => {
   // A 45 deg arc at 700 deg/s is under the pin for 64 ms. The old 2500 ms ceiling skipped ~4 passes
   // of exactly the fish the player is watching; that is the reported "it did a round turn".
@@ -226,8 +246,9 @@ test('the recovery scan backs off instead of running every second', () => {
 test('the first press on a narrow or fast dial waits for a mature fit, only when the budget can pay', () => {
   assert.match(SRC, /fitStable\(s\.fit, F\.opts\)/);
   assert.match(SRC, /F\.pressesThisDial === 0/);
-  assert.match(SRC, /Number\(s\.width\) < \(F\.opts\.firstPressMaxWidthDeg \|\| 60\)/);
-  assert.match(SRC, /Math\.abs\(Number\(s\.omega\) \|\| 0\) >= \(F\.opts\.firstPressFastOmega \|\| 300\)/);
+  assert.match(SRC, /firstPressGate\(s\.width, s\.omega, F\.opts\)/);
+  assert.match(SRC, /Number\(width\) < \(cfg\.firstPressMaxWidthDeg \|\| 60\)/);
+  assert.match(SRC, /Math\.abs\(Number\(omega\) \|\| 0\) >= \(cfg\.firstPressFastOmega \|\| 300\)/);
   assert.match(SRC, /firstPressCanMature\(budget, F\.opts\)/, 'a budget too short for the fit is skipped');
   assert.match(SRC, /if \(heldMs < budget\)/, 'the hold must not starve a dial');
   assert.match(SRC, /F\.stats\.firstPressHeld/);

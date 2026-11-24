@@ -34,6 +34,7 @@
       startedAt: null,
       lastTickAt: null,
       pauseReason: null,
+      pausedAt: null,
       hiddenSince: null,
       visibleSince: null,
       retryAt: null,
@@ -150,6 +151,7 @@
     s.cooldownUntil = rest ? at + s.cooldownMs : null;
     s.stopReason = reason || 'user';
     s.pauseReason = null;
+    s.pausedAt = null;
     s.seatOverrideUntil = null;
     s.retryAt = null;
     s.lastTickAt = null;
@@ -180,6 +182,7 @@
   function paused(s, at, reason) {
     s.phase = 'paused';
     s.pauseReason = reason;
+    s.pausedAt = at;
     s.lastTickAt = null;
     s.visibleSince = null;
     if (retryable(reason)) s.retryAt = at + RETRY_DELAY_MS;
@@ -205,6 +208,7 @@
     var wasSeat = s.pauseReason === 'seat';
     s.phase = 'running';
     s.pauseReason = null;
+    s.pausedAt = null;
     s.retryAt = null;
     s.visibleSince = null;
     s.hiddenSince = null;
@@ -327,6 +331,7 @@
       s.errWindowAt = null;
       s.errTotal = 0;
       s.pauseReason = null;
+      s.pausedAt = null;
       s.seatOverrideUntil = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -362,6 +367,7 @@
       if (s.lastTickAt != null) credit(s, s.lastTickAt, at);
       s.phase = 'paused';
       s.pauseReason = fact.reason === 'focus' ? 'focus' : 'user';
+      s.pausedAt = at;
       s.lastTickAt = null;
       s.hiddenSince = null;
       s.visibleSince = null;
@@ -383,6 +389,11 @@
       var fromSeat = s.pauseReason === 'seat';
       s.phase = 'running';
       s.pauseReason = null;
+      s.pausedAt = null;
+      // A hold is not a stretch without a bite: both the no-catch and cast-stall clocks start from
+      // this, and leaving the pre-pause catch time here made the first tick after a long hold pause
+      // again immediately (measured live 2026-11-24: resume, then pauseReason 'no-catch' 0.9 s later).
+      s.lastCatchAt = at;
       s.retryAt = null;
       s.hiddenSince = null;
       s.visibleSince = null;
