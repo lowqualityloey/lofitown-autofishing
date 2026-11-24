@@ -141,6 +141,42 @@ test('a cast-prompt loss diagnostic survives into the exported run row', () => {
   assert.deepEqual(out.attempts[0].lossDiag, diag);
 });
 
+test('the guard and blind snapshots survive into the exported run', () => {
+  const start = SRC.indexOf('F.exportRun = function');
+  const end = SRC.indexOf('\n  };', start);
+  const rs = SRC.indexOf('function runRowOf');
+  const re = SRC.indexOf('function loadRunRows');
+  assert.ok(start >= 0 && end > start, 'F.exportRun must be present');
+  const runRowOf = new Function(SRC.slice(rs, re) + '\nreturn runRowOf;')();
+  const base = () => ({
+    version: '3.9.63', attempts: [],
+    perf: () => ({
+      fps: null, p50: null, p95: null, worst: null, longtasks: null,
+      snapshot: null, readback: null, rates: null,
+    }),
+    opts: {}, runStoreError: null, cutReason: null, stats: {},
+  });
+  const exportWith = (F) => new Function(
+    'F', 'loadRunRows', 'runRowOf', 'runSummary', 'pressAcceptSummary', 'predictionSummary', 'logProfile',
+    SRC.slice(start, end + 5) + '\nreturn F.exportRun;'
+  )(F, () => [], runRowOf, () => ({}), () => ({}), () => ({}), 'test');
+  const diag = { guard: { revives: 3, tickErrors: 1 }, blind: { silenceMs: 190_000, warning: true } };
+  const out = JSON.parse(exportWith(Object.assign(base(), { exportDiag: () => diag }))());
+  assert.deepEqual(out.guard, diag.guard);
+  assert.deepEqual(out.blind, diag.blind);
+
+  const bare = JSON.parse(exportWith(base())());
+  assert.equal(bare.guard, null, 'an older panel exports no guard rather than throwing');
+  assert.equal(bare.blind, null);
+
+  const broken = JSON.parse(exportWith(Object.assign(base(), {
+    exportDiag: () => { throw new Error('hook died'); },
+  }))());
+  assert.equal(broken.guard, null);
+  assert.equal(broken.blind, null);
+  assert.equal(broken.diagError, 'hook died', 'a broken hook is still visible in the export');
+});
+
 test('prediction error is reported in degrees and in milliseconds', () => {
   // The number that decides a marginal narrow press. Measured without pressing: a press makes the
   // game spawn a new triangle, and the frame after one jumps for a reason that is not model error.

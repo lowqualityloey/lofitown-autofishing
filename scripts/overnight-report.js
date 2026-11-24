@@ -226,7 +226,7 @@ function readSessions(from, to, profiles) {
         time, started_at: r[1],
         // The row's own start; an old five-column row has no started_at, so use its duration.
         start: Number.isFinite(started) ? started : (Number.isFinite(time) ? time - minutes * 60000 : null),
-        minutes, catches: Number(r[3]) || 0, reason: r[4], profile: r[5] || 'default',
+        minutes, catches: Number(r[3]) || 0, reason: r[4], profile: r[5] || 'default', note: r[6] || '',
       };
     })
     .filter((r) => !want || want.has(r.profile))
@@ -277,12 +277,30 @@ function analyze(snapshots, opts) {
   const cuts = {};
   const doctors = {};
   let storeErrors = 0;
+  let blindSeen = false;
+  let maxBlindMs = null;
+  let maxBlindAt = null;
+  let blindWarnings = 0;
+  let guardRevives = null;
   for (const s of good) {
     const cut = s.data.run && s.data.run.cut;
     if (cut) cuts[cut] = (cuts[cut] || 0) + 1;
     if (s.data.storeError) storeErrors++;
     const d = s.data.doctor;
     if (d && d.verdict) doctors[d.verdict + '/' + d.severity] = (doctors[d.verdict + '/' + d.severity] || 0) + 1;
+    const blind = s.data.blind;
+    if (blind && typeof blind === 'object') {
+      blindSeen = true;
+      if (Number.isFinite(blind.silenceMs) && (maxBlindMs == null || blind.silenceMs > maxBlindMs)) {
+        maxBlindMs = blind.silenceMs;
+        maxBlindAt = snapshotTime(s);
+      }
+      if (blind.warning === true) blindWarnings++;
+    }
+    const guard = s.data.guard;
+    if (guard && typeof guard === 'object') {
+      if (Number.isFinite(guard.revives)) guardRevives = guardRevives == null ? guard.revives : Math.max(guardRevives, guard.revives);
+    }
   }
   const last = good[good.length - 1].data;
   const ci = run.catchCi;
@@ -380,6 +398,19 @@ function analyze(snapshots, opts) {
   lines.push('Cut reasons: ' + (Object.keys(cuts).length ? Object.entries(cuts).map(([k, v]) => k + ' × ' + v).join(', ') : 'none recorded'));
   lines.push('Doctor verdicts seen: ' + (Object.keys(doctors).length ? Object.entries(doctors).map(([k, v]) => k + ' × ' + v).join(', ') : 'none recorded'));
 
+  lines.push('');
+  lines.push('## Guard and blind');
+  lines.push('');
+  if (!blindSeen && guardRevives == null) {
+    lines.push('_not recorded in these snapshots (pre-3.9.63)._');
+  } else {
+    lines.push('detector silence: ' + (maxBlindMs != null
+      ? (maxBlindMs / 60000).toFixed(1) + ' min max' + (maxBlindAt != null ? ' at ' + dayClock(maxBlindAt) : '')
+      : 'not recorded'));
+    lines.push('warnings: ' + (blindSeen ? (blindWarnings ? blindWarnings + (blindWarnings === 1 ? ' snapshot' : ' snapshots') : 'none') : 'not recorded'));
+    lines.push('guard revives: ' + (guardRevives != null ? guardRevives + ' peak' : 'not recorded'));
+  }
+
   if (last.perf) {
     const p = last.perf;
     lines.push('');
@@ -402,6 +433,13 @@ function analyze(snapshots, opts) {
     lines.push('| ended | profile | minutes | catches | reason |');
     lines.push('| :--- | :--- | ---: | ---: | :--- |');
     for (const s of sessions) lines.push('| ' + dayClock(s.time) + ' | ' + s.profile + ' | ' + s.minutes + ' | ' + s.catches + ' | ' + s.reason + ' |');
+  }
+  const noted = sessions.filter((s) => s.note);
+  if (noted.length) {
+    lines.push('');
+    lines.push('## Session notes');
+    lines.push('');
+    for (const s of noted) lines.push('- ' + dayClock(s.time) + ' · ' + s.profile + ' · ' + s.reason + ' · ' + s.note);
   }
   lines.push('');
   return { text: lines.join('\n'), coverage: cov, snapshots: picked };

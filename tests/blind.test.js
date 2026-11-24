@@ -48,6 +48,12 @@ test('the blind warning starts at three minutes, not a second before', () => {
   assert.equal(S.blindWarning(base({ sinceBubbleMs: 180_000, sinceDialMs: 200_000, now: T0 + 300_000 })), 180_000, 'exactly three minutes escalates with the newer signal age');
 });
 
+test('the raw blind silence is available below the warning threshold', () => {
+  const facts = base({ sinceBubbleMs: 120_000, sinceDialMs: 90_000, now: T0 + 120_000 });
+  assert.equal(S.blindSilence(facts), 90_000, 'the export keeps the age even when the banner is quiet');
+  assert.equal(S.blindWarning(facts), null);
+});
+
 test('the blind age is the newer of the last prompt and the last dial', () => {
   assert.equal(S.blindWarning(base({ sinceBubbleMs: 600_000, sinceDialMs: 30_000, now: T0 + 600_000 })), null, 'a prompt 30 s ago means the detector is not blind');
   assert.equal(S.blindWarning(base({ sinceBubbleMs: 181_000, sinceDialMs: 300_000, now: T0 + 400_000 })), 181_000);
@@ -229,6 +235,13 @@ test('the panel makes the warning persistent and names the reload-and-sit fix', 
   assert.match(PANEL, /\.banner\.blind\{/, 'the blind warning has its own style');
   assert.ok(PANEL.includes('runAgeMs: status ? status.runAgeMs : null'), 'the panel gives the trigger the current core run age');
   assert.ok(PANEL.includes('pauseMs: state.blindPauseMs || 0'), 'the panel passes the deliberate-pause credit');
+});
+
+test('the panel exports the blind silence for the overnight snapshot', () => {
+  assert.ok(PANEL.includes('function blindDiag()'), 'the panel builds a blind snapshot');
+  assert.ok(PANEL.includes('silenceMs: null'), 'the raw age is exported below the warning');
+  assert.match(PANEL, /window\.AutoFishSession\.blindSilence\(facts\)/);
+  assert.match(PANEL, /fish\(\)\.exportDiag = exportDiag/);
 });
 
 test('the panel records visibility wall time for the reducer', () => {

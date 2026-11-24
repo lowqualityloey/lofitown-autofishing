@@ -700,9 +700,10 @@
    * session and a reload starts a fresh detector; without the cap, a dial from yesterday could make
    * a fresh run look blind at once. Deliberate user/seat/focus holds, and hidden gaps reported by the
    * panel's visibility return, are subtracted; cast-stall and no-catch are detector failures and
-   * still count. Returns the age worth a warning, or null. Pure, so the boundary is testable.
+   * still count. Returns the raw silence age, or null; blindWarning applies the three-minute
+   * boundary. Pure, so both the boundary and the raw age are testable.
    */
-  function blindWarning(s) {
+  function blindSilence(s) {
     if (!s || s.running !== true || s.stalled || s.visible === false) return null;
     var active = s.phase === 'running' ||
       (s.phase === 'paused' && (s.pauseReason === 'cast-stall' || s.pauseReason === 'no-catch'));
@@ -719,8 +720,14 @@
     if (blindMs != null && cap != null) blindMs = Math.min(blindMs, cap);
     var pauseMs = typeof s.pauseMs === 'number' && isFinite(s.pauseMs) ? Math.max(0, s.pauseMs) : 0;
     if (blindMs != null) blindMs = Math.max(0, blindMs - pauseMs);
+    return blindMs;
+  }
+
+  /** The warning boundary: the same silence, or null while it is still a plausible bite wait. */
+  function blindWarning(s) {
+    var blindMs = blindSilence(s);
     return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindSilence: blindSilence, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
 });

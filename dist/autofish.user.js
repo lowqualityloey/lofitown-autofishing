@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.62
+// @version      3.9.63
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -64,7 +64,7 @@ window.__autofishInstalled = true;
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
    */
-  const F = { version: "3.9.62" };
+  const F = { version: "3.9.63" };
   const now = () => performance.now();
 
   /* ---- performance probe -------------------------------------------------
@@ -4771,6 +4771,14 @@ const SPECIES = [
       avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t, dialLog: r.dl,
     }));
     const p = F.perf();
+    // The panel owns guard/blind state. A missing hook (an older panel) or a throwing one must
+    // not make exportRun fail: the export is the night's only record.
+    let panelState = null;
+    try {
+      panelState = typeof F.exportDiag === 'function' ? F.exportDiag() : null;
+    } catch (e) {
+      panelState = { error: String((e && e.message) || e) };
+    }
     const out = {
       version: F.version,
       exportedAt: new Date().toISOString(),
@@ -4797,6 +4805,9 @@ const SPECIES = [
         longtasks: p.longtasks, snapshot: p.snapshot, readback: p.readback, rates: p.rates,
       },
       doctor: F.doctor ? F.doctor() : null,
+      guard: panelState && panelState.guard ? panelState.guard : null,
+      blind: panelState && panelState.blind ? panelState.blind : null,
+      diagError: panelState && panelState.error ? panelState.error : null,
       opts: F.opts,
       attempts: merged,
     };
@@ -5676,9 +5687,10 @@ const SPECIES = [
    * session and a reload starts a fresh detector; without the cap, a dial from yesterday could make
    * a fresh run look blind at once. Deliberate user/seat/focus holds, and hidden gaps reported by the
    * panel's visibility return, are subtracted; cast-stall and no-catch are detector failures and
-   * still count. Returns the age worth a warning, or null. Pure, so the boundary is testable.
+   * still count. Returns the raw silence age, or null; blindWarning applies the three-minute
+   * boundary. Pure, so both the boundary and the raw age are testable.
    */
-  function blindWarning(s) {
+  function blindSilence(s) {
     if (!s || s.running !== true || s.stalled || s.visible === false) return null;
     var active = s.phase === 'running' ||
       (s.phase === 'paused' && (s.pauseReason === 'cast-stall' || s.pauseReason === 'no-catch'));
@@ -5695,10 +5707,16 @@ const SPECIES = [
     if (blindMs != null && cap != null) blindMs = Math.min(blindMs, cap);
     var pauseMs = typeof s.pauseMs === 'number' && isFinite(s.pauseMs) ? Math.max(0, s.pauseMs) : 0;
     if (blindMs != null) blindMs = Math.max(0, blindMs - pauseMs);
+    return blindMs;
+  }
+
+  /** The warning boundary: the same silence, or null while it is still a plausible bite wait. */
+  function blindWarning(s) {
+    var blindMs = blindSilence(s);
     return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindSilence: blindSilence, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
 });
 
 /* layout.js — where the panel may sit so it never covers the fishing UI.
@@ -7579,19 +7597,7 @@ const SPECIES = [
     var blindMs = null;
     try {
       if (window.AutoFishSession && window.AutoFishSession.blindWarning) {
-        blindMs = window.AutoFishSession.blindWarning({
-          phase: phase,
-          pauseReason: state.pauseReason,
-          running: !!(status && status.running),
-          stalled: !!(status && status.stalled),
-          visible: document.visibilityState === 'visible',
-          sinceBubbleMs: status ? status.sinceBubbleMs : null,
-          sinceDialMs: status ? status.sinceDialMs : null,
-          startedAt: state.startedAt,
-          runAgeMs: status ? status.runAgeMs : null,
-          pauseMs: state.blindPauseMs || 0,
-          now: Date.now()
-        });
+        blindMs = window.AutoFishSession.blindWarning(blindFacts(status));
       }
     } catch (e) {}
     var blindNote = '';
@@ -7876,6 +7882,50 @@ const SPECIES = [
     return bits.join(' ').slice(0, 200);
   }
 
+  /** The inputs the banner and the export share, so a new signal cannot reach only one of them. */
+  function blindFacts(status) {
+    return {
+      phase: state.phase,
+      pauseReason: state.pauseReason,
+      running: !!(status && status.running),
+      stalled: !!(status && status.stalled),
+      visible: document.visibilityState === 'visible',
+      sinceBubbleMs: status ? status.sinceBubbleMs : null,
+      sinceDialMs: status ? status.sinceDialMs : null,
+      startedAt: state.startedAt,
+      runAgeMs: status ? status.runAgeMs : null,
+      pauseMs: state.blindPauseMs || 0,
+      now: Date.now()
+    };
+  }
+
+  /**
+   * The guard/blind snapshot for __fish.exportRun(). The banner uses blindWarning(); the export
+   * also carries the raw silence below three minutes, because a five-minute sampler can otherwise
+   * miss a warning that rose and fell between posts.
+   */
+  function blindDiag() {
+    if (!state) return { phase: null, pauseReason: null, silenceMs: null, warning: false };
+    var status = null;
+    try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+    var facts = blindFacts(status);
+    var out = Object.assign({}, facts, { silenceMs: null, warning: false });
+    try {
+      if (window.AutoFishSession) {
+        if (window.AutoFishSession.blindSilence) out.silenceMs = window.AutoFishSession.blindSilence(facts);
+        if (window.AutoFishSession.blindWarning) out.warning = window.AutoFishSession.blindWarning(facts) != null;
+      }
+    } catch (e) {
+      out.error = String((e && e.message) || e);
+    }
+    return out;
+  }
+
+  /** What exportRun() adds when the panel is mounted; null fields when it is not. */
+  function exportDiag() {
+    return { guard: guardDiag(), blind: blindDiag() };
+  }
+
   /**
    * Runs on a timer that is not the tick loop. Two facts are enough: the phase says running while
    * the core reports stopped (revive it), or no tick has been entered for a full guard interval
@@ -8070,6 +8120,7 @@ const SPECIES = [
     window.__panel.setFastFirstPress = setFastFirstPress;
     window.__panel.overnight = overnightPref;
     window.__panel.armOvernight = armOvernight;
+    if (fish()) fish().exportDiag = exportDiag;
     window.__panel.guard = function () {
       return { lastTickAt: lastTickAt, tickErrors: tickErrors, lastTickError: lastTickError, zombieRevives: zombieRevives };
     };

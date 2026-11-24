@@ -4753,6 +4753,14 @@ const SPECIES = [
       avgWidth: r.w, ms: r.ms, species: r.sp, rarity: r.r, why: r.why, startAt: r.t, dialLog: r.dl,
     }));
     const p = F.perf();
+    // The panel owns guard/blind state. A missing hook (an older panel) or a throwing one must
+    // not make exportRun fail: the export is the night's only record.
+    let panelState = null;
+    try {
+      panelState = typeof F.exportDiag === 'function' ? F.exportDiag() : null;
+    } catch (e) {
+      panelState = { error: String((e && e.message) || e) };
+    }
     const out = {
       version: F.version,
       exportedAt: new Date().toISOString(),
@@ -4779,6 +4787,9 @@ const SPECIES = [
         longtasks: p.longtasks, snapshot: p.snapshot, readback: p.readback, rates: p.rates,
       },
       doctor: F.doctor ? F.doctor() : null,
+      guard: panelState && panelState.guard ? panelState.guard : null,
+      blind: panelState && panelState.blind ? panelState.blind : null,
+      diagError: panelState && panelState.error ? panelState.error : null,
       opts: F.opts,
       attempts: merged,
     };
