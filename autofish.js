@@ -657,7 +657,7 @@
    * s: { running, paused, hidden, stalled, lastTickAgoMs, postRender,
    *      snapshot: { gl, canvas2d }, readback: { canvas2d, allocMBPerSec },
    *      longtasks: { inLast10s, maxMs }, worstFrameMs,
-   *      needsSeat, sincePromptMs, sinceDialMs,
+   *      needsSeat, resultMissing, sincePromptMs, sinceDialMs,
    *      accepted, rejected, acceptRate, dials, held, forced, holdPassesMax }
    * -> { verdict, severity: 'ok'|'warn'|'high', action, evidence }
    */
@@ -672,6 +672,7 @@
         { lastTickAgoMs: st.lastTickAgoMs });
     }
     if (st.hidden) return o('page-hidden', 'warn', 'bring the tab to the front', {});
+    if (st.resultMissing) return o('result-missing', 'high', 'reload the game tab: the game is waiting for a fishing result it never received', { resultMissing: true });
     if (st.paused) return o('paused', 'ok', 'press Resume', {});
     if (st.postRender === false) {
       return o('path-silent', 'high', 'detection is not on the render hook: rebuild or reinstall',
@@ -2434,6 +2435,7 @@ const SPECIES = [
   F.recordCatch = function (card) {
     const rec = F.parseCatch();
     if (!rec) return 'pending';
+    clearResultMissing('catch card');
     F.txtAt = now();
     // A parsed catch proves the character was seated and fishing, whatever the watchdog last
     // concluded. Without this, a long attempt or a slow card leaves the flag set and the session
@@ -3168,6 +3170,58 @@ const SPECIES = [
     });
   }
 
+  /**
+   * The game can accept a winning attempt and then never deliver its `$fishing-result`: win()
+   * disables input with the `waiting-for-result` reason and only onFishingResult clears it. No
+   * amount of casting can recover that client-side lock, and the seat-hold probe would otherwise
+   * keep pressing Space forever. Latch the missing result instead; only a fresh Start (after the
+   * tab is reloaded) or a late card/prompt clears it. The game itself is never touched.
+   */
+  // <result-missing-core>
+  /**
+   * Pure check for the client's stuck `waiting-for-result` state. A hit dial that is followed by
+   * neither a catch card nor a cast prompt is the win-shaped case; a miss or a dial whose card was
+   * already seen is a normal lost/landing fish and must not pause the session.
+   */
+  function resultMissingDue(f, t) {
+    const p = f && f.pendingWin;
+    const a = f && f.attempt;
+    if (!f || f.resultMissing || f.geo || !p || !a) return false;
+    if (p.verdict !== 'hit' || p.shapeSeen || p.landed || p.closedAt == null) return false;
+    // Keep the attempt guard: a pending win from the previous fish must not fire while the next
+    // attempt has not had a dial hit of its own yet.
+    if (!(a.presses > 0 && a.dialHits > 0)) return false;
+    const threshold = (f.opts && f.opts.resultMissingMs) || 8000;
+    return t - p.closedAt > threshold;
+  }
+
+  function clearResultMissing(why) {
+    if (!F.resultMissing) return false;
+    F.resultMissing = false;
+    F.resultMissingAt = 0;
+    F.resultMissingAttempt = null;
+    L('result missing cleared', { why: why || null });
+    return true;
+  }
+
+  function markResultMissing(t, why) {
+    if (F.resultMissing) return false;
+    F.resultMissing = true;
+    F.resultMissingAt = t;
+    const a = F.attempt;
+    F.resultMissingAttempt = a ? { n: a.n, presses: a.presses, dials: a.dials, dialHits: a.dialHits } : null;
+    if (F.stats) F.stats.resultMissing = (F.stats.resultMissing || 0) + 1;
+    L('result missing', {
+      why: why || null,
+      attempt: a ? a.n : null,
+      presses: a ? a.presses : 0,
+      dialHits: a ? a.dialHits : 0,
+      sinceDialCloseMs: F.pendingWin && F.pendingWin.closedAt != null ? Math.round(t - F.pendingWin.closedAt) : null,
+    });
+    return true;
+  }
+  // </result-missing-core>
+
   function clearPendingWin() {
     F.pendingWin = null;
   }
@@ -3252,6 +3306,7 @@ const SPECIES = [
       hitMs: 1500,                  // a press the game acts on ends the dial within this
       skipMs: 300,                  // an unpressed dial that lived this long lost a fish (fades are ~100 ms)
       attemptIdleMs: 25000,         // an attempt with no dial and no press this long is over
+      resultMissingMs: 8000,        // a win-like attempt with no card or prompt this long -> the game is waiting for a result
       sweep: null,                  // e.g. { min: -60, max: 60, step: 15 } - one probe per press
       ab: null,                     // { arms: [{name:'contain',trigger:'contain'},{name:'angle',trigger:'angle',midDeg:6}] } - one arm per FISH
       bubbleDebounceMs: 900,
@@ -3281,7 +3336,7 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
-      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
+      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
       firstPressHeld: 0, firstPressForced: 0, firstPressHeldForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
@@ -3290,6 +3345,8 @@ const SPECIES = [
     // Opt-in only. A userscript has no local server, and a hardcoded localhost POST turns every
     // catch into a failed request. The panel passes a URL only when the user turned POST catches on.
     F.geo = null; F.ghostGeo = null; F.catches = []; F.logUrl = (opts && opts.logUrl) ? String(opts.logUrl) : null;
+    clearResultMissing('start');
+    F.resultMissingAt = 0; F.resultMissingAttempt = null;
     // A fresh start has no prompt to learn the widget from: prefer the circle the last run locked
     // (scaled if the canvas was a different size), else the middle of the play area. Never a
     // literal point measured at one viewport - dialAnywhere() is the backstop when this is wrong.
@@ -3338,6 +3395,7 @@ const SPECIES = [
     F._raf = null;
     if (F._stallTimer) { clearInterval(F._stallTimer); F._stallTimer = null; }
     F.stalled = false;
+    clearResultMissing('stop');
     L('stop', { stats: F.stats });
     return F.status();
   };
@@ -3384,7 +3442,7 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
-      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0,
+      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
       firstPressHeld: 0, firstPressForced: 0, firstPressHeldForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
@@ -3396,6 +3454,7 @@ const SPECIES = [
     F.pressLog = []; F.pressProbe = null; F.predLog = []; F.predProbe = null;
     clearPendingWin();
     F.catches = [];
+    clearResultMissing('stats reset');
     return F.status();
   };
 
@@ -3832,6 +3891,7 @@ const SPECIES = [
     if (!F.geo && t - (F.lastCard || 0) > 1500 && awaitingCard) {
       const card = F.findCatch();
       if (card) {
+        clearResultMissing('catch card');
         markShapeHit(t);
         // half-sizes measured on the 1522x954 layout; good enough to keep the panel clear
         F.lastCardRect = card.w && card.h
@@ -3866,6 +3926,7 @@ const SPECIES = [
       F.cardScan = t;
       const c = F.findCatch();
       if (c) {
+        clearResultMissing('catch card');
         markShapeHit(t);
         F.cardUntil = t + 2200;
         F.lastCardRect = c.w && c.h
@@ -3878,6 +3939,7 @@ const SPECIES = [
     // 1. a bubble is always the next thing to press (CAST! or REEL!, same shape)
     const b = F.findBubble();
     if (b) {
+      clearResultMissing('cast prompt');
       // The ladder counts attempts on the prompt in front of us, not the whole run: a prompt that
       // went away and came back is a new prompt, so it starts again at the first rung.
       if (F.lastBubbleAt && t - F.lastBubbleAt > (F.opts.castRungResetMs || 10000)) F.bubbleMiss = 0;
@@ -4108,6 +4170,7 @@ const SPECIES = [
         F.bubblePrev = null;                                    // a dial proves the prompt was real: forget tap suspicion
         F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
         F.stats.dials++;
+        clearResultMissing('dial');
         // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
         // dialect by dial would put both arms inside one attempt and the A/B would compare nothing.
         if (!F.attempt) startAttempt(t);
@@ -4142,9 +4205,16 @@ const SPECIES = [
     // reel a stuck line, the returning prompt clears the hold by itself. The first probe waits a
     // full interval after the hold is applied. `lastCastTry` is refreshed when the hold clears, so
     // the retry still cannot fire on the first frame after a Resume.
+    // 3b. A pressed dial that never produces a catch card or a cast prompt is the client's stuck
+    // `waiting-for-result` state, not a missed cast. Latch it before the retry block below so the
+    // normal retry and the once-a-minute seat probe both stop; a late card/prompt clears it above.
+    if (resultMissingDue(F, t)) {
+      markResultMissing(t, 'no catch card or cast prompt');
+    }
+
     const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs &&
       t - Math.max(F.castHoldAt || 0, F.lastCastTry || 0) > F.opts.seatHoldRetryMs);
-    if ((!F.castHold || seatProbe) && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
+    if (!F.resultMissing && (!F.castHold || seatProbe) && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
       F.lastCastTry = t;
       F.stats.castRetries = (F.stats.castRetries || 0) + 1;
       const tries = (F.stallRetry = (F.stallRetry || 0) + 1);
@@ -4161,7 +4231,7 @@ const SPECIES = [
     // can synthesise sits it down, so say what is wrong instead of clicking forever - the old
     // 60 s silent stall is exactly this state.
     const seatWatch = F.opts.seatWatchdogMs;
-    if (seatWatch && !F.geo && !F.needsSeat) {
+    if (seatWatch && !F.geo && !F.needsSeat && !F.resultMissing) {
       const idle = t - Math.max(F.lastPress || 0, F.lastBubbleAt || 0, F.geoAt || 0, F.startedAt);
       if (idle > seatWatch) {
         F.needsSeat = true;
@@ -4272,6 +4342,9 @@ const SPECIES = [
       hint: F.hint,
       pxScale: frame && frame.cw ? +(frame.w / frame.cw).toFixed(3) : null,
       needsSeat: !!F.needsSeat,
+      resultMissing: !!F.resultMissing,
+      resultMissingAt: F.resultMissingAt || null,
+      resultMissingAttempt: F.resultMissingAttempt || null,
       // inlined (not a helper): status.test.js compiles F.status out of the core
       // with only F/now in scope, so a closure call would not resolve there.
       playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && now() < F.bubblePrev.blockedUntil),
@@ -4322,6 +4395,7 @@ const SPECIES = [
       longtasks: p.longtasks,
       worstFrameMs: p.worst,
       needsSeat: !!F.needsSeat,
+      resultMissing: !!F.resultMissing,
       profileOpen: typeof F.profileOpen === 'function' ? !!F.profileOpen() : false,
       playerBlocked: !!(F.bubblePrev && F.bubblePrev.blockedUntil && t < F.bubblePrev.blockedUntil),
       sincePromptMs: F.lastBubbleAt ? Math.round(t - F.lastBubbleAt) : null,

@@ -649,6 +649,15 @@
 
   function fish() { return window.__fish; }
 
+  /** The core latch, including the short window before the session reducer has seen it. */
+  function resultMissingNow() {
+    if (state && state.pauseReason === 'result-missing') return true;
+    try {
+      var s = fish() && fish().status ? fish().status() : null;
+      return !!(s && s.resultMissing);
+    } catch (e) { return false; }
+  }
+
   /** Which build this tab is running. The bundle stamps __fish.version from package.json. */
   function versionLabel() {
     var api = fish();
@@ -747,6 +756,7 @@
     sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches); },
     refuse: function (a) {
       if (a.reason === 'cooldown') banner = 'cooling down — wait for the timer, or use Start now';
+      else if (a.reason === 'result-missing') banner = 'game is waiting for a fishing result — reload the game tab, then start again';
       else if (a.reason === 'window') banner = 'clock window is closed — start after ' + state.window.start;
       else banner = 'daily cap reached — no more fishing today';
     }
@@ -870,6 +880,7 @@
     '.banner.info{color:#cfd6dd;background:rgba(255,255,255,.05);border-top-color:rgba(255,255,255,.12)}',
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
+    '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-top-color:rgba(255,145,80,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.loghead{display:flex;align-items:center;gap:6px}',
     '.logmeta{font-size:10px;color:#8b95a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -1150,7 +1161,18 @@
     primary.addEventListener('click', function () {
       var at = Date.now();
       if (state.phase === 'running') dispatch({ type: 'pause', at: at });
-      else if (state.phase === 'paused') dispatch({ type: 'resume', at: at });
+      else if (state.phase === 'paused') {
+        // The only recovery from a missing game result is a page reload. Do not offer a Resume
+        // that the reducer has to refuse: make the action the button names.
+        if (resultMissingNow()) {
+          try { window.location.reload(); } catch (e) {
+            banner = 'reload the game tab to clear the waiting-for-result lock';
+            render();
+          }
+          return;
+        }
+        dispatch({ type: 'resume', at: at });
+      }
       else if (state.phase === 'waiting') dispatch({ type: 'stop', at: at, reason: 'user' });
       else dispatch({ type: 'start', at: at });
     });
@@ -1667,6 +1689,7 @@
     renderLog();
     renderPerf();
 
+    var resultMissing = !!(status && status.resultMissing) || state.pauseReason === 'result-missing';
     var primary = ui.primary;
     var secondary = ui.secondary;
     secondary.className = 'secondary hide';
@@ -1682,11 +1705,16 @@
       secondary.className = 'secondary';
       secondary.title = 'end the session and start the cooldown';
     } else if (phase === 'paused') {
-      primary.textContent = 'Resume';
-      primary.title = 'continue the same session, with its remaining time';
       secondary.textContent = 'Stop';
       secondary.className = 'secondary';
       secondary.title = 'end the session and start the cooldown';
+      if (resultMissing) {
+        primary.textContent = 'Reload game';
+        primary.title = 'reload the game tab to clear its waiting-for-result lock';
+      } else {
+        primary.textContent = 'Resume';
+        primary.title = 'continue the same session, with its remaining time';
+      }
     } else if (phase === 'waiting') {
       primary.textContent = 'Stop';
       primary.className = 'primary stop';
@@ -1713,6 +1741,12 @@
     // A stall outranks everything: the session is not running however the phase reads, and the
     // clock has stopped, so the player needs to know before the budget does.
     var stallNote = stalled ? 'loop stalled — the game stopped giving the bot frames; the clock is paused' : '';
+    // A missing result is not a seat or cast problem: the game already disabled input while it
+    // waits for a result that never arrived. Say what to do instead of letting the seat probe run.
+    var resultNote = '';
+    if (resultMissing) {
+      resultNote = 'no fishing result — the game is input-locked; reload the game tab, then start again';
+    }
     var seatNote = seatNoteFor(status, phase, focusOn);
     // A focus session outranks the log-offline chatter: the run will look alive while the game
     // refuses every cast, which is the most expensive way to spend a budget.
@@ -1743,9 +1777,10 @@
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || seatNote || focusModeNote || focusNote || playerNote || castNote || banner || stopNote;
+    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || castNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
+    else if (resultNote) ui.banner.className = 'banner result';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (playerNote) ui.banner.className = 'banner seat';
     else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
@@ -1758,6 +1793,7 @@
       host.dataset.phase = phase;
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
+      if (resultMissing) host.dataset.resultMissing = '1'; else delete host.dataset.resultMissing;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (focusOn) host.dataset.focusMode = '1'; else delete host.dataset.focusMode;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
@@ -1909,6 +1945,8 @@
       todayMs: baseTodayMs,
       // the seat fact drives the reducer: unseated pauses the clock, a prompt resumes it
       seat: !!(status && status.needsSeat),
+      // the game can hold itself in waiting-for-result; the reducer owns this distinct pause
+      resultMissing: !!(status && status.resultMissing),
       // a stalled core must not be charged for time it never fished
       stalled: !!(status && status.running && status.stalled),
       // cast-stall vs no-bite split + nearby-player guard: the reducer pauses with a named

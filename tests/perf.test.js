@@ -377,7 +377,7 @@ test('a missing cast prompt is named, not clicked at forever', () => {
 test('the ladder counts cast attempts, not frames', () => {
   // Counting frames ran the rung to 4567 in one second and left the bot walking instead of clicking.
   const btn = CORE.indexOf('const b = F.findBubble();');
-  const branch = CORE.slice(btn, btn + 1800);
+  const branch = CORE.slice(btn, btn + 2400);
   const gate = branch.indexOf('if (t - F.lastPress > F.opts.bubbleDebounceMs) {');
   assert.ok(gate > 0, 'the debounce gate is missing');
   const rung = branch.indexOf('const rung = (F.bubbleMiss = (F.bubbleMiss || 0) + 1);');
