@@ -625,3 +625,39 @@ test('a frozen catch fact trips the no-catch clock: the producer has to stay mon
   assert.equal(r.state.phase, 'paused');
   assert.equal(r.state.pauseReason, 'no-catch');
 });
+
+test('a pause records its reason and when it happened, and a resume clears them', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  const p = reduce(state, { type: 'pause', at: T0 + 90_000 });
+  assert.equal(p.state.pauseReason, 'user');
+  assert.equal(p.state.pausedAt, T0 + 90_000, 'the panel needs the clock time, not just the reason');
+  const r = reduce(p.state, { type: 'resume', at: T0 + 120_000 });
+  assert.equal(r.state.pausedAt, null);
+  assert.equal(r.state.pauseReason, null);
+});
+
+test('a resume restarts the no-catch clock instead of pausing on the first tick', () => {
+  // Measured live 2026-11-24: a session held for 5 h resumed and re-paused with reason 'no-catch'
+  // 0.9 s later, because lastCatchAt still pointed at the catch before the hold. A hold is not
+  // time spent waiting for a bite.
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'tick', at: T0 + 60_000, visible: true, catches: 1, errors: 0, todayMs: 0 }));
+  ({ state } = reduce(state, { type: 'pause', at: T0 + 90_000 }));
+  const at = T0 + 6 * 60 * 60_000;
+  const resumed = reduce(state, { type: 'resume', at });
+  assert.equal(resumed.state.phase, 'running');
+  assert.equal(resumed.state.lastCatchAt, at, 'the hold is not counted as a stretch without a bite');
+  const first = reduce(resumed.state, { type: 'tick', at: at + 1000, visible: true, catches: 1, errors: 0, todayMs: 0 });
+  assert.equal(first.state.phase, 'running');
+  assert.equal(first.state.pauseReason, null);
+});
+
+test('a guard pause records its own time, and a stop clears it', () => {
+  let { state } = reduce(createState(), { type: 'start', at: T0 });
+  ({ state } = reduce(state, { type: 'tick', at: T0 + 60_000, visible: true, catches: 1, errors: 0, todayMs: 0 }));
+  const quiet = reduce(state, { type: 'tick', at: T0 + 60_000 + 10 * 60_000 + 1, visible: true, catches: 1, errors: 0, todayMs: 0 });
+  assert.equal(quiet.state.pauseReason, 'no-catch');
+  assert.equal(quiet.state.pausedAt, T0 + 60_000 + 10 * 60_000 + 1);
+  const stopped = reduce(quiet.state, { type: 'stop', at: T0 + 12 * 60_000, reason: 'user' });
+  assert.equal(stopped.state.pausedAt, null, 'a finished session is not still paused');
+});

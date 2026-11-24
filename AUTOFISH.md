@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.56) - the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
+Status: **WORKING (3.9.62) - A detector blind for three minutes on a visible page is escalated into a persistent reload-and-sit warning, even through the cast-stall retries. Then 3.9.61's crash-loop breaker stops reviving a core that keeps dying: three restarts in ten minutes, then a `core-crash` stop whose session row carries the guard diagnostics. Then 3.9.60's watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
 against the new day's cap: the reducer carries the pre-midnight minutes, the panel stores and shows
 the same share, and the session row still reports the whole run. The rest is 3.9.54's session-log
 fix: an interrupted row carries the catches it had and the start time the heartbeat recorded, so
@@ -41,6 +41,103 @@ dial ends early (see below), never by the coin total.
 Run with BrowserOS neo on the lofi.town tab, with the neo window genuinely uncovered
 (a covered window reports `hidden` and freezes the game).
 
+## 2026-11-24 Fast first press (3.9.57)
+
+`fastFirstPress` is opt-in. It bypasses the first-press stable-fit hold only on narrow or fast
+dials; the crossing planner and every later press are unchanged. The default remains the measured
+hold, so the zero-miss baseline is preserved. The panel exposes the setting with an always-visible
+amber warning: tapping the first pass is faster, but a hard fish the hold would have waited for can
+now be missed. It is off by default and stored as `fastFirstPress:false`.
+
+Verification:
+
+- Focused tests: `node --test tests/timing.test.js tests/panel.test.js tests/status.test.js` -
+  **84 pass, 0 fail**.
+- Full suite: `node --test` - **382 pass, 0 fail**.
+- `node build-userscript.js` - **386,159 bytes**, header and panel version **3.9.57**.
+- Tampermonkey was updated to 3.9.57 and a reloaded live tab reported
+  `__fish.version: "3.9.57"` with the panel header matching.
+
+**Live A/B (2026-11-24).** The original tab reconnected and 3.9.57 ran on the real game. The default
+arm started with fast first press off. At 5m06s the character briefly stood up (`doctor:
+not-seated`); the seat hold paused the run and it resumed without a page reload. No disconnect
+occurred during either arm. The fast arm ran in the same live session after
+`__panel.setFastFirstPress(true)`. Fast first press was restored off and the session paused at the
+end.
+
+| Arm | Elapsed | Dials | Hits | Misses | `firstPressHeld` | `firstPressForced` | Presses | Attempts (caught/lost) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default | 8:17 | 22 | 21 | 0 | 6 | 3 | 61/61 | 9 (7/2) |
+| Fast | 8:31 | 22 | 22 | 0 | 0 | 0 | 76/76 | 16 (16/0) |
+
+The full windows differ by 14 s, so a matched cut from the same counters at about 5m07s:
+
+| Arm | Elapsed | Dials | Hits | Misses | Held | Forced | Presses | Attempts (caught/lost) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default | 5:06.5 | 9 | 9 | 0 | 2 | 1 | 31/31 | 4 (3/1) |
+| Fast | 5:06.8 | 12 | 12 | 0 | 0 | 0 | 48/48 | 10 (10/0) |
+
+`holdPassesMax` was 0.264 turns in the default arm. The fast arm added no holds, so its cumulative
+maximum stayed at 0.264; its own held count was 0. Both arms had zero dial misses and zero errors.
+The fast arm caught 16/16 attempts versus 7/9 in the default arm, but the default arm includes the
+unseated pause and the samples are too small for an accuracy claim. This run verifies the opt-in
+path live; the default stable-fit hold remains the conservative choice.
+
+## 2026-11-24 Blind-game escalation (3.9.62)
+
+`doctor()` names `detector-blind` after 45 s, but the panel only put it in the phase chip, and a real
+blind run pauses as `cast-stall` at 90 s, so the retry loop hid the condition. 3.9.62 measures the
+silence itself: the newer of `sinceBubbleMs` and `sinceDialMs`, or the current core run when neither
+has been seen; the age is capped at that run, so a reload starts a fresh three-minute clock. Once
+that is three minutes on a visible page during a running or cast-stall/no-catch
+pause, the panel shows a persistent banner — "detector blind for 3 min — reload the game tab, then
+sit on a chair by the water" — which outranks the cast-stall retry and log-offline lines but yields
+to stall, result-missing, seat, focus and player/profile notices. The state is exposed as
+`host.dataset.blind`, the style is `.banner.blind`, and the 3-minute boundary, newer-signal choice,
+reload restart, pause-aware resume cases, cast-stall/no-catch pauses and resets are covered in
+`tests/blind.test.js`; `session.blindWarning()` is pure. Deliberate hidden, user, seat and focus
+holds are subtracted from the silence. The reducer credits a hidden pause it sees; a throttled
+background tab that never ticked hands its hidden wall time to the reducer on the browser's
+visibility return instead. A fresh prompt or dial clears the pause credit, a watchdog/core restart
+clears it because the new detector has no history, and cast-stall/no-catch remain detector failures
+that still count.
+
+## 2026-11-24 Crash-loop breaker (3.9.61)
+
+A watchdog that revives forever hides a game that no longer works. 3.9.61 keeps a rolling ten-minute
+window of revive times: three restarts are allowed, and a fourth stop dispatches `stop` with reason
+`core-crash` instead of starting the core again. That stop rests like any other, so the next tick
+cannot re-enter the loop. The session row carries the guard diagnostics in a new `note` column
+(`guard revives=3 windowRevives=3 tickErrors=1 lastError=... doctor=... tickAgoMs=...`), and fishserve
+sanitises it to one CSV-safe line; older five- and six-column files are upgraded in place and their
+rows still read back unchanged. `session.reviveGate` is pure and covered for the cap and the rolling
+edge in `tests/zombie.test.js`; the CSV column is covered in `tests/fishserve.test.js`.
+
+## 2026-11-24 Zombie core guard (3.9.60)
+
+Measured live: the panel read `phase: running` while `__fish.status().running` was false and the clock
+had stopped. The 1 s tick is the only keep-alive, and a throw before its dispatch was never recorded.
+3.9.60 guards `focusTick()` and `healCapture()` separately, records failures (`__panel.guard()` exposes
+`tickErrors` / `lastTickError`), and runs a 5 s watchdog on a timer of its own: a silent tick loop is
+re-entered, and if the phase is running while the core reports stopped, it restarts the core, counts
+`zombieRevives`, and says so in the banner. A stopped core also reports `stalled`, so that stretch is
+never credited as fishing time. The `coreGuard` predicate is pure and unit-tested in
+`tests/zombie.test.js`.
+
+## 2026-11-24 Stall verdict replay (3.9.59)
+
+`stallDialMs` (default 0, off) names a long-held narrow ring `stalled` instead of a press miss or a
+ghost. Replaying the overnight ledger (548 runs, 11,891 narrow first dials) at 9000 ms: **122 of 167
+narrow misses (73%)** and **166 of 282 narrow ghosts (59%)** would have been relabelled, and **zero of
+14,753 narrow hits** - a hit cannot qualify (its last press is <= `hitMs` old), and no hit was even
+held 9000 ms. Only 3.9.55's stuck result sessions were affected; 3.9.56/57 first dials were untouched.
+
+If it is ever enabled, prefer **7900 ms**: the 45 misses left at 9000 all closed at 7986 ms and 42
+more ghosts at ~8 s, while every real fade lasted <= 328 ms and nothing sat between 1 s and 6 s. 7900
+catches the whole stuck-ring cluster and still leaves the brief fades as ghosts. A genuine narrow
+miss closes at the ~15.9 s dial timeout, so it is relabelled at either threshold - that ambiguity
+belongs to the rule, not the cutoff. The default stays 0 until a live session needs it.
+
 ## Install once, run forever (userscript - panel included, no server, no console)
 
 The easiest path by a wide margin: **one file, and the whole HUD is inside it**. The panel, the
@@ -66,6 +163,11 @@ node build-userscript.js      # writes dist/autofish.user.js (committed; rerun a
                               # autofish.js, session.js, layout.js or panel.js)
 npm run build:userscript      # same thing
 ```
+
+**Import from file is the reliable local install path.** Pointing Tampermonkey at a local URL
+(`http://127.0.0.1:8731/autofish.user.js`) opens its intermediate `script_installation.php` page with
+no install control, so `Dashboard -> Utilities -> Import from file` (or Import from URL inside that
+dialog) is what actually works for a build served by `fishserve`.
 
 Why the first load is OFF on purpose: an install must never start pressing keys in a tab you just
 opened. The remembered choice lives in `localStorage` (`autofish:on`, `autofish.prefs`,

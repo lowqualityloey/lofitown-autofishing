@@ -39,6 +39,14 @@
   var heartbeatAt = 0;
   var diagSent = false;       // one UI frame per session, when a run never sees a prompt
   var diagAt = 0;
+  var guardTimer = null;      // its own timer: a throw inside tick() must not also disable the check
+  var TICK_GUARD_MS = 5000;
+  var lastTickAt = 0;         // when tick() was last entered
+  var hiddenAt = null;        // wall clock when the tab went hidden; visibility events survive timer throttling
+  var tickErrors = 0;
+  var lastTickError = '';
+  var zombieRevives = 0;
+  var reviveTimes = [];       // rolling window for the crash-loop cap; an accepted Start clears it
   var wakeSentinel = null;
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
@@ -99,6 +107,7 @@
     prefs.postCatches = !!p.postCatches;
     prefs.hideUpsell = !!p.hideUpsell;
     prefs.focusMode = !!p.focusMode;
+    prefs.fastFirstPress = !!p.fastFirstPress;
     prefs.overnight = !!p.overnight;
     if (typeof p.overnightBase === 'string') prefs.overnightBase = p.overnightBase;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
@@ -119,6 +128,7 @@
       postCatches: !!window.__panel.postCatches,
       hideUpsell: !!window.__panel.hideUpsell,
       focusMode: !!focusPref,
+      fastFirstPress: !!fastPref,
       overnight: !!overnightPref,
       overnightBase: captureBase || '',
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
@@ -282,11 +292,29 @@
   var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
                              // the hold; it must never change this, or the next session never engages.
   var focusSawSession = false;
+  // Opt-in speed over the first-press fit. The core's default keeps the hold; this setting is
+  // deliberately surfaced as a trade-off, not as a free improvement.
+  var fastPref = false;
 
   function renderFocusToggle() {
     if (!ui.focusToggle) return;
     ui.focusToggle.textContent = focusOn ? 'on' : 'off';
     ui.focusToggle.style.color = focusOn ? '#5ad18b' : '#9aa4ae';
+  }
+
+  function renderFastToggle() {
+    if (!ui.fastToggle) return;
+    ui.fastToggle.textContent = fastPref ? 'on' : 'off';
+    // Amber, not green: this is a speed/accuracy trade, not a free upgrade.
+    ui.fastToggle.style.color = fastPref ? '#f2c14e' : '#9aa4ae';
+  }
+
+  function setFastFirstPress(on) {
+    fastPref = !!on;
+    if (window.__panel) window.__panel.fastFirstPress = fastPref;
+    try { if (window.__fish && window.__fish.tune) window.__fish.tune({ fastFirstPress: fastPref }); } catch (e) {}
+    savePrefs();
+    render();
   }
 
   /**
@@ -600,7 +628,7 @@
     } catch (e) { baseTodayMs = local; }
   }
 
-  function postSessionRow(reason, minutes, catches, startedAt) {
+  function postSessionRow(reason, minutes, catches, startedAt, note) {
     // fishserve is also where the overnight sampler posts. An inlined panel has no BASE of its own,
     // so the address the owner gave the capture is the one server this page knows; without it there
     // is nowhere to log and the local budget has to answer alone.
@@ -616,7 +644,7 @@
       fetch(server + '/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ started_at: started, minutes: minutes, catches: catches, reason: reason, profile: profileName() })
+        body: JSON.stringify({ started_at: started, minutes: minutes, catches: catches, reason: reason, profile: profileName(), note: note || '' })
       }).then(function (r) { if (!r.ok) banner = 'session log rejected the row'; }).catch(function () { banner = 'session log offline — the session still works'; });
     } catch (e) { banner = 'session log offline — the session still works'; }
   }
@@ -737,12 +765,21 @@
 
   var RUNNERS = {
     startCore: function (a) {
+      // A new core has a fresh detector. The watchdog starts it without a reducer action, so clear
+      // the old pause credit here rather than carrying it across the restart.
+      if (window.AutoFishSession && state && window.AutoFishSession.clearBlindPause) {
+        window.AutoFishSession.clearBlindPause(state);
+      }
       // A second Start in the same page must see the minutes the first session just logged; the
       // reducer has already reset fishingMs, so the day's total has to come from the store.
       baseTodayMs = loadBudget().ms;
       var server = BASE || captureServer();
       var post = (window.__panel && window.__panel.postCatches && server) ? server + '/catch' : null;
-      fish().start({ maxMinutes: a.maxMinutes, logUrl: post });
+      fish().start({
+        maxMinutes: a.maxMinutes,
+        logUrl: post,
+        fastFirstPress: !!(window.__panel && window.__panel.fastFirstPress),
+      });
     },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
     pauseCore: function () { try { fish().pause(); } catch (e) {} },
@@ -753,7 +790,7 @@
     wakeLock: function () { acquireWakeLock(); },
     releaseWakeLock: function () { releaseWakeLock(); },
     persist: function () { savePrefs(); writeHeartbeat(); syncBudget(); },
-    sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches); },
+    sessionRow: function (a) { postSessionRow(a.reason, a.minutes, a.catches, undefined, guardNote(a.diag)); },
     refuse: function (a) {
       if (a.reason === 'cooldown') banner = 'cooling down — wait for the timer, or use Start now';
       else if (a.reason === 'result-missing') banner = 'game is waiting for a fishing result — reload the game tab, then start again';
@@ -771,7 +808,11 @@
   }
 
   function dispatch(fact) {
+    // Only an accepted Start begins a new crash-loop budget. A refused Start during cooldown used
+    // to clear the window too, erasing the evidence of the loop that put the session there.
+    var startedAt = state.startedAt;
     var out = window.AutoFishSession.reduce(state, fact);
+    if (fact.type === 'start' && out.state.startedAt !== startedAt) reviveTimes = [];
     state = out.state;
     apply(out.actions);
     return out;
@@ -881,6 +922,7 @@
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-top-color:rgba(255,145,80,.34)}',
+    '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-top-color:rgba(255,120,60,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.loghead{display:flex;align-items:center;gap:6px}',
     '.logmeta{font-size:10px;color:#8b95a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -895,6 +937,7 @@
     '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.capture{font-size:10px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.capture.on{color:#5ad18b}.capture.warn{color:#f2c14e}',
+    '.fastnote{font-size:9.5px;line-height:1.35;color:#f2c14e;margin-top:-4px}',
     '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
     '.sec{border-top:1px solid rgba(255,255,255,.08)}',
     '.sechead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#aab4bf;font:inherit;font-size:11px;letter-spacing:.3px;padding:8px 0 7px;cursor:pointer;text-align:left}',
@@ -984,6 +1027,17 @@
     focusToggle.title = 'pause autofish while a focus session is active; the cast prompt is drawn by the game and stays visible';
     focusRow.append(focusLabel, focusToggle);
     setSec.body.appendChild(focusRow);
+
+    // Fast first press: opt in to tapping the first pass on a narrow or fast dial instead of
+    // waiting for the stable spin fit. The note is always visible so the trade is not hidden
+    // behind a tooltip; the default (off) keeps the measured zero-miss first-press gate.
+    var fastRow = el('div', 'row');
+    var fastLabel = el('div', 'label', 'Fast first press');
+    var fastToggle = el('button', 'icon', fastPref ? 'on' : 'off');
+    fastToggle.title = 'tap the first pass on narrow or fast dials without waiting for a stable spin fit; faster, but high-tier fish are more likely to be missed';
+    fastRow.append(fastLabel, fastToggle);
+    setSec.body.appendChild(fastRow);
+    setSec.body.appendChild(el('div', 'fastnote', 'Faster first taps on narrow/fast dials. Skips the fit check, so harder fish can be missed.'));
 
     // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
     // window and the cap still bound it.
@@ -1124,7 +1178,7 @@
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
-      focusToggle: focusToggle,
+      focusToggle: focusToggle, fastToggle: fastToggle,
       chainToggle: chainToggle, reloadToggle: reloadToggle, postToggle: postToggle,
       captureToggle: captureToggle, captureLine: captureLine,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
@@ -1199,6 +1253,7 @@
       setFocusMode(focusPref);
       savePrefs();
     });
+    fastToggle.addEventListener('click', function () { setFastFirstPress(!fastPref); });
     chainToggle.addEventListener('click', function () {
       dispatch({ type: 'config', at: Date.now(), patch: { chain: !state.chain } });
       savePrefs();
@@ -1634,6 +1689,41 @@
     return '';
   }
 
+  /* The phase chip says "paused"; it never said why or since when, and that answer lived in
+   * __panel.state. This is the same fact, in the place the player is already looking. */
+  var PAUSE_WHY = {
+    user: 'you paused it',
+    hidden: 'the tab was hidden',
+    seat: 'the character was standing',
+    focus: 'a focus session is running',
+    'no-catch': 'nothing bit for 10 minutes',
+    'cast-stall': 'the cast never landed',
+    'player-block': 'a nearby player blocked the spot',
+    'profile-open': 'a player profile was open',
+    'result-missing': 'the game is waiting for a fishing result'
+  };
+
+  function clockTime(at) {
+    return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  /** '' unless the run is paused: the reason in plain words plus the clock time it happened. */
+  function pauseNoteFor(s, now) {
+    if (!s || s.phase !== 'paused' || !s.pauseReason) return '';
+    now = now || Date.now();
+    var line = 'paused';
+    if (s.pausedAt) {
+      line += ' ' + clockTime(s.pausedAt);
+      var age = now - s.pausedAt;
+      if (age >= 90 * 60 * 1000) line += ' (' + Math.round(age / 3600000) + 'h ago)';
+      else if (age >= 90 * 1000) line += ' (' + Math.round(age / 60000) + ' min ago)';
+    }
+    line += ' · ' + (PAUSE_WHY[s.pauseReason] || s.pauseReason);
+    if (s.pauseReason === 'user') line += ' · press Resume';
+    else if (s.retryAt) line += ' · retrying ' + clockTime(s.retryAt);
+    return line;
+  }
+
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
@@ -1656,6 +1746,7 @@
     ui.timeRow.style.display = state.window.on ? '' : 'none';
     renderUpsellToggle();
     renderFocusToggle();
+    renderFastToggle();
     renderCapture();
 
     if (!focused(ui.dur.val)) ui.dur.val.value = minutesText(state.durationMs);
@@ -1677,6 +1768,33 @@
     if (!focused(ui.time_to.val)) ui.time_to.val.value = state.window.stop;
 
     var stats = (status && status.stats) || {};
+
+    // A long-blind detector is not a slow bite: after the doctor's 45 s warning the session pauses
+    // as cast-stall and retries, so the age of the silence has to outlive those pauses. The note
+    // stays in the banner chain below, ahead of the cast-stall retry and any transient log-offline
+    // line, so it remains visible until the detector sees something again.
+    var blindMs = null;
+    try {
+      if (window.AutoFishSession && window.AutoFishSession.blindWarning) {
+        blindMs = window.AutoFishSession.blindWarning({
+          phase: phase,
+          pauseReason: state.pauseReason,
+          running: !!(status && status.running),
+          stalled: !!(status && status.stalled),
+          visible: document.visibilityState === 'visible',
+          sinceBubbleMs: status ? status.sinceBubbleMs : null,
+          sinceDialMs: status ? status.sinceDialMs : null,
+          startedAt: state.startedAt,
+          runAgeMs: status ? status.runAgeMs : null,
+          pauseMs: state.blindPauseMs || 0,
+          now: Date.now()
+        });
+      }
+    } catch (e) {}
+    var blindNote = '';
+    if (blindMs != null) {
+      blindNote = 'detector blind for ' + Math.floor(blindMs / 60000) + ' min — reload the game tab, then sit on a chair by the water';
+    }
 
     if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
     else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' paused';
@@ -1765,6 +1883,7 @@
     if (state.pauseReason === 'cast-stall' && (phase === 'running' || phase === 'paused')) {
       castNote = 'cast stalled — retrying, check for a profile popup';
     }
+    var pauseNote = pauseNoteFor(state);
     // A stop is the thing the player most needs to understand, and it used to be invisible: the
     // phase went back to idle and nothing said whether the tab, the clock or the cap ended it.
     var stopNote = '';
@@ -1777,14 +1896,15 @@
       }
       if (state.chain) stopNote += ' · chaining on';
     }
-    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || castNote || banner || stopNote;
+    var note = stallNote || resultNote || seatNote || focusModeNote || focusNote || playerNote || blindNote || castNote || pauseNote || banner || stopNote;
     ui.banner.textContent = note;
     if (stallNote) ui.banner.className = 'banner stall';
     else if (resultNote) ui.banner.className = 'banner result';
     else if (seatNote) ui.banner.className = 'banner seat';
     else if (playerNote) ui.banner.className = 'banner seat';
+    else if (blindNote) ui.banner.className = 'banner blind';
     else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
-    else if (stopNote && !banner) ui.banner.className = 'banner info';
+    else if ((pauseNote || stopNote) && !banner) ui.banner.className = 'banner info';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
 
@@ -1794,9 +1914,11 @@
       host.dataset.catches = String(stats.cards || state.catchCount || 0);
       if (status && status.needsSeat) host.dataset.needsSeat = '1'; else delete host.dataset.needsSeat;
       if (resultMissing) host.dataset.resultMissing = '1'; else delete host.dataset.resultMissing;
+      if (state.pauseReason) host.dataset.pauseReason = state.pauseReason; else delete host.dataset.pauseReason;
       if (focus) host.dataset.focus = '1'; else delete host.dataset.focus;
       if (focusOn) host.dataset.focusMode = '1'; else delete host.dataset.focusMode;
       if (stalled) host.dataset.stalled = '1'; else delete host.dataset.stalled;
+      if (blindMs != null) host.dataset.blind = '1'; else delete host.dataset.blind;
       if ((status && status.playerBlocked) || state.pauseReason === 'player-block') host.dataset.playerBlocked = '1'; else delete host.dataset.playerBlocked;
       if ((status && status.profileOpen) || state.pauseReason === 'profile-open') host.dataset.profileOpen = '1'; else delete host.dataset.profileOpen;
     }
@@ -1910,11 +2032,89 @@
   /* -------------------------------------------------------------- loop ---- */
 
   function tick() {
+    lastTickAt = Date.now();
+    try { tickOnce(); } catch (e) { noteTickError('tick', e); }
+  }
+
+  /**
+   * A panel that stops ticking looks exactly like a healthy run with a frozen session clock: the
+   * phase stays `running` and nothing restarts the core. Measured live 2026-11-24: the core had
+   * stopped while the panel still read RUNNING. Neither the silent throw nor the zombie state was
+   * visible anywhere, so both are now recorded and the banner says so.
+   */
+  function noteTickError(where, e) {
+    tickErrors++;
+    lastTickError = where + ': ' + ((e && e.message) || e);
+    if (banner.indexOf('panel error') === -1) banner = 'panel error — ' + lastTickError;
+    try { render(); } catch (ignored) {}
+  }
+
+  /** What the row should carry when the guard gives up: enough to diagnose the night without the tab. */
+  function guardDiag() {
+    var doctor = null;
+    try { doctor = fish() && fish().doctor ? fish().doctor().verdict : null; } catch (e) {}
+    return {
+      revives: zombieRevives,
+      windowRevives: reviveTimes.length,
+      tickErrors: tickErrors,
+      lastTickError: lastTickError,
+      doctor: doctor,
+      tickAgoMs: lastTickAt ? Date.now() - lastTickAt : null
+    };
+  }
+
+  /** One line, no commas: fishserve writes it as the sessions.csv note column. */
+  function guardNote(d) {
+    if (!d) return '';
+    var bits = ['guard revives=' + d.revives, 'windowRevives=' + d.windowRevives, 'tickErrors=' + d.tickErrors];
+    if (d.lastTickError) bits.push('lastError=' + String(d.lastTickError).slice(0, 90));
+    if (d.doctor) bits.push('doctor=' + d.doctor);
+    if (d.tickAgoMs != null) bits.push('tickAgoMs=' + d.tickAgoMs);
+    return bits.join(' ').slice(0, 200);
+  }
+
+  /**
+   * Runs on a timer that is not the tick loop. Two facts are enough: the phase says running while
+   * the core reports stopped (revive it), or no tick has been entered for a full guard interval
+   * (record it). The predicate lives in session.js so the zombie case has a unit test.
+   */
+  function health() {
+    try {
+      if (!state) return;
+      // A hidden tab throttles intervals, so silence there is the browser, not a broken panel.
+      var silent = state.phase === 'running' && lastTickAt &&
+        Date.now() - lastTickAt > TICK_GUARD_MS &&
+        document.visibilityState === 'visible';
+      if (silent) {
+        noteTickError('watchdog', new Error('no tick for ' + (Date.now() - lastTickAt) + ' ms'));
+        tick();                       // re-enter it: reporting a dead loop is not enough
+      }
+      var status = null;
+      try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+      if (window.AutoFishSession.coreGuard(state, status) === 'revive') {
+        // A core that keeps dying is not a liveness problem any more: after three restarts in ten
+        // minutes the game is the problem, and an honest stop beats restarting for hours.
+        var gate = window.AutoFishSession.reviveGate(reviveTimes, Date.now());
+        reviveTimes = gate.times;
+        if (!gate.allow) {
+          banner = 'the fishing core kept stopping — session stopped';
+          dispatch({ type: 'stop', at: Date.now(), reason: 'core-crash', diag: guardDiag() });
+          return;
+        }
+        banner = 'the fishing core had stopped — restarted';
+        RUNNERS.startCore({ maxMinutes: Math.ceil(state.durationMs / 60000) + 2 });
+        zombieRevives++;
+        try { render(); } catch (e) {}
+      }
+    } catch (e) { /* a watchdog that can throw is not a watchdog */ }
+  }
+
+  function tickOnce() {
     // A focus session ending releases a hold it started; a manual toggle is never touched here.
-    focusTick();
+    try { focusTick(); } catch (e) { noteTickError('focus', e); }
     // Outside render(): a dead or failing overnight capture is retried from the heartbeat, so a
     // repaint (a toggle, a dispatch) can never start a sampler load or a POST of its own.
-    healCapture();
+    try { healCapture(); } catch (e) { noteTickError('capture', e); }
     // A run that crosses midnight starts the new day at zero, the same way a reload does.
     var dayNow = dayKey();
     if (budgetDay && dayNow !== budgetDay) {
@@ -1947,8 +2147,8 @@
       seat: !!(status && status.needsSeat),
       // the game can hold itself in waiting-for-result; the reducer owns this distinct pause
       resultMissing: !!(status && status.resultMissing),
-      // a stalled core must not be charged for time it never fished
-      stalled: !!(status && status.running && status.stalled),
+      // a stalled core - or one that has stopped altogether - is not fishing time
+      stalled: !!(status && (!status.running || status.stalled)),
       // cast-stall vs no-bite split + nearby-player guard: the reducer pauses with a named
       // reason instead of burning the session as a generic no-catch
       sinceBubbleMs: status && typeof status.sinceBubbleMs === 'number' ? status.sinceBubbleMs : null,
@@ -2038,6 +2238,8 @@
     // zero dial presses until the toggle was clicked. focusTick() engages the hold when a session
     // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
+    fastPref = !!prefs.fastFirstPress;
+    window.__panel.fastFirstPress = fastPref;
     overnightPref = !!prefs.overnight;
     captureClearBackoff();
     // The night a reload used to end: with the setting on, mount loads the sampler again. It posts
@@ -2048,8 +2250,10 @@
     banner = checkInterrupted() || banner;
 
     tickTimer = setInterval(tick, TICK_MS);
+    guardTimer = setInterval(health, TICK_GUARD_MS);
     placeTimer = setInterval(place, 250);
     window.addEventListener('resize', place);
+    hiddenAt = document.visibilityState === 'hidden' ? Date.now() : null;
     document.addEventListener('visibilitychange', onVisible);
 
     window.__panel.mounted = true;
@@ -2060,13 +2264,33 @@
     window.__panel.focus = inFocusSession;
     window.__panel.focusMode = focusOn;
     window.__panel.setFocusMode = setFocusMode;
+    window.__panel.setFastFirstPress = setFastFirstPress;
     window.__panel.overnight = overnightPref;
     window.__panel.armOvernight = armOvernight;
+    window.__panel.guard = function () {
+      return { lastTickAt: lastTickAt, tickErrors: tickErrors, lastTickError: lastTickError, zombieRevives: zombieRevives };
+    };
     tick();
   }
 
   function onVisible() {
-    if (document.visibilityState === 'visible' && (state.phase === 'running' || state.phase === 'waiting')) acquireWakeLock();
+    if (document.visibilityState === 'visible') {
+      var hiddenMs = hiddenAt != null ? Math.max(0, Date.now() - hiddenAt) : 0;
+      hiddenAt = null;
+      // A throttled background tab can miss every hidden tick. This visibility event still knows the
+      // wall time; the reducer decides whether a deliberate hold already covers it.
+      if (hiddenMs && state) {
+        try { dispatch({ type: 'hidden-return', at: Date.now(), hiddenMs: hiddenMs }); }
+        catch (e) { noteTickError('hidden-return', e); }
+      }
+      if (state && (state.phase === 'running' || state.phase === 'waiting')) acquireWakeLock();
+    } else {
+      hiddenAt = Date.now();
+      if (state) {
+        try { dispatch({ type: 'hidden-start', at: Date.now() }); }
+        catch (e) { noteTickError('hidden-start', e); }
+      }
+    }
   }
 
   function mountAdoption() {
@@ -2082,11 +2306,13 @@
   function unmount() {
     clearPromptMask();
     if (tickTimer) clearInterval(tickTimer);
+    if (guardTimer) clearInterval(guardTimer);
     if (placeTimer) clearInterval(placeTimer);
     if (mount.timer) clearInterval(mount.timer);
 
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', onVisible);
+    hiddenAt = null;
     releaseWakeLock();
     if (host && host.parentNode) host.parentNode.removeChild(host);
     if (window.__panel) window.__panel.mounted = false;

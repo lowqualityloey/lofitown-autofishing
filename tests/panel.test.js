@@ -98,7 +98,7 @@ test('a reload row is dated by the heartbeat, not by the moment it is posted', (
   // began 0.6 s before it was written. started_at came from state.startedAt, which mount has not set
   // when the interrupted row is posted, so || Date.now() faked every one of them.
   const fn = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
-  assert.match(fn, /function postSessionRow\(reason, minutes, catches, startedAt\)/, 'the caller owns the start time');
+  assert.match(fn, /function postSessionRow\(reason, minutes, catches, startedAt, note\)/, 'the caller owns the start time');
   assert.match(fn, /new Date\(startedAt \|\| state\.startedAt \|\| Date\.now\(\)\)\.toISOString\(\)/, 'a supplied start wins over the mount-time fallback');
   assert.ok(!/started_at: new Date\(state\.startedAt \|\| Date\.now\(\)\)/.test(fn), 'the faked start is gone from the body');
   const check = src.slice(src.indexOf('function checkInterrupted()'), src.indexOf('/* -------------------------------------------------------------- DOM'));
@@ -150,7 +150,7 @@ test('a running session that cannot bite says so: sit down, the game is seat-bas
   assert.ok(fn.length > 0, 'render() exists');
   assert.ok(fn.includes('var seatNote = seatNoteFor(status, phase, focusOn);'), 'render() uses the tested seat-note helper');
   assert.ok(fn.includes("'paused'"), 'the notice also shows while paused, not only while running');
-  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| castNote \|\| banner/, 'the seat notice outranks the log-offline banner');
+  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| blindNote \|\| castNote \|\| pauseNote \|\| banner/, 'the seat notice outranks the blind notice and the log-offline banner');
   assert.ok(fn.includes("'banner seat'"), 'the seat notice gets its own colour, not the amber warning style');
   assert.ok(fn.includes("host.dataset.needsSeat = '1'"), 'needsSeat is observable from outside the shadow root');
   assert.match(src, /\.banner\.seat\{/, 'the seat style exists');
@@ -199,7 +199,7 @@ test('a focus session is announced, because a free account cannot fish in one', 
   assert.match(src, /var FOCUS_NOTE = 'focus session active/, 'the notice names the state');
   assert.ok(src.includes('needs Cozier'), 'and says why fishing will not happen');
   const fn = src.slice(src.indexOf('function render()'), src.indexOf('/* ------------------------------------------------------------ layout'));
-  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| castNote \|\| banner/, 'the focus notice outranks the log-offline banner');
+  assert.match(fn, /seatNote \|\| focusModeNote \|\| focusNote \|\| playerNote \|\| blindNote \|\| castNote \|\| pauseNote \|\| banner/, 'the focus notice outranks the blind notice and the log-offline banner');
   assert.ok(fn.includes("'banner focus'"), 'it gets its own colour, not the amber seat warning');
   assert.ok(fn.includes("host.dataset.focus = '1'"), 'the state is observable from outside the shadow root');
   assert.match(src, /\.banner\.focus\{/, 'the focus style exists');
@@ -490,4 +490,45 @@ test('a stop says what stopped it, and the hidden threshold is configurable', ()
   assert.match(src, /field: 'hiddenStopMs'/, 'the stepper writes the reducer field');
   assert.ok(src.includes('chainToggle: chainToggle'), 'the chain toggle is wired');
   assert.ok(src.includes('Auto-start next run'), 'and labelled');
+});
+
+test('fast first press is opt-in, states its trade-off, and reaches the live core', () => {
+  // This is a speed/accuracy trade, not a free upgrade. It has to stay off by default, carry a
+  // visible warning, survive a reload, and apply both to a live run and to the next start.
+  assert.match(src, /prefs\.fastFirstPress = !!p\.fastFirstPress/, 'the pref is read');
+  assert.match(src, /fastFirstPress: !!fastPref/, 'the pref is saved');
+  assert.ok(src.includes('Fast first press'), 'the control is named');
+  assert.ok(src.includes('Faster first taps on narrow/fast dials'), 'the speed claim is explicit');
+  assert.ok(src.includes('harder fish can be missed'), 'the miss trade-off is explicit');
+  assert.match(src, /fastnote\{/, 'the warning has its own styling');
+  assert.ok(src.includes('fastToggle: fastToggle'), 'the toggle is registered for render');
+  assert.match(src, /fastToggle\.addEventListener\('click', function \(\) \{ setFastFirstPress\(!fastPref\); \}\)/);
+  assert.match(src, /tune\(\{ fastFirstPress: fastPref \}\)/, 'a live run is re-tuned immediately');
+  assert.match(src, /fastFirstPress: !!\(window\.__panel && window\.__panel\.fastFirstPress\)/,
+    'the next start carries the setting');
+  assert.ok(src.includes('window.__panel.setFastFirstPress = setFastFirstPress'), 'the setting is testable');
+  assert.match(src, /fastPref = !!prefs\.fastFirstPress/, 'mount adopts the stored setting');
+});
+
+test('the panel says why and when a run paused', () => {
+  // The phase chip said "paused" and nothing else; the reason and the clock time lived only in
+  // __panel.state, which is what this note removes.
+  const block = src.slice(src.indexOf('var PAUSE_WHY'), src.indexOf('function render()'));
+  assert.ok(block.includes('function pauseNoteFor('), 'a dedicated pause note exists before render');
+  const sandbox = {};
+  vm.runInNewContext(block + '\nthis.pauseNoteFor = pauseNoteFor;', sandbox);
+  const T = 1_800_000_000_000;
+  const held = sandbox.pauseNoteFor({ phase: 'paused', pauseReason: 'user', pausedAt: T - 5 * 3600_000 }, T);
+  assert.match(held, /^paused /, 'it opens with the paused state');
+  assert.match(held, /5h ago/, 'it says how long ago the pause happened');
+  assert.match(held, /you paused it/, 'it says why, in plain words');
+  assert.match(held, /press Resume/, 'and what to do about it');
+  const quiet = sandbox.pauseNoteFor({ phase: 'paused', pauseReason: 'no-catch', pausedAt: T - 60_000, retryAt: T + 30_000 }, T);
+  assert.match(quiet, /nothing bit for 10 minutes/, 'a guard pause is named, not left as "paused"');
+  assert.match(quiet, /retrying /, 'an automatic retry is shown with its time');
+  assert.ok(!quiet.includes('press Resume'), 'the automatic case does not ask for a click');
+  assert.equal(sandbox.pauseNoteFor({ phase: 'running', pauseReason: null }, T), '', 'nothing is said while running');
+  assert.equal(sandbox.pauseNoteFor({ phase: 'paused', pauseReason: null }, T), '', 'a pause with no reason says nothing');
+  assert.ok(src.includes('|| pauseNote || banner'), 'the note reaches the banner chain');
+  assert.ok(src.includes("host.dataset.pauseReason = state.pauseReason"), 'the reason is observable outside the closed root');
 });

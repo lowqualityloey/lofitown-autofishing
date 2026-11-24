@@ -31,7 +31,7 @@ const path = require('path');
 
 const PORT = Number(process.env.FISHSERVE_PORT) || 8731;
 const CATCH_HEAD = ['time', 'species', 'rarity', 'quality', 'weight', 'value'];
-const SESSION_HEAD = ['time', 'started_at', 'minutes', 'catches', 'reason', 'profile'];
+const SESSION_HEAD = ['time', 'started_at', 'minutes', 'catches', 'reason', 'profile', 'note'];
 // The game page and this server's own install page are the only origins that need to talk to it.
 // A wildcard let any page the user visited read the history, append CSV rows, or write PNGs - and
 // CORS alone never stopped a write, so a foreign Origin is rejected outright on POST.
@@ -84,20 +84,32 @@ const cell = (v) => {
 const sessionToken = (v, fallback, max) =>
   String(v == null ? '' : v).trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, max) || fallback;
 
+/**
+ * A note is diagnostic text for a row that needs more than its reason (the crash-loop stop carries
+ * the guard counters). It must stay on one line and out of the CSV grammar: commas, quotes and
+ * control characters are dropped, so the overnight report can keep splitting rows on commas.
+ */
+const sessionNote = (v) => String(v == null ? '' : v)
+  .replace(/[\r\n\t]/g, ' ')
+  .replace(/[^A-Za-z0-9 _.:=\/-]/g, '')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .slice(0, 200);
+
 const ensure = (file, head) => {
   if (!fs.existsSync(file)) fs.writeFileSync(file, head.join(',') + '\n');
 };
 
 /**
- * sessions.csv used to have five columns and another build's file may already be on disk. The
- * profile column is appended to the header, never backfilled into rows: a row without it is the
- * default profile, so the history keeps the values the old build wrote and only the header line
- * changes, once, at startup.
+ * sessions.csv used to have five columns, then six; another build's file may already be on disk.
+ * Columns are appended to the header, never backfilled into rows: a row without profile is the
+ * default profile, and a row without note is simply silent, so the history keeps the values the
+ * old build wrote and only the header line changes, once, at startup.
  */
 const ensureSessionHead = (file) => {
   ensure(file, SESSION_HEAD);
   const rows = readRows(file);
-  if (rows.length && !splitRow(rows[0].replace(/\r$/, '')).includes('profile')) {
+  if (rows.length && !splitRow(rows[0].replace(/\r$/, '')).includes('note')) {
     rows[0] = SESSION_HEAD.join(',');
     fs.writeFileSync(file, rows.join('\n') + '\n');
   }
@@ -217,9 +229,10 @@ function createServer() {
           if (!Number.isFinite(Number(rec.minutes))) throw new Error('minutes must be a number');
           const profile = sessionToken(rec.profile, 'default', 24);
           const reason = sessionToken(rec.reason, 'user', 32);
-          const row = [new Date().toISOString(), rec.started_at || '', Number(rec.minutes), Number(rec.catches) || 0, reason, profile];
+          const note = sessionNote(rec.note);
+          const row = [new Date().toISOString(), rec.started_at || '', Number(rec.minutes), Number(rec.catches) || 0, reason, profile, note];
           fs.appendFileSync(SESSIONS(), row.map(cell).join(',') + '\n');
-          console.log(['session', profile, row[4], row[2] + ' min', row[3] + ' catches'].join('  '));
+          console.log(['session', profile, row[4], row[2] + ' min', row[3] + ' catches'].join('  ') + (note ? '  ' + note : ''));
           json(res, 200, { ok: true });
         } catch (e) {
           json(res, 400, { ok: false, e: String((e && e.message) || e) });
@@ -285,7 +298,7 @@ function createServer() {
         .filter((r) => localDay(r[1] || r[0]) === day && (r[5] || 'default') === profile)
         .map((r) => ({
           time: r[0], started_at: r[1], minutes: Number(r[2]) || 0, catches: Number(r[3]) || 0,
-          reason: r[4], profile: r[5] || 'default',
+          reason: r[4], profile: r[5] || 'default', note: r[6] || '',
         }));
       json(res, 200, { day, profile, rows, minutes: rows.reduce((a, r) => a + r.minutes, 0) });
       return;

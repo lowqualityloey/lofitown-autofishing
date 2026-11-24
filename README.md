@@ -6,7 +6,7 @@ A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no buil
 
 ## Status
 
-**Actively maintained.** Current release **3.9.56** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.56)) · **full test suite passing** on 2026-11-24 · [MIT](LICENSE)
+**Actively maintained.** Current release **3.9.62** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.62)) · **full test suite passing** on 2026-11-24 · [MIT](LICENSE)
 
 Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://www.tampermonkey.net/), the game open, and a character you can seat.
 
@@ -14,7 +14,7 @@ Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://w
 
 - **One file, no server to fish.** The userscript contains the bot, panel, session clock, ledger and settings. `fishserve` is optional and only adds overnight capture.
 - **It installs from a fixed, public URL.** The recommended userscript install needs no build step, no bookmarklet and no GitHub account; Tampermonkey checks the release URL and keeps your settings.
-- **It pauses instead of pretending.** A hidden tab or a standing character pauses the session; after the hidden-tab limit (2 minutes by default) the session ends. The diagnostics panel reports what the bot can see.
+- **It pauses instead of pretending.** A hidden tab or a standing character pauses the session; after the hidden-tab limit (2 minutes by default) the session ends. The banner names the reason and the next step, and after three minutes with no prompt or dial on a visible page it says to reload the game tab and sit by the water. The diagnostics panel reports what the bot can see.
 - **The evidence stays local.** Catch history, profiles and daily time budgets live in your browser. The optional server receives snapshots, not gameplay control.
 
 The obvious alternatives are doing the loop manually or using another lofi.town automation bot. AutoFish is for a desktop browser you can leave visible: it adds a panel and local ledger, keeps the bot in one userscript, and needs no server or build step. Use manual fishing or another tool if you need mobile or headless operation, cannot leave the window uncovered, or do not want to take the automation risk.
@@ -36,11 +36,11 @@ The obvious alternatives are doing the loop manually or using another lofi.town 
 4. Click a chair, bench or stool at the water's edge and wait for the game's own **CAST!** prompt. The bot cannot seat you.
 5. Press **Start** on the panel. The badge changes to **RUNNING** and `presses` starts climbing.
 
-There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.56`) or this browser-console command:
+There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.62`) or this browser-console command:
 
 ```js
 __fish.version
-// 3.9.56
+// 3.9.62
 ```
 
 ### Nothing happened?
@@ -52,16 +52,21 @@ __fish.version
 | Footer: *clock paused - nothing to bite* | The character is standing. Sit down; the session resumes. |
 | Counters climb, no catches | Usually a missed reel prompt. Press Stop, sit again, then Start. |
 | Amber capture line | The optional fishserve stopped, crashed or moved. Fishing still works; restart it or click the line to enter the current origin. |
+| Banner: *paused 14:32 · the tab was hidden · bring the tab back* | The banner names why the run paused and the next step: you paused it, the tab was hidden, the character was standing, a focus session, no bite for 10 minutes, the cast never landed, a nearby player blocked the spot, a profile was open, or a fishing result never arrived. |
+| Banner: *detector blind for 3 min — reload the game tab, then sit on a chair by the water* | No CAST!/REEL! prompt or dial has been seen for three minutes on a visible page. Reload the game tab once, then sit by the water; the next prompt or dial clears the warning. |
+| Badge says RUNNING but the timer is not moving | The watchdog revives a stopped core on its own. If it keeps happening, reload the game tab. After three revives in ten minutes the run stops instead of looping, and the session row records the guard diagnostics. |
 
 ## What is AutoFish?
 
 The bot reads the game's rendered frames to find the **CAST!** and **REEL!** prompts, then presses the spinning reel dial at the moment the wedge crosses the pin. It uses a predicted crossing, re-arms after a proven new triangle, and falls back to a full-surface search if its remembered dial is wrong. Detection runs inside a wrapper around the renderer, because the prompts are painted into the game's canvas.
 
-The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, session time, catches, presses and today's cap. **Session & guards** holds the session length, cooldown, daily cap, clock window, profile, CSV upload and optional overnight capture. **Diagnostics** shows fps, frame times and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
+The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, session time, catches, presses and today's cap. **Session & guards** holds the session length, cooldown, daily cap, clock window, profile, CSV upload and optional overnight capture.
+
+**Fast first press (opt-in).** By default the first press on a dial narrower than 60° or spinning at 300°/s or faster waits for a stable spin fit. Turn on **Fast first press** in **Session & guards** to tap the first pass anyway. It removes the visible first-turn delay, but skips the stability check and makes misses on high-tier fish more likely; it is off by default. **Diagnostics** shows fps, frame times and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
 
 ![The AutoFish panel](docs/images/panel.jpg)
 
-The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.56. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
+The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.62. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
 
 ## Limits and requirements
 
