@@ -21,10 +21,10 @@ test('the README does not quote a test count that can drift', () => {
   assert.equal(m, null, 'quote the suite, not a number: ' + (m && m[0]));
 });
 
-test('every doc in specs, reviews and tasks is listed in docs/README.md', () => {
+test('every doc in specs, reviews, tasks and releases is listed in docs/README.md', () => {
   const index = read('docs/README.md');
   const missing = [];
-  for (const dir of ['specs', 'reviews', 'tasks']) {
+  for (const dir of ['specs', 'reviews', 'tasks', 'releases']) {
     for (const f of fs.readdirSync(path.join(ROOT, 'docs', dir))) {
       if (f.endsWith('.md') && !index.includes(dir + '/' + f)) missing.push(dir + '/' + f);
     }
@@ -45,4 +45,11 @@ test('the version package.json ships is the version the current-state docs claim
   const status = read('AUTOFISH.md').match(/^Status: \*\*WORKING \(([0-9.]+)\)/m);
   assert.ok(status, 'AUTOFISH.md must keep a Status line with a version');
   assert.equal(status[1], pkg.version, 'AUTOFISH.md status version');
+});
+
+test('the shipped version has release notes listed in docs/README.md', () => {
+  const pkg = JSON.parse(read('package.json'));
+  const note = 'docs/releases/' + pkg.version + '.md';
+  assert.ok(fs.existsSync(path.join(ROOT, note)), 'add ' + note);
+  assert.ok(read('docs/README.md').includes('releases/' + pkg.version + '.md'), 'index ' + note);
 });

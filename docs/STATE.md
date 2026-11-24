@@ -1,7 +1,7 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.63 (guard/blind export; 3.9.62 tagged v3.9.62 and published via PR #32); in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.63 (guard/blind export; tagged v3.9.63 and published 2026-11-24); in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
@@ -51,10 +51,10 @@
   loss-decision change. The source release and public mirror are published with the 370,861-byte
   asset at sha256 `64e20a3bfb12ead5c128f5bc7f2c05b069f4832c7f26c2731bf6f2261f1e15b2`; both match
   and `node scripts/release.js --check` passes. The 20% held cap remains the interim gate. **3.9.53** is tagged `v3.9.53` and published: it breaks the seat-hold deadlock with a parsed-catch clear, a 60 s keybind probe and the auto-retry seat grace; source release and public mirror carry the 372,510-byte build (sha256 `e0a76aa9962b`), notes at `docs/releases/3.9.53.md`. It supersedes the 3.9.52 telemetry sample, which is closed and must not be resumed. **3.9.55** is tagged `v3.9.55` and published: it splits a session at local midnight so only the post-midnight share spends the new day's cap; source release and public mirror carry the 376,149-byte build (sha256 `5544671ed0c0`), notes at `docs/releases/3.9.55.md`. **3.9.56** is tagged `v3.9.56` (commit `b40bcbd`) and published: source release and public mirror carry the 376,535-byte build (sha256 `26a4ba93d1bc`), notes at `docs/releases/3.9.56.md`; `release.js --check` is green, including the anonymous latest URL. The release branch was fast-forwarded into `main` at `967e646`; the installed Tampermonkey copy updated through the public latest URL to 3.9.56 and posted catch rows at `00:04:47Z` and `00:04:56Z`; tag `v3.9.56` remains on `b40bcbd`. **3.9.57** adds the opt-in **Fast first press** mode: the default first-press stable-fit hold is unchanged, while the setting taps the first pass on narrow/fast dials and warns that hard fish can be missed; the 2026-11-24 live A/B is in `AUTOFISH.md` (22 dials per arm, 6 held vs 0, small sample). **3.9.58** makes every pause explain itself with `paused HH:MM · <reason> · <next step>` and resets the no-catch clock on Resume. **3.9.59** adds the off-by-default `stallDialMs` verdict, which names a stuck narrow ring `stalled` instead of scoring it as a miss or a ghost; the replay and preferred 7900 ms cutoff are in `AUTOFISH.md`. **3.9.60** guards the 1 s tick, records failures and runs a 5 s watchdog that revives a core stopped while the panel still says RUNNING. **3.9.61** caps that recovery at three revives in ten minutes, then stops with `core-crash` and writes guard diagnostics to a new `sessions.csv` `note` column; older five- and six-column files upgrade in place. **3.9.62** measures detector silence and shows the three-minute reload-and-sit banner through cast-stall retries, with hidden/user/seat/focus pauses subtracted; `fd24e44` fixes hidden-return pause credit across watchdog restarts and throttled tabs. Tag `v3.9.62` is on `1dd27e6` and the release is published (2026-11-24): source release, public mirror and anonymous `releases/latest` all serve 404,691 bytes / sha256 `33cc2ff410f0…`; `release.js --check` green. PR #32 reconciles this branch with main (including PR #31's result-missing fix) and keeps the tag on `1dd27e6`.
-- **Current Working Branch**: `main` — PR #32 merges the behavior-review branch (3.9.57-3.9.62 through `d4d8640`) and reconciles it with PR #29, PR #30 and PR #31; 3.9.56 and 3.9.62 are tagged and published, while 3.9.57-3.9.61 remain untagged. The branch carries the seat-warning,
+- **Current Working Branch**: `docs/3.9.63-release` — docs-only branch from `main` at `024aa3e`; PR #36 merged the README 3.9.63 update; 3.9.62 and 3.9.63 are tagged and published, while 3.9.57-3.9.61 remain folded into v3.9.62. The branch carries the seat-warning,
   capture-address, focus-takeover, result-missing and core-recovery fixes plus the rebuilt dist. The Orca workspace
   `lowqualityloey/fishing-pole-lofitown` links to the main checkout's PromptKit 2.5.0 courier install;
-  tags through v3.9.62 remain. `run.sh` and `docs/releases/3.9.51.md` carry only mode-only diffs and
+  tags through v3.9.63 remain. `run.sh` and `docs/releases/3.9.51.md` carry only mode-only diffs and
   stay out of every commit.
 - **Last Updated**: 2026-11-25
 - **Engine Version**: v2.5.0 @ unknown
@@ -124,7 +124,7 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
 - **Active RFC / Spec**: none new; `docs/specs/2026-11-18-overnight-capture.md` remains the last approved feature spec
 - **Active Task Spec**: none new; the overnight-capture record stays at `docs/tasks/TASK-2026-11-18-overnight-capture.md`
-- **Key Source Files in Flight**: `README.md`, `docs/releases/3.9.62.md`, `docs/STATE.md`, `session.js`, `panel.js`, `tests/blind.test.js`, `tests/zombie.test.js`, `tests/result-missing.test.js`, and `dist/autofish.user.js`; live evidence is in `AUTOFISH.md` and `docs/STATE.md`. 3.9.62 is tagged and published; PR #32 merges it into main; `release.js --check` is green; the queued field work follows.
+- **Key Source Files in Flight**: `README.md`, `docs/releases/3.9.63.md`, `docs/README.md`, `tests/docs.test.js`, `docs/STATE.md`, `session.js`, `panel.js`, `tests/blind.test.js`, `tests/zombie.test.js`, `tests/result-missing.test.js`, and `dist/autofish.user.js`; live evidence is in `AUTOFISH.md` and `docs/STATE.md`. 3.9.63 is tagged and published; PR #36 merged the README update; `release.js --check` is green; the queued field validation follows.
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
   - Build: `node build-userscript.js`; a test fails when the committed `dist/` is stale
@@ -331,12 +331,19 @@ Staging area for rules observed during sessions but not yet approved as invarian
    directive, `PROMPTKIT.md` is populated, and `node --test` passes 369/369. The three docs/test
    commits and the 2.4.0 stamp are on `origin/main` with this checkpoint.
 2. **Done - 3.9.62 is tagged, published and merging into main.** Tag `v3.9.62` is on `1dd27e6`; source release, public mirror and anonymous `releases/latest` all serve 404,691 bytes / sha256 `33cc2ff410f0…`; notes at `docs/releases/3.9.62.md`; `node scripts/release.js --check` green. PR #32 reconciles the branch with main (including PR #31's result-missing fix) and keeps the tag on `1dd27e6`; 3.9.56 remains tagged, published and merged at `967e646`.
-3. **Field-run 3.9.56 across local midnight.** The midnight split is unit-tested but has not been
+3. **Done - 3.9.63 is tagged and published.** Tag `v3.9.63` is on `c639a7f`; source release, public
+   mirror and anonymous `releases/latest` all serve 406,879 bytes / sha256 `02904b8c7112…`; notes at
+   `docs/releases/3.9.63.md`; `node scripts/release.js --check` green. PR #36 merged the README update.
+4. **Field-run 3.9.63 across an overnight capture.** The guard/blind export and report are
+   unit-tested, but the 2026-11-24 snapshots predate 3.9.63; verify `## Guard and blind` and
+   `## Session notes` on a fresh night, then use them to investigate the 34-minute gap and the 01:20
+   `core-crash`.
+5. **Field-run 3.9.56 across local midnight.** The midnight split is unit-tested but has not been
    exercised by a live overnight session; verify that only the post-midnight share spends the new
    day's cap.
-4. **Measure the Zen frame budget.** Every timing figure since 3.8.2 is Chromium; a Gecko readback is
+6. **Measure the Zen frame budget.** Every timing figure since 3.8.2 is Chromium; a Gecko readback is
    not a Chromium one. Use `__fish.perf()` before changing any scan throttle.
-5. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat
+7. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat
    bubbles) at window sizes nobody has tested yet.
 
 ---
@@ -421,6 +428,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-24 | lead (Freebuff session) | Pre-release docs for 3.9.57-3.9.62 | Bumped README to 3.9.62 and documented the pause and blind banners, added the combined release notes at `docs/releases/3.9.62.md`, and refreshed the tracker for the pending tag. 3.9.57's Fast first press A/B and 3.9.62's hidden-tab check are live-verified; 3.9.58-3.9.61 are unit-tested only. `node --test` 420/420; dist 404,691 bytes / sha256 `33cc2ff410f0b9c44ce29a8d691e695036fb829f0f25aacc52fe30fc443820f9`; the docs commit carries the `HeyLoey-Milestone:` trailer. | `README.md`; `docs/releases/3.9.62.md`; `docs/STATE.md` |
 | 2026-11-24 | lead (Freebuff session) | 3.9.62 tagged and published | Created lightweight tag `v3.9.62` on `1dd27e6` and pushed the branch and tag. Published the source release with `dist/autofish.user.js` (404,691 bytes / sha256 `33cc2ff410f0b9c44ce29a8d691e695036fb829f0f25aacc52fe30fc443820f9`), then ran `node scripts/release.js`; source release, public mirror and anonymous `releases/latest` all serve the same bytes, and `--check` is green. | `docs/releases/3.9.62.md`; `docs/STATE.md` |
 | 2026-11-24 | lead (Freebuff session) | 3.9.62 branch reconciled with main (PR #32) | Merged `origin/main` into the release branch, resolved the `docs/STATE.md` overlap by keeping the 3.9.56 main-merge and PR #29/#31 records alongside the 3.9.57-3.9.62 release record, and opened PR #32. Tag `v3.9.62` remains on `1dd27e6`; CI runs on the merge commit. | `docs/STATE.md` |
+| 2026-11-25 | lead (Freebuff session) | 3.9.63 release record and docs guard | Added `docs/releases/3.9.63.md` for the guard/blind export and report diagnostics, indexed all release notes in `docs/README.md`, refreshed this tracker, and added a docs test that requires the shipped version's release note to exist and be listed. Tag `v3.9.63` is on `c639a7f`; source, mirror and anonymous latest match 406,879 bytes / sha256 `02904b8c7112…`; `node --test` 428/428; `node scripts/release.js --check` green. PR #36 merged the README update; mode-only diffs stayed out. | `docs/releases/3.9.63.md`; `docs/README.md`; `tests/docs.test.js`; `docs/STATE.md` |
 | 2026-11-25 | lead (Freebuff session) | PromptKit OS 2.5.0 upgrade | Replaced the main checkout's 2.4.0 courier kit with the 2.5.0 release tarball (courier verified the published pin), keeping the balanced profile, local + GitHub tracking projection and the cline host. Refreshed `AGENTS.md` and `.clinerules/promptkit.md`; `PROMPTKIT.md` kept its profile, size and intake fields; `Engine Version` stamped `v2.5.0 @ unknown`. 2.5.0 adds the host-conformance capture harness and renderer scripts and writes only `AGENTS.md` for the gemini host; no migration. `node --test` 427/427. `.promptkit/`, `AGENTS.md` and `PROMPTKIT.md` stay gitignored; main's tracked tree was left untouched because its existing diff is line-ending-only. | `docs/STATE.md`; `AGENTS.md`; `PROMPTKIT.md` |
 
 ---
