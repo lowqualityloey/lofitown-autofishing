@@ -123,6 +123,11 @@ node build-userscript.js      # writes dist/autofish.user.js (committed; rerun a
 npm run build:userscript      # same thing
 ```
 
+**Import from file is the reliable local install path.** Pointing Tampermonkey at a local URL
+(`http://127.0.0.1:8731/autofish.user.js`) opens its intermediate `script_installation.php` page with
+no install control, so `Dashboard -> Utilities -> Import from file` (or Import from URL inside that
+dialog) is what actually works for a build served by `fishserve`.
+
 Why the first load is OFF on purpose: an install must never start pressing keys in a tab you just
 opened. The remembered choice lives in `localStorage` (`autofish:on`, `autofish.prefs`,
 `autofish.live`), so a reload restores what you left.
