@@ -1,7 +1,7 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.56 tagged v3.9.56 and published; in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.56 tagged v3.9.56 and published; main merged at 967e646; in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed
@@ -50,14 +50,15 @@
   (`firstPressHeldForced`) and cast-prompt loss diagnostics, with no fishing behavior or
   loss-decision change. The source release and public mirror are published with the 370,861-byte
   asset at sha256 `64e20a3bfb12ead5c128f5bc7f2c05b069f4832c7f26c2731bf6f2261f1e15b2`; both match
-  and `node scripts/release.js --check` passes. The 20% held cap remains the interim gate. **3.9.53** is tagged `v3.9.53` and published: it breaks the seat-hold deadlock with a parsed-catch clear, a 60 s keybind probe and the auto-retry seat grace; source release and public mirror carry the 372,510-byte build (sha256 `e0a76aa9962b`), notes at `docs/releases/3.9.53.md`. It supersedes the 3.9.52 telemetry sample, which is closed and must not be resumed. **3.9.55** is tagged `v3.9.55` and published: it splits a session at local midnight so only the post-midnight share spends the new day's cap; source release and public mirror carry the 376,149-byte build (sha256 `5544671ed0c0`), notes at `docs/releases/3.9.55.md`. **3.9.56** is tagged `v3.9.56` (commit `b40bcbd`) and published: source release and public mirror carry the 376,535-byte build (sha256 `26a4ba93d1bc`), notes at `docs/releases/3.9.56.md`; `release.js --check` is green, including the anonymous latest URL.
-- **Current Working Branch**: `freebuff/lofitown-autofish-behavior-review` — four behavior commits through `466b163` plus the verification docs and the tagged, published 3.9.56 release; ahead of
-  `main` (`2640df0`); live-verified, with tag `v3.9.56` pushed; the branch remains unmerged. The branch carries the seat-warning,
-  capture-address and focus-takeover fixes plus the rebuilt dist. The Orca workspace
+  and `node scripts/release.js --check` passes. The 20% held cap remains the interim gate. **3.9.53** is tagged `v3.9.53` and published: it breaks the seat-hold deadlock with a parsed-catch clear, a 60 s keybind probe and the auto-retry seat grace; source release and public mirror carry the 372,510-byte build (sha256 `e0a76aa9962b`), notes at `docs/releases/3.9.53.md`. It supersedes the 3.9.52 telemetry sample, which is closed and must not be resumed. **3.9.55** is tagged `v3.9.55` and published: it splits a session at local midnight so only the post-midnight share spends the new day's cap; source release and public mirror carry the 376,149-byte build (sha256 `5544671ed0c0`), notes at `docs/releases/3.9.55.md`. **3.9.56** is tagged `v3.9.56` (commit `b40bcbd`) and published: source release and public mirror carry the 376,535-byte build (sha256 `26a4ba93d1bc`), notes at `docs/releases/3.9.56.md`; `release.js --check` is green, including the anonymous latest URL. The release branch was fast-forwarded into `main` at `967e646`; the installed Tampermonkey copy updated through the public latest URL to 3.9.56 and posted catch rows at `00:04:47Z` and `00:04:56Z`; tag `v3.9.56` remains on `b40bcbd`.
+- **Current Working Branch**: `main` — the release branch was fast-forwarded into it at `967e646`
+  (from `2640df0`); this docs record is the follow-up commit. The merged branch carries the seat-warning,
+  capture-address and focus-takeover fixes plus the rebuilt dist. The installed Tampermonkey copy
+  updated from the public latest URL to 3.9.56 and posted a panel-started catch. The Orca workspace
   `lowqualityloey/fishing-pole-lofitown` links to the main checkout's PromptKit 2.4.0 courier install;
-  tags through v3.9.55 remain. `run.sh` and `docs/releases/3.9.51.md` carry only mode-only diffs and
+  tags through v3.9.56 remain. `run.sh` and `docs/releases/3.9.51.md` carry only mode-only diffs and
   stay out of every commit.
-- **Last Updated**: 2026-11-23
+- **Last Updated**: 2026-11-24
 - **Engine Version**: v2.4.0 @ unknown
 - **Runtime**: Node v26.13.1 in the current WSL workspace (earlier notes said v24.22.1), no
   dependencies, no bundler
@@ -125,7 +126,7 @@ Track tasks using atomic checklists (`[x]` Done, `[/]` In Progress, `[ ]` Queued
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
 - **Active RFC / Spec**: none new; `docs/specs/2026-11-18-overnight-capture.md` remains the last approved feature spec
 - **Active Task Spec**: none new; the overnight-capture record stays at `docs/tasks/TASK-2026-11-18-overnight-capture.md`
-- **Key Source Files in Flight**: `panel.js`, `session.js`, `tests/panel.test.js`, `tests/session.test.js`, `dist/autofish.user.js`, `package.json`, and `docs/releases/3.9.56.md`; live evidence is in `docs/reviews/2026-11-23-catch-and-focus-live.md`. 3.9.56 is tagged and published; `release.js --check` is green; the queued field work follows.
+- **Key Source Files in Flight**: `panel.js`, `session.js`, `tests/panel.test.js`, `tests/session.test.js`, `dist/autofish.user.js`, `package.json`, and `docs/releases/3.9.56.md`; live evidence is in `docs/reviews/2026-11-23-catch-and-focus-live.md`. 3.9.56 is tagged and published, the installed copy updated through public latest and posted a panel-started catch, and the release branch is merged at main `967e646`; `release.js --check` is green; the queued field work follows.
 - **Verification Commands (Scoped)**:
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
   - Build: `node build-userscript.js`; a test fails when the committed `dist/` is stale
@@ -331,7 +332,7 @@ Staging area for rules observed during sessions but not yet approved as invarian
    `71b07ef`; the workspace links to the main checkout's courier install, `AGENTS.md` carries the
    directive, `PROMPTKIT.md` is populated, and `node --test` passes 369/369. The three docs/test
    commits and the 2.4.0 stamp are on `origin/main` with this checkpoint.
-2. **3.9.56 is tagged and published.** The four commits (`78c106f`, `5a3dd76`, `c3db0bb`, `466b163`) are live-verified; tag `v3.9.56` is on `b40bcbd`; source release and public mirror carry 376,535 bytes / sha256 `26a4ba93d1bc`; notes at `docs/releases/3.9.56.md`; `node scripts/release.js --check` green.
+2. **3.9.56 is tagged, published and merged into main.** The four commits (`78c106f`, `5a3dd76`, `c3db0bb`, `466b163`) are live-verified; tag `v3.9.56` is on `b40bcbd`; source release and public mirror carry 376,535 bytes / sha256 `26a4ba93d1bc`; notes at `docs/releases/3.9.56.md`; `node scripts/release.js --check` green. The installed Tampermonkey copy updated from public latest (3.9.55 -> 3.9.56) and a panel-started run posted catches at `00:04:47.733Z` (Softshell Turtle) and `00:04:56.857Z` (Alligator Gar). Local `main` was fast-forwarded to `967e646`; the tag was not moved.
 3. **Field-run 3.9.56 across local midnight.** The midnight split is unit-tested but has not been
    exercised by a live overnight session; verify that only the post-midnight share spends the new
    day's cap.
@@ -416,6 +417,7 @@ Compact record of pairing sessions to enable instant chat resumption:
 | 2026-11-23 | lead (Freebuff session) | Catch and focus live verification (behavior-review branch) | Commits `78c106f`, `5a3dd76`, `c3db0bb`, `466b163`. Reinstalled the rebuilt 3.9.55 from `127.0.0.1:8731`; `/recent` gained rows at `23:07:27Z` (Asian Swamp Eel) and `23:07:43Z` (Nurse Shark) after Start. A trusted movement hold produced a real `needsSeat: true` seat pause; focus on changed `pauseReason` to `focus` and released the cast hold, focus off restored `pauseReason: seat`, the cast hold, and the seat warning. The next catch after Resume was an Axolotl at `23:21:44.679Z`, and the panel count advanced 3 -> 4. `node --test` 372/372; build clean; `git diff --check main...HEAD` clean; dist 376,535 bytes / sha256 `d76f94acd67a`. No version bump, tag or push; mode-only diffs untouched. | `docs/reviews/2026-11-23-catch-and-focus-live.md`; `panel.js`; `session.js`; `dist/autofish.user.js` |
 | 2026-11-23 | lead (Freebuff session) | 3.9.56 patch release prepared | Bumped `package.json` to 3.9.56 and rebuilt `dist/autofish.user.js` with `node build-userscript.js`: 376,535 bytes / sha256 `26a4ba93d1bc`; added `docs/releases/3.9.56.md` and the review index entry. `node --test` 372/372; release notes cover the capture-address catch POST, focus takeover, focus-owned seat warning and rebuilt dist. No tag or push; release-mirror check is deferred until the tag exists. | `package.json`; `dist/autofish.user.js`; `docs/releases/3.9.56.md`; `docs/README.md`; `docs/STATE.md` |
 | 2026-11-23 | lead (Freebuff session) | 3.9.56 tagged and published | Created and pushed lightweight tag `v3.9.56` on `b40bcbd`; created the source release and ran the publish path. Source release, public mirror release and anonymous `releases/latest` all serve 376,535 bytes / sha256 `26a4ba93d1bc`; `node scripts/release.js --check` green. Release notes and tracker now record the publication. Branch remains unmerged into `main`; mode-only diffs untouched. | `docs/releases/3.9.56.md`; `docs/STATE.md`; `package.json`; `dist/autofish.user.js` |
+| 2026-11-24 | lead (Freebuff session) | 3.9.56 installed-copy verification and main merge | Updated the installed Tampermonkey copy from 3.9.55 to 3.9.56 through Utilities -> Import from URL using the public `https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js`; after reload `__fish.version` read 3.9.56. A panel-started run with catch upload enabled reported `catchCount: 1`; `/recent` gained rows at `2026-11-24T00:04:47.733Z` (Softshell Turtle) and `2026-11-24T00:04:56.857Z` (Alligator Gar). Fast-forwarded local `main` from `2640df0` to `967e646`; tag `v3.9.56` remains on `b40bcbd`. Resolved the pre-merge autostash `b01c7f8`: its dist was the stale 3.9.55 build (`d76f94…`), superseded by the tagged 3.9.56 build (`26a4ba…`); dropped the stash after confirming its mode-only entries matched the worktree. Mode-only diffs untouched. | `docs/STATE.md`; `dist/autofish.user.js`; `docs/releases/3.9.56.md` |
 
 ---
 
