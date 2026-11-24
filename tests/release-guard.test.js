@@ -65,6 +65,7 @@ test('a tag with no vault trailer is refused, so a release cannot publish unreco
   assert.equal(merged.exempt, true, 'the published 3.9.63 tag stays verifiable');
   assert.match(merged.reason, /c639a7f/, 'the exemption names the tagged commit');
   assert.match(merged.reason, /2026-11-24/, 'the exemption is dated');
+  assert.match(merged.reason, /vault note logged 2026-11-25/, 'the exemption records when the vault note was logged');
 
   // The gate reads the source release first only to know which repair is safe, so the invariant is
   // that it stands before the publish path - a refused release must never reach the mirror.
