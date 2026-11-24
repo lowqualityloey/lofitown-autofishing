@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.59) - An opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
+Status: **WORKING (3.9.60) - A watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
 against the new day's cap: the reducer carries the pre-midnight minutes, the panel stores and shows
 the same share, and the session row still reports the whole run. The rest is 3.9.54's session-log
 fix: an interrupted row carries the catches it had and the start time the heartbeat recorded, so
@@ -82,6 +82,17 @@ maximum stayed at 0.264; its own held count was 0. Both arms had zero dial misse
 The fast arm caught 16/16 attempts versus 7/9 in the default arm, but the default arm includes the
 unseated pause and the samples are too small for an accuracy claim. This run verifies the opt-in
 path live; the default stable-fit hold remains the conservative choice.
+
+## 2026-11-24 Zombie core guard (3.9.60)
+
+Measured live: the panel read `phase: running` while `__fish.status().running` was false and the clock
+had stopped. The 1 s tick is the only keep-alive, and a throw before its dispatch was never recorded.
+3.9.60 guards `focusTick()` and `healCapture()` separately, records failures (`__panel.guard()` exposes
+`tickErrors` / `lastTickError`), and runs a 5 s watchdog on a timer of its own: a silent tick loop is
+re-entered, and if the phase is running while the core reports stopped, it restarts the core, counts
+`zombieRevives`, and says so in the banner. A stopped core also reports `stalled`, so that stretch is
+never credited as fishing time. The `coreGuard` predicate is pure and unit-tested in
+`tests/zombie.test.js`.
 
 ## 2026-11-24 Stall verdict replay (3.9.59)
 

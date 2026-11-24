@@ -79,7 +79,7 @@ test('the panel says stalled instead of running', () => {
 });
 
 test('a stalled tick does not charge the session clock', () => {
-  assert.match(PANEL, /stalled: !!\(status && status\.running && status\.stalled\)/, 'the tick fact must carry the stall');
+  assert.match(PANEL, /stalled: !!\(status && \(!status\.running \|\| status\.stalled\)\)/, 'the tick fact carries the stall - and a stopped core is no fishing time either');
   // the tick branch is the LAST credit (stopSession() credits once too, before it)
   const credit = SESSION.lastIndexOf('credit(s, s.lastTickAt, at);');
   const stall = SESSION.indexOf('if (fact.stalled === true) {');

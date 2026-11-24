@@ -583,5 +583,18 @@
     return { state: s, actions: [] };
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock };
+  /**
+   * The panel owns the phase; the core owns the frames. A tick loop that threw before its dispatch
+   * leaves the phase at `running` with a core that has stopped, and nothing used to revive it -
+   * measured live 2026-11-24: `phase: running`, `fishingMs` no longer moving, core `running: false`.
+   * This predicate is pure so the zombie case is testable without a page; panel.js asks it every
+   * 5 s from a timer that is separate from the tick loop.
+   */
+  function coreGuard(state, status) {
+    if (!state || state.phase !== 'running') return null;
+    if (!status || typeof status.running !== 'boolean') return null;
+    return status.running === false ? 'revive' : null;
+  }
+
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard };
 });

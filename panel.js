@@ -39,6 +39,12 @@
   var heartbeatAt = 0;
   var diagSent = false;       // one UI frame per session, when a run never sees a prompt
   var diagAt = 0;
+  var guardTimer = null;      // its own timer: a throw inside tick() must not also disable the check
+  var TICK_GUARD_MS = 5000;
+  var lastTickAt = 0;         // when tick() was last entered
+  var tickErrors = 0;
+  var lastTickError = '';
+  var zombieRevives = 0;
   var wakeSentinel = null;
   var dragged = null;         // {x, y} once the user moved the panel
   var dragging = null;
@@ -1985,11 +1991,56 @@
   /* -------------------------------------------------------------- loop ---- */
 
   function tick() {
+    lastTickAt = Date.now();
+    try { tickOnce(); } catch (e) { noteTickError('tick', e); }
+  }
+
+  /**
+   * A panel that stops ticking looks exactly like a healthy run with a frozen session clock: the
+   * phase stays `running` and nothing restarts the core. Measured live 2026-11-24: the core had
+   * stopped while the panel still read RUNNING. Neither the silent throw nor the zombie state was
+   * visible anywhere, so both are now recorded and the banner says so.
+   */
+  function noteTickError(where, e) {
+    tickErrors++;
+    lastTickError = where + ': ' + ((e && e.message) || e);
+    if (banner.indexOf('panel error') === -1) banner = 'panel error — ' + lastTickError;
+    try { render(); } catch (ignored) {}
+  }
+
+  /**
+   * Runs on a timer that is not the tick loop. Two facts are enough: the phase says running while
+   * the core reports stopped (revive it), or no tick has been entered for a full guard interval
+   * (record it). The predicate lives in session.js so the zombie case has a unit test.
+   */
+  function health() {
+    try {
+      if (!state) return;
+      // A hidden tab throttles intervals, so silence there is the browser, not a broken panel.
+      var silent = state.phase === 'running' && lastTickAt &&
+        Date.now() - lastTickAt > TICK_GUARD_MS &&
+        document.visibilityState === 'visible';
+      if (silent) {
+        noteTickError('watchdog', new Error('no tick for ' + (Date.now() - lastTickAt) + ' ms'));
+        tick();                       // re-enter it: reporting a dead loop is not enough
+      }
+      var status = null;
+      try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+      if (window.AutoFishSession.coreGuard(state, status) === 'revive') {
+        banner = 'the fishing core had stopped — restarted';
+        RUNNERS.startCore({ maxMinutes: Math.ceil(state.durationMs / 60000) + 2 });
+        zombieRevives++;
+        try { render(); } catch (e) {}
+      }
+    } catch (e) { /* a watchdog that can throw is not a watchdog */ }
+  }
+
+  function tickOnce() {
     // A focus session ending releases a hold it started; a manual toggle is never touched here.
-    focusTick();
+    try { focusTick(); } catch (e) { noteTickError('focus', e); }
     // Outside render(): a dead or failing overnight capture is retried from the heartbeat, so a
     // repaint (a toggle, a dispatch) can never start a sampler load or a POST of its own.
-    healCapture();
+    try { healCapture(); } catch (e) { noteTickError('capture', e); }
     // A run that crosses midnight starts the new day at zero, the same way a reload does.
     var dayNow = dayKey();
     if (budgetDay && dayNow !== budgetDay) {
@@ -2022,8 +2073,8 @@
       seat: !!(status && status.needsSeat),
       // the game can hold itself in waiting-for-result; the reducer owns this distinct pause
       resultMissing: !!(status && status.resultMissing),
-      // a stalled core must not be charged for time it never fished
-      stalled: !!(status && status.running && status.stalled),
+      // a stalled core - or one that has stopped altogether - is not fishing time
+      stalled: !!(status && (!status.running || status.stalled)),
       // cast-stall vs no-bite split + nearby-player guard: the reducer pauses with a named
       // reason instead of burning the session as a generic no-catch
       sinceBubbleMs: status && typeof status.sinceBubbleMs === 'number' ? status.sinceBubbleMs : null,
@@ -2125,6 +2176,7 @@
     banner = checkInterrupted() || banner;
 
     tickTimer = setInterval(tick, TICK_MS);
+    guardTimer = setInterval(health, TICK_GUARD_MS);
     placeTimer = setInterval(place, 250);
     window.addEventListener('resize', place);
     document.addEventListener('visibilitychange', onVisible);
@@ -2140,6 +2192,9 @@
     window.__panel.setFastFirstPress = setFastFirstPress;
     window.__panel.overnight = overnightPref;
     window.__panel.armOvernight = armOvernight;
+    window.__panel.guard = function () {
+      return { lastTickAt: lastTickAt, tickErrors: tickErrors, lastTickError: lastTickError, zombieRevives: zombieRevives };
+    };
     tick();
   }
 
@@ -2160,6 +2215,7 @@
   function unmount() {
     clearPromptMask();
     if (tickTimer) clearInterval(tickTimer);
+    if (guardTimer) clearInterval(guardTimer);
     if (placeTimer) clearInterval(placeTimer);
     if (mount.timer) clearInterval(mount.timer);
 
