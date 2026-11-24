@@ -1776,19 +1776,7 @@
     var blindMs = null;
     try {
       if (window.AutoFishSession && window.AutoFishSession.blindWarning) {
-        blindMs = window.AutoFishSession.blindWarning({
-          phase: phase,
-          pauseReason: state.pauseReason,
-          running: !!(status && status.running),
-          stalled: !!(status && status.stalled),
-          visible: document.visibilityState === 'visible',
-          sinceBubbleMs: status ? status.sinceBubbleMs : null,
-          sinceDialMs: status ? status.sinceDialMs : null,
-          startedAt: state.startedAt,
-          runAgeMs: status ? status.runAgeMs : null,
-          pauseMs: state.blindPauseMs || 0,
-          now: Date.now()
-        });
+        blindMs = window.AutoFishSession.blindWarning(blindFacts(status));
       }
     } catch (e) {}
     var blindNote = '';
@@ -2073,6 +2061,50 @@
     return bits.join(' ').slice(0, 200);
   }
 
+  /** The inputs the banner and the export share, so a new signal cannot reach only one of them. */
+  function blindFacts(status) {
+    return {
+      phase: state.phase,
+      pauseReason: state.pauseReason,
+      running: !!(status && status.running),
+      stalled: !!(status && status.stalled),
+      visible: document.visibilityState === 'visible',
+      sinceBubbleMs: status ? status.sinceBubbleMs : null,
+      sinceDialMs: status ? status.sinceDialMs : null,
+      startedAt: state.startedAt,
+      runAgeMs: status ? status.runAgeMs : null,
+      pauseMs: state.blindPauseMs || 0,
+      now: Date.now()
+    };
+  }
+
+  /**
+   * The guard/blind snapshot for __fish.exportRun(). The banner uses blindWarning(); the export
+   * also carries the raw silence below three minutes, because a five-minute sampler can otherwise
+   * miss a warning that rose and fell between posts.
+   */
+  function blindDiag() {
+    if (!state) return { phase: null, pauseReason: null, silenceMs: null, warning: false };
+    var status = null;
+    try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+    var facts = blindFacts(status);
+    var out = Object.assign({}, facts, { silenceMs: null, warning: false });
+    try {
+      if (window.AutoFishSession) {
+        if (window.AutoFishSession.blindSilence) out.silenceMs = window.AutoFishSession.blindSilence(facts);
+        if (window.AutoFishSession.blindWarning) out.warning = window.AutoFishSession.blindWarning(facts) != null;
+      }
+    } catch (e) {
+      out.error = String((e && e.message) || e);
+    }
+    return out;
+  }
+
+  /** What exportRun() adds when the panel is mounted; null fields when it is not. */
+  function exportDiag() {
+    return { guard: guardDiag(), blind: blindDiag() };
+  }
+
   /**
    * Runs on a timer that is not the tick loop. Two facts are enough: the phase says running while
    * the core reports stopped (revive it), or no tick has been entered for a full guard interval
@@ -2267,6 +2299,7 @@
     window.__panel.setFastFirstPress = setFastFirstPress;
     window.__panel.overnight = overnightPref;
     window.__panel.armOvernight = armOvernight;
+    if (fish()) fish().exportDiag = exportDiag;
     window.__panel.guard = function () {
       return { lastTickAt: lastTickAt, tickErrors: tickErrors, lastTickError: lastTickError, zombieRevives: zombieRevives };
     };

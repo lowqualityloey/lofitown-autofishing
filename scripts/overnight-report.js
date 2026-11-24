@@ -226,7 +226,7 @@ function readSessions(from, to, profiles) {
         time, started_at: r[1],
         // The row's own start; an old five-column row has no started_at, so use its duration.
         start: Number.isFinite(started) ? started : (Number.isFinite(time) ? time - minutes * 60000 : null),
-        minutes, catches: Number(r[3]) || 0, reason: r[4], profile: r[5] || 'default',
+        minutes, catches: Number(r[3]) || 0, reason: r[4], profile: r[5] || 'default', note: r[6] || '',
       };
     })
     .filter((r) => !want || want.has(r.profile))
@@ -402,6 +402,13 @@ function analyze(snapshots, opts) {
     lines.push('| ended | profile | minutes | catches | reason |');
     lines.push('| :--- | :--- | ---: | ---: | :--- |');
     for (const s of sessions) lines.push('| ' + dayClock(s.time) + ' | ' + s.profile + ' | ' + s.minutes + ' | ' + s.catches + ' | ' + s.reason + ' |');
+  }
+  const noted = sessions.filter((s) => s.note);
+  if (noted.length) {
+    lines.push('');
+    lines.push('## Session notes');
+    lines.push('');
+    for (const s of noted) lines.push('- ' + dayClock(s.time) + ' · ' + s.profile + ' · ' + s.reason + ' · ' + s.note);
   }
   lines.push('');
   return { text: lines.join('\n'), coverage: cov, snapshots: picked };

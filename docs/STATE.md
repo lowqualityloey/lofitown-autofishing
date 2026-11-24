@@ -1,7 +1,7 @@
 # Project State & Living Execution Tracker
 
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.62 (blind-game escalation) tagged v3.9.62 and published; main receives it via PR #32; in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.63 (guard/blind export; 3.9.62 tagged v3.9.62 and published via PR #32); in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions (fish-attempt
   oracle, catch ledger, frame budget, seat pauses); Milestone 1 (in-game panel) closed. Milestone 3
   (self-updating distribution) closed

@@ -347,3 +347,24 @@ test('the sessions fishserve logged are cross-checked against the night', () => 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a guard note in sessions.csv is read and printed', () => {
+  withSessions([
+    [new Date(at(5)).toISOString(), '', 60, 12, 'core-crash', 'nepchur',
+      'guard revives=3 windowRevives=3 tickErrors=0 doctor=idle tickAgoMs=7'].join(','),
+  ], () => {
+    const out = analyze([ONE_NIGHT], {});
+    assert.match(out.text, /\| nepchur \| 60 \| 12 \| core-crash \|/, 'the session row is still the table row');
+    assert.match(out.text, /## Session notes/);
+    assert.match(out.text, /core-crash · guard revives=3 windowRevives=3/);
+    assert.match(out.text, /doctor=idle tickAgoMs=7/);
+  }, 'time,started_at,minutes,catches,reason,profile,note');
+});
+
+test('the note column is optional for an older sessions.csv', () => {
+  withSessions([sessionLine(5, 60, 12, 'duration')], () => {
+    const out = analyze([ONE_NIGHT], {});
+    assert.match(out.text, /\| default \| 60 \| 12 \| duration \|/);
+    assert.doesNotMatch(out.text, /## Session notes/, 'a missing note is silence, not an empty section');
+  });
+});
