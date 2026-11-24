@@ -92,8 +92,8 @@ const TRAILER_EXEMPT = {
   // checkout. The exception is a record, not a silent skip - a new tag has to carry the trailer.
   'v3.9.43': 'logged by hand 2026-11-17 (commit 56afe89 was already tagged)',
   // The 3.9.63 tag was placed on the PR #33 merge commit after the source and mirror releases were
-  // published, so adding the trailer would have meant moving a published tag. The note is still owed.
-  'v3.9.63': 'tagged on merge commit c639a7f without the trailer; published 2026-11-24, so the tag cannot move; vault note still to log',
+  // published, so adding the trailer would have meant moving a published tag. Backfilled by hand.
+  'v3.9.63': 'tagged on merge commit c639a7f without the trailer; published 2026-11-24, so the tag cannot move; vault note logged 2026-11-25',
 };
 
 function milestoneText(body) {
