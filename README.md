@@ -1,198 +1,89 @@
 # lofi.town AutoFish
 
-A single-file userscript that plays the lofi.town fishing loop for you: it finds the **CAST!** prompt, reels when the game asks, and presses the spinning dial at the moment the wedge crosses the pin.
+A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no build step, and no console paste to install. Install it in Tampermonkey and press **Start**.
 
 ![AutoFish running in lofi.town](docs/images/in-game.jpg)
 
-No server is needed to fish, no build step, no account. One file in Tampermonkey and a **Start** button. An optional local fishserve adds overnight capture and the morning report.
+## Status
 
----
+**Actively maintained.** Current release **3.9.56** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.56)) · **full test suite passing** on 2026-11-24 · [MIT](LICENSE)
 
-## Install (about two minutes)
+Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://www.tampermonkey.net/), the game open, and a character you can seat.
 
-**What you need:** Chrome, Edge or Firefox on a desktop, and the game open at <https://app.lofi.town/>. A phone will not work - there is nowhere to install a userscript.
+## Why this one
 
-### 1. Add Tampermonkey
+- **One file, no server to fish.** The userscript contains the bot, panel, session clock, ledger and settings. `fishserve` is optional and only adds overnight capture.
+- **It installs from a fixed, public URL.** The recommended userscript install needs no build step, no bookmarklet and no GitHub account; Tampermonkey checks the release URL and keeps your settings.
+- **It pauses instead of pretending.** A hidden tab or a standing character pauses the session; after the hidden-tab limit (2 minutes by default) the session ends. The diagnostics panel reports what the bot can see.
+- **The evidence stays local.** Catch history, profiles and daily time budgets live in your browser. The optional server receives snapshots, not gameplay control.
 
-Install the [Tampermonkey](https://www.tampermonkey.net/) extension from your browser's extension store, then pin it to the toolbar so you can see it.
+The obvious alternatives are doing the loop manually or using another lofi.town automation bot. AutoFish is for a desktop browser you can leave visible: it adds a panel and local ledger, keeps the bot in one userscript, and needs no server or build step. Use manual fishing or another tool if you need mobile or headless operation, cannot leave the window uncovered, or do not want to take the automation risk.
 
-### 2. Add the script
+**Fit:** this is a JavaScript browser userscript, not a library or SDK, for desktop Chrome, Edge or Firefox with Tampermonkey. The code is MIT-licensed. It does not support mobile or headless operation.
 
-Open [autofish.user.js](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js) - the fixed release URL - and let Tampermonkey install it. If the browser downloads the file instead of showing Tampermonkey's install page, drag it onto the Tampermonkey dashboard or use **Utilities → Import from file**.
+## Install and first catch
 
-That URL always serves the newest build, and an installed copy checks it on Tampermonkey's own schedule: no GitHub account, no reinstall, and the panel's settings survive the update. [`dist/autofish.user.js`](dist/autofish.user.js) in this repository is the same file, for installing a local build - open it and press **Raw**, or paste it into a new Tampermonkey script (**Dashboard → +**, replace the template, **Ctrl+S**). The panel, the bot and the session clock are all inside that one file.
+**You need:** a desktop browser, Tampermonkey, the game open at <https://app.lofi.town/>, and a character you can seat. Phones are not supported.
 
-### 3. Open the game and reload
+1. Install Tampermonkey and pin it to the toolbar.
+2. Open the stable release URL and let Tampermonkey install it:
 
-Go to <https://app.lofi.town/> and press **F5** so the script runs on a fresh page. Within a few seconds the AutoFish panel appears in a free corner - usually top-left - keeping clear of the play area.
+   ```text
+   https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
+   ```
 
-![The AutoFish panel](docs/images/panel.jpg)
+3. Reload the game with **F5**. The AutoFish panel appears in a free corner, usually top-left.
+4. Click a chair, bench or stool at the water's edge and wait for the game's own **CAST!** prompt. The bot cannot seat you.
+5. Press **Start** on the panel. The badge changes to **RUNNING** and `presses` starts climbing.
 
-![The panel with both sections folded](docs/images/panel-folded.jpg)
+There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.56`) or this browser-console command:
 
-### 4. Sit on a chair by the water - do this before Start
-
-lofi.town only offers the cast prompt to a **seated** character, so click a chair, bench or stool at the water's edge and wait for the game's own **CAST!** prompt to appear once.
-
-
-The bot never moves or seats your character: seats are world objects it cannot click meaningfully. If you are not seated it says so on the panel and pauses the clock instead of burning your session.
-
-### 5. Press Start
-
-Press **Start** on the panel. The badge flips to **RUNNING**, `presses` starts climbing, and the rarity strip fills in as fish are caught.
+```js
+__fish.version
+// 3.9.56
+```
 
 ### Nothing happened?
 
 | What you see | What it means |
 | :--- | :--- |
-| No panel at all | The script is not running on this page. Check the Tampermonkey icon shows a **1** for lofi.town, then reload with F5. |
-| Panel says **IDLE** after Start | The game page is hidden, paused, or the character is not seated. Bring the tab to the front. |
-| Footer: *clock paused - nothing to bite* | The character is standing. Sit by the water; the session resumes on its own. |
-| Two panels stacked | The script got loaded twice (a second copy, or an old console injection). Reload the page. |
-| Counters climb, no catches | The rod is out but nothing bites: usually a missed reel prompt. Press Stop, sit again, Start. |
-| Amber capture line: *last post failed* | Fishserve stopped, crashed, or the address moved. Start it or click the amber line and enter the current origin. |
-| *capture: no answer - click to change the address* | The panel could not load the sampler from the stored address. Click the line and enter a running fishserve origin. |
-| *capture: the sampler is not running - re-arming* | The panel saw the sampler die and is retrying on a 30 s to 5 min backoff. If fishserve moved, click the amber line. |
+| No panel | The script is not running. Check the Tampermonkey icon shows **1** for lofi.town, then reload. |
+| **IDLE** after Start | The page is hidden, or the character is not seated. Bring the tab forward and sit by the water. |
+| Footer: *clock paused - nothing to bite* | The character is standing. Sit down; the session resumes. |
+| Counters climb, no catches | Usually a missed reel prompt. Press Stop, sit again, then Start. |
+| Amber capture line | The optional fishserve stopped, crashed or moved. Fishing still works; restart it or click the line to enter the current origin. |
 
----
+## What is AutoFish?
 
-## The panel
+The bot reads the game's rendered frames to find the **CAST!** and **REEL!** prompts, then presses the spinning reel dial at the moment the wedge crosses the pin. It uses a predicted crossing, re-arms after a proven new triangle, and falls back to a full-surface search if its remembered dial is wrong. Detection runs inside a wrapper around the renderer, because the prompts are painted into the game's canvas.
 
-The panel is two tiers. The surface carries only what a glance needs - the phase chip, the session
-clock, catches, presses, today against the cap, the rarity strip and the **Start / Pause** pair -
-while **Session & guards** and **Diagnostics** fold away beneath it. A first run therefore needs one
-control: press Start.
+The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, session time, catches, presses and today's cap. **Session & guards** holds the session length, cooldown, daily cap, clock window, profile, CSV upload and optional overnight capture. **Diagnostics** shows fps, frame times and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
 
-Where each control lives, top to bottom:
+![The AutoFish panel](docs/images/panel.jpg)
 
-| Where | What lives there |
-| :--- | :--- |
-| **On the surface** - the short card in the folded screenshot | The phase chip and build, `Timer`, `catches`, `presses`, `today` against the cap, the catch-history block around that strip (all/today toggle, shiny and kept-day lines, last catch) and the **Start / Pause** plus **Stop** pair. Nothing here sets policy; only those two transport buttons act on the run. |
-| **Session & guards** - folded | The four steppers (Session, Cooldown, Daily time cap, Stop when hidden), Clock window with its from/to times, Cozier popup, Auto-start next run, Resume after reload, Send catches to CSV, Overnight capture, and Profile with its add and reset buttons. Everything decided once, opened once. |
-| **Diagnostics** - folded | fps with typical/slow/worst frame time, caught of attempts, rare dials and presses landed, per-second detector work, per-dial and per-card milliseconds; click the block for the raw frame report. Read-only. |
+The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.56. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
 
-The two screenshots are the same card in its two states: [panel.jpg](docs/images/panel.jpg) with both blocks open, [panel-folded.jpg](docs/images/panel-folded.jpg) with them closed.
+## Limits and requirements
 
-- **Session / Cooldown / Daily time cap / Clock window** - how long it fishes, how long it rests after, how much game time it may spend per day, and an optional time-of-day window. Every field can be typed (`90`, `1h 30`, `21:30`) as well as stepped; the cap is **fishing time**, not a fish limit, and 24 h is reachable.
-- **Pause / Resume, Stop, Start now** - Pause holds the current session (no cooldown, no lost time); Stop ends it and starts the rest. A daily-cap or clock-window stop does not start a cooldown, and **Start now** skips the self-imposed rest after a confirmation.
-- **Stop when hidden / Auto-start next run / Resume after reload / Send catches to CSV / Profile** - page-hidden limit, automatic next session after a rest, opt-in reload resume, opt-in local CSV POST, and which catch history this account uses. The catch-history line has an **all/today** toggle and a confirm-guarded reset for the current profile.
-- **Overnight capture** - posts a run snapshot to your local fishserve immediately and every five minutes, and loads the sampler again after a reload. It needs fishserve running; see [Overnight capture](#overnight-capture). The whole row is the switch.
-- **Cozier popup** - hides the in-session Cozier upsell. Cosmetic only: a free account still cannot fish in a focus session.
-- **Pause in focus sessions** - pauses the run while a focus session runs (solo or together) and resumes when it ends. It draws nothing over the game: the cast prompt is painted into the game's canvas and cannot be removed by a page script.
-- **Diagnostics** - fps, typical/slow/worst frame time and per-detector work per second, the same numbers as `__fish.perf()`.
-- **Timer / catches / presses / today** - session time remaining, catches this session, dial presses, game time spent today against the cap.
-- **Catch history** - all-time and today totals together, lifetime shiny/golden, today's shiny/golden, and how many day buckets are kept (60 max). The strip can show all-time or **today**; **UNK** appears when the card printed no tier and the species is not in the built-in catalogue.
-- **Last catch** - species, weight, rarity (a leading `~` means the rarity came from the built-in catalogue because the card printed none), and the local time.
-- **acc / perf** - fish attempts caught vs attempts, plus the narrow-dial slice; click the block for `__fish.calibration()` and the full frame report.
-- Drag by the header to move it; **-** collapses it to a 48 px pill, click the pill to restore it.
-
-## What it actually does
-
-- **Finds prompts in pixels.** The game merges the CAST!/REEL! prompts and the reel dial into its WebGL renderer canvas, so detection runs from a wrapper around the renderer's `render()` and reads the frame the game just painted; a `requestAnimationFrame` read sees a cleared buffer.
-- **Reads without allocating.** The renderer's WebGL buffer is read with `readPixels` into one reused array instead of a fresh `getImageData` copy for every box; the 2D copy remains the fallback. Live 3.9.12 in the owner's tab: **140.5 fps, p95 11.2 ms, one 91 ms long task in ten seconds**; the same tab on 3.9.9 read 106.8 fps with a 250-285 ms stall every second while it waited for a bite.
-- **Presses the dial on a timer.** Rotation is fitted by least squares over the last ~200 ms, the crossing is predicted, and a `setTimeout` clicks the dial centre at that moment. Frames re-plan and cancel the timer, and containment takes an already-open window (`inside-now`) rather than waiting almost a full rotation when the pin is past the midpoint. After a press, a proven new triangle re-arms at once, so a wedge already under the pin is pressed immediately instead of after it leaves and comes back.
-- **Holds the first press only when it can pay.** On a narrow (<60 deg) or fast (>=300 deg/s) dial the first press may wait for a stable spin fit, but only when the wait (a fraction of one pass, capped at 2.5 s) is long enough to fit the 150 ms fit it is waiting for; a faster dial presses on its first open frame instead of burning the window on a hold that would expire anyway.
-- **Remembers the dial.** The reel widget's circle is saved per canvas size and tried before any search. If the hint is wrong, one whole-surface pass finds the green wedge and recovers the lock - a fresh run no longer needs a prompt to find its first dial.
-- **Scores fish, not clicks.** One fish is many presses (the game shows a level bar), so the unit is the *fish attempt*: it opens at the first dial lock and closes at a parsed catch or when the cast prompt returns. A win is only counted when the catch card's text parses to a species.
-- **Keeps a ledger.** `localStorage` key `autofish:log:v1:<profile>`: per-species count and best weight, per rarity and per day totals (including that day's shiny/golden), 60 day buckets, and the names of any species the catalogue did not recognise. The profile owns its own daily budget (`autofish:budget:v1:<profile>`), so two accounts in one browser never share a history or a cap. A reset button clears the current profile's history after a confirmation; resetting does not delete the profile itself.
-- **Pauses honestly.** A hidden tab pauses the clock, and so does standing up; the session resumes when a prompt comes back and gives up after 30 minutes unseated. The panel's Pause is a separate hold: it does not end the session or start the cooldown.
-
-## How well does it fish?
-
-The current build is measured by its own runs. The latest fresh 3.9.27 session was **145 fish attempts**: **144 caught (99.3%)**, 777/777 presses accepted, **258 dial hits with 0 misses**, and 144 catch cards. The only loss was attempt #5, a 61.7° dial with 6 accepted presses and 3 hits that ended on the cast prompt - not a ghost; the 3.9.26 ghost filter also met two ghost rings in that run and moved past both. The historical 3.9.15 baseline remains useful context: **126/133 attempts (94.7%, Wilson 95% CI 89.5-97.4%)**, 697 presses all accepted (**0 rejected**), 5.53 presses a catch, 254 dials closed, 139.1 fps median with a 12.5 ms p95 frame gap. Its seven losses all scored "cast prompt" - the fish left before the cast landed - and none as a bad dial. Split by dial width, the wide and full dials went **52/52**, the mid band 65/69, and the narrow band **20/27 across three sessions**. A 3.9.19 session then measured the thing that decides a narrow press: prediction error p50 **1.9 deg / 9.6 ms**, p95 **6.1 deg / 31.3 ms**, against a narrow window ~62 ms wide - so the narrow band was never a timing problem. One honest caveat on every press number here: **36% of press verdicts are inferred**, not observed, which the 3.9.19 probe counts for the first time. The 3.9.15 run remains the first one the bot could export attempt by attempt (see `__fish.exportRun()`); before it, the baseline was the 3.8.8 75-minute seated session, **103/112 (92.0%, 85.4-95.7%)**, 602 presses, 5.84 presses a catch, 218 dials closed with 217 hit. Shorter checks since - 7/7, 1/1, 8/8, 43/43 presses accepted - are regression evidence, not estimates.
-
-Per-press timing is scored by whether the game spawned a new triangle (a press it acted on), not by whether the dial closed - only the finishing press can do that. Read `__fish.status().accuracy.pressAcceptRate`.
-
-## Limits
-
-- **The tab must stay visible.** The game freezes its own timers when hidden, and the bot stops stepping. A covered window counts as hidden in both Chrome and Firefox; see [Keeping it running](#keeping-it-running-background-tabs) for the one case that can be fixed. A real overnight run also needs the machine awake.
-- **You seat the character.** Nothing else can.
-- **The game can still win.** Legendary and secret fish need many presses inside a tight clock; a missed click costs the previous gain and the streak.
+- **The tab must stay visible.** The game freezes its own timers when the page is hidden. Switching tabs or minimising cannot be helped. A covered window can sometimes be kept alive by turning off occlusion tracking:
+  - **Firefox / Zen:** set `widget.windows.window_occlusion_tracking.enabled` to `false` in `about:config`.
+  - **Chrome / Edge:** launch with `--disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows`, or set the `WindowOcclusionEnabled` policy to `0`.
+- **You seat the character.** The bot cannot click a world object to sit for you.
+- **The game can still win.** Legendary and secret fish need several presses inside a tight timer; a missed click costs the previous gain and zeroes the streak bonus.
 - **One tab, one copy.** Loading the script twice mounts two panels.
-- **Overnight capture needs fishserve.** With no server the line stays amber and the night is not recorded; fishing still works.
-- It automates an online game, which can break that game's terms. Your call, your risk. Not affiliated with lofi.town.
+- **Overnight capture needs the optional server.** Fishing works without it; the night simply is not recorded.
+- **Automation can violate the game's terms.** This is not affiliated with lofi.town. Your account, your risk.
+- **Desktop is the supported setup.** Phones are not supported or tested.
 
-## Keeping it running (background tabs)
+## Optional: overnight capture
 
-The game draws on `requestAnimationFrame` and keeps its fishing clock in page time, so a page the
-browser treats as **hidden** stops fishing whatever the bot does. That is a browser rule, not a
-setting in AutoFish:
-
-| What you do | What the page sees | Can it be helped? |
-| :--- | :--- | :--- |
-| Switch to another tab | `hidden` | No. |
-| Minimise the window | `hidden` | No. |
-| Cover the window with another app | `hidden` | Yes: turn off window-occlusion tracking. |
-
-Turning occlusion tracking off keeps a **covered** window rendering:
-
-- **Zen / Firefox** - `about:config` -> `widget.windows.window_occlusion_tracking.enabled` -> `false`.
-- **Chrome / Edge** - launch with
-  `--disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows`, or set
-  the `WindowOcclusionEnabled` policy to `0` (Edge: `SOFTWARE\Policies\Microsoft\Edge`).
-
-The simplest reliable setup is a window that stays on screen: move the game tab into its own window
-and leave it uncovered. The panel pauses the clock when the page hides; **Stop when hidden** sets how
-long it may stay hidden before the session ends (2-60 min, default 2). Switching tabs or minimising
-the window is not recoverable - no page gets frames while it is hidden.
-
-## Overnight capture
-
-The page keeps only the last 250 attempts, so a long run has to be sampled while it happens. The
-panel can do that, but it needs a local fishserve to receive the snapshots:
+The page keeps only the last 250 attempts, so a long run needs a local sampler. Fishserve stores snapshots; the morning report reads them. It never controls the bot.
 
 ```bash
-node fishserve.js        # or ./run.sh, which picks a free port and prints it
+node fishserve.js
 ```
 
-1. Open **Session & guards** and click anywhere on **Overnight capture**.
-2. The first time, enter the fishserve origin, usually `http://127.0.0.1:8731`.
-3. The line under the meters reads `capture armed · 1 post · last HH:MM`. The first snapshot is
-   posted immediately; after that the sampler posts every five minutes to
-   `data/runs/export-<time>.json`.
-
-The line is the truth:
-
-- **Green** - the sampler is writing. The count and local time are the last successful post.
-- **Amber** - a post failed, the sampler is missing, or the last post is over eleven minutes old
-  (two missed posts).
-- `capture: no answer - click to change the address` means the panel could not load the sampler.
-- Click the amber line, or focus it and press **Enter** or **Space**, when fishserve moved. Enter the
-  new origin; the old sampler is stopped, the pref is saved, and the capture arms again. Cancelling
-  changes nothing.
-- `capture: the sampler is not running · re-arming` means the panel is healing itself; a failed
-  fishserve is retried on a 30 s / 1 m / 2 m / 5 min backoff, so it is not hammered.
-
-The setting survives a reload. The panel loads the sampler again and posts immediately, so a night
-is not lost to an accidental refresh. Capture is off by default and can be switched off by clicking
-anywhere on the row. It only reads `__fish.exportRun()`; it never starts, stops or presses the run.
-
-### Running fishserve as a service (WSL)
-
-The panel can heal a sampler; it cannot start a fishserve that died with the terminal that ran it.
-On this machine fishserve is a **systemd user unit inside WSL**, so it outlives the shell, the agent
-session and a distro restart:
-
-- **Unit**: `~/.config/systemd/user/fishserve.service` - `WorkingDirectory` is the main checkout
-  (`/home/heyloey/personal/lofitown-autofishing`), `Restart=always`, `RestartSec=5`,
-  `WantedBy=default.target`. It runs the resolved node binary, not a PATH lookup.
-- **Start / inspect**: `systemctl --user enable --now fishserve.service`,
-  `systemctl --user status fishserve`, `journalctl --user -u fishserve -f`. There is no log file:
-  the unit's stdout goes to the journal.
-- **Linger**: `loginctl show-user "$USER" -p Linger` must read `Linger=yes`
-  (`loginctl enable-linger "$USER"`). Without it the user manager, and the unit with it, stops when
-  the last login session closes.
-- **Where the data lands**: fishserve resolves `data/runs`, `catches.csv`, `sessions.csv` and `shots/`
-  from `__dirname`, not from the shell's working directory, so the checkout the unit runs from
-  decides the destination. That is why the unit runs from the main checkout - a fishserve started in
-  another worktree writes its snapshots there instead, and the morning report in this one will not
-  see them.
-- **Reboot caveat**: the unit starts when the WSL distro starts, and a Windows reboot does not start
-  the distro by itself. There is deliberately **no logon autostart**: keeping WSL resident around
-  the clock costs RAM for a server that is only needed while fishing. After a reboot, start WSL once
-  by hand (`wsl.exe -d Ubuntu -u heyloey -- true`, or any WSL terminal); the unit comes up with the
-  distro and the panel heals within its 30 s to 5 min backoff. If the line is amber after a reboot,
-  start WSL before changing the address in the panel.
+Open **Session & guards**, click **Overnight capture**, and enter the fishserve origin, usually `http://127.0.0.1:8731`. The first snapshot posts immediately and the sampler repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
 
 In the morning:
 
@@ -200,114 +91,26 @@ In the morning:
 node scripts/overnight-report.js
 ```
 
-By default it reads the twelve hours ending with the newest snapshot, not everything ever captured,
-and prints catch rate, width bands, losses, long gaps, cut reasons, doctor verdicts, the last perf
-line and the sessions fishserve logged. The closing **Coverage** section compares the newest attempt
-with the last session row: `complete`, or `X h Y m unaccounted - the capture stopped at HH:MM`. The
-command exits 1 when the night is truncated or unreadable, and 0 otherwise. `--all` merges every
-snapshot; `--hours N` and `--since ISO` move the window. The full contract is
-[docs/specs/2026-11-18-overnight-capture.md](docs/specs/2026-11-18-overnight-capture.md); the
-real-game check is
-[docs/reviews/2026-11-18-capture-address-live.md](docs/reviews/2026-11-18-capture-address-live.md).
-
-![Overnight capture armed, after correcting the address](docs/images/capture-armed-3.9.47.png)
-
-![Overnight capture with a stale address](docs/images/capture-stale-3.9.47.png)
-
-## Nerd corner
-
-In the browser console on app.lofi.town:
-
-```js
-__fish.version     // which build this tab is running (stamped from package.json)
-__fish.status()    // running, dials, presses, per-band and per-arm accuracy
-__fish.log()       // totals, all-time and today by rarity, today's shiny/golden
-__fish.logCsv()    // the same ledger as CSV
-__fish.logReset()  // clear the current profile's ledger (confirm in the panel)
-__fish.logProfile()        // the catch history in use
-__fish.logProfiles()       // every profile this browser has
-__fish.accuracy()  // attempts, catch rate, by speed band, by dial width, by caught rarity
-__fish.calibration()       // live timing knobs + width/rarity reports + a narrow-dial hint
-__fish.tune({ marginDeg: 5 })  // apply numeric timing knobs to the live run
-__fish.perf()      // fps, p50/p95 gap, and per-detector ms/call, ms/s and share
-__fish.exportRun() // one JSON string: attempts, interval, perf, doctor verdict
-__overnight.status()  // capture timer: posts, last file, last error
-__overnight.now()     // force a capture snapshot now
-__overnight.stop()    // stop the capture timer (fishing is untouched)
-__fish.opts        // press timing, windows, retry ladders (live-editable)
-```
-
-`__fish.perf()` is the measurement any tuning has to come from: `rates.<detector>.share` is the
-fraction of wall time that detector spent on the main thread (`findBubble` includes its `snapshot`),
-and `readback.allocMBPerSec` is the canvas-readback garbage rate (`gl` reads allocate nothing after
-the buffer grows; `canvas2d` is the fallback). It only records while the bot is running, so read it
-mid-session. The same version is printed in the panel header (`v3.9.31`, or `dev` for the unbundled
-bookmarklet path), so a stale install is visible without opening the console.
-
-On a build older than `perf()` the console has no probe. Paste [scripts/perf-window.js](scripts/perf-window.js) instead: it wraps the four detectors for 20 s, prints the same table (and puts the originals back), so a stalled tab does not have to be reloaded to be measured.
-
-## Optional: the server path
-
-Only needed for overnight capture, the morning report, session records on disk and the `/sessions` and `/diag` endpoints. Besides the catch/session routes it serves `/overnight.js` and accepts `POST /export` (one `data/runs/export-<time>.json` per snapshot). Catches are sent to the local CSV only when **Send catches to CSV** is on (off by default; the local ledger always works), and session rows are written for every profile (`sessions.csv` ends with a `profile` column; rows written before it read as `default`). With the inlined userscript, session rows go to the same origin as the capture, so the report's coverage check has a row to read.
-
-```bash
-./run.sh    # picks a free port, prints the install URL and the bookmarklet
-```
-
-Open the printed URL, then drag the bookmarklet to the bookmarks bar (or run it in the console on the game page). A stale server on the same port is the usual cause of "it is running old code" - compare `curl -s localhost:8731/autofish.js | wc -c` with `wc -c autofish.js`.
+It reports catch rate, width bands, losses, gaps, doctor verdicts and whether the night was recorded to the end. `--all`, `--hours N` and `--since ISO` change the window. The full contract is in [the capture spec](docs/specs/2026-11-18-overnight-capture.md); the live check is in [the capture review](docs/reviews/2026-11-18-capture-address-live.md). On WSL, fishserve can run as a systemd user unit; the service commands and reboot caveat are in [docs/STATE.md](docs/STATE.md).
 
 ## Development
 
-```bash
-node --test                # the full suite; note: never "node --test tests/"
-node build-userscript.js   # rebuild dist/ after editing any browser file
-```
-
-Dependency-free CommonJS plus browser globals; no bundler, no linter. A test fails when `dist/autofish.user.js` is stale, so rebuild before committing.
-
-| Path | What lives there |
-| :--- | :--- |
-| `autofish.js` | the whole bot: dial detection, planner, press dispatcher, ledger, telemetry |
-| `panel.js` | the in-game panel (closed shadow root) |
-| `session.js` | pure session reducer: phases, caps, window, pause reasons |
-| `layout.js` | panel placement math against the game's live exclusion rects |
-| `fishserve.js` | optional local server: static assets, `POST /catch`, session records |
-| `build-userscript.js` | inlines the four browser files into `dist/autofish.user.js` |
-| `scripts/gen-catalogue.js` | regenerates the embedded species catalogue from a saved game bundle |
-| `scripts/release.js` | publishes a release to the public mirror and proves both assets match the tag |
-| `tests/` | `node:test` suites, including source guards that fail on regressions |
-| `AUTOFISH.md` | the lab notebook: every measured fact, fix and withdrawal |
-| `docs/` | state tracker, specs, task records, reviews |
-
-## Releasing
-
-The userscript updates itself from a public mirror repository, because this one is private and Tampermonkey's update check carries no GitHub session. A release is therefore the same file in two places, and `scripts/release.js` is what keeps them identical:
+No runtime dependencies. Node.js is only needed for development and the optional server.
 
 ```bash
-node scripts/release.js --check   # verify the tag, both assets and the public URL; writes nothing
-node scripts/release.js           # create or refresh the mirror release from the verified asset
+node --test                 # full suite; never "node --test tests/"
+node build-userscript.js    # rebuild dist/ after editing browser code
+node scripts/release.js --check
 ```
 
+The committed `dist/autofish.user.js` is checked against `package.json`; rebuild it before committing browser changes. The design record, measurements and every fix are in [AUTOFISH.md](AUTOFISH.md). Current position, specs and verification history are in [docs/STATE.md](docs/STATE.md).
 
-**The vault record rides on the commit.** Put the trailer on its own paragraph in the release commit message:
+## Documentation and licence
 
-```bash
-git commit -m "docs: ship 3.9.20 - <what changed>" -m "HeyLoey-Milestone: <one line, the concrete outcome>"
-```
+- [AUTOFISH.md](AUTOFISH.md) - design record, measurements and known regressions.
+- [docs/STATE.md](docs/STATE.md) - current position, decisions and next actions.
+- [docs/specs/](docs/specs/) - approved feature contracts.
+- [docs/reviews/](docs/reviews/) - live verification records.
+- [scripts/release.js](scripts/release.js) - the release check and mirror publish path.
 
-The repository's post-commit hook reads that trailer synchronously and calls `heyloey done "<summary>"`, so the milestone reaches the vault even when no agent remembered to call it - which is exactly how a release goes unrecorded. An ordinary commit writes nothing, and an empty trailer is not an opt-in. Keep the summary under 600 characters (the CLI rejects longer ones) and read the daily note back after a release to confirm the entry exists. Since 3.9.43 the tool enforces it: `scripts/release.js` refuses to publish, and `--check` refuses to pass, when the tagged commit carries no `HeyLoey-Milestone:` trailer - so a release cannot ship without its vault record. `v3.9.43` is the single named exemption: it was tagged before the check existed and its note was written by hand on 2026-11-17. The refusal is safe by default: for a tag whose release already exists it only tells you to write the note, because moving a published tag would leave installed copies and the mirror on a commit it no longer names. Amending the commit and re-tagging is offered only when nothing has been published yet.
-
-It takes `dist/autofish.user.js` as committed at `v<package.json version>`, requires the source release's asset to be byte-identical to it, uploads those bytes to the mirror, then downloads the mirror asset anonymously - the path an installed copy polls - and compares hashes. It refuses when the asset differs from the tagged build, when the tag is missing, or when `dist/` is stale at a tagged HEAD. Run it after `gh release create v<version>` here; the mirror repository and asset name come from the userscript's `@updateURL`, so the two cannot point at different places.
-
-## Documentation
-
-- [AUTOFISH.md](AUTOFISH.md) - design record and every live measurement, in order.
-- [docs/STATE.md](docs/STATE.md) - current position, decisions, next actions.
-- [docs/specs/](docs/specs/) - approved specs. [docs/tasks/](docs/tasks/) - task records.
-- [docs/specs/2026-11-18-overnight-capture.md](docs/specs/2026-11-18-overnight-capture.md) - capture and morning-report contract.
-- [docs/reviews/2026-11-18-capture-address-live.md](docs/reviews/2026-11-18-capture-address-live.md) - the real-game capture check.
-- [docs/reviews/](docs/reviews/) - all verification reviews.
-
-## Licence
-
-MIT - see [LICENSE](LICENSE).
+MIT - see [LICENSE](LICENSE). Not affiliated with lofi.town.
