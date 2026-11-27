@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * Publish the built userscript to the public distribution mirror, and prove the source and
  * mirror releases cannot drift.

@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Keep an overnight run from being swallowed by the attempt store's 250-row cap.
  *
@@ -29,11 +30,13 @@
   const url = ORIGIN + '/export';
 
   if (window.__overnight) window.__overnight.stop();
+  /** @type {OvernightStatus} */
   const state = { stopped: false, posts: 0, last: null, lastError: null };
-  let timer = null;
+  /** @type {number | undefined} */
+  let timer;
 
   async function snap(reason) {
-    if (state.stopped) return null;
+    if (state.stopped || !F) return null;
     let body;
     try {
       body = F.exportRun();

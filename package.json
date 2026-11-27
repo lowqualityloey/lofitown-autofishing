@@ -12,9 +12,13 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test",
+    "typecheck": "tsc --noEmit",
     "serve": "node fishserve.js",
     "build:userscript": "node build-userscript.js",
     "release": "node scripts/release.js",
     "sync": "node scripts/sync-main.js"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
   }
 }

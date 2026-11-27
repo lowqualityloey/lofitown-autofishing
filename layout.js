@@ -1,5 +1,10 @@
+// @ts-check
 /* layout.js — where the panel may sit so it never covers the fishing UI.
  * Pure geometry: no DOM. Browser global AutoFishLayout, CommonJS require('./layout.js').
+ */
+/**
+ * @param {any} root
+ * @param {() => AutoFishLayoutApi} factory
  */
 (function (root, factory) {
   var api = factory();
@@ -10,18 +15,33 @@
 
   var MARGIN = 12;
 
+  /**
+   * @param {Rect | null | undefined} rect
+   * @param {number} by
+   * @returns {Rect | null}
+   */
   function inflate(rect, by) {
     if (!rect) return null;
     return { x: rect.x - by, y: rect.y - by, w: rect.w + by * 2, h: rect.h + by * 2 };
   }
 
-  /** Strict overlap: rects that only share an edge do not intersect. */
+  /**
+   * Strict overlap: rects that only share an edge do not intersect.
+   * @param {Rect | null | undefined} a
+   * @param {Rect | null | undefined} b
+   * @returns {boolean}
+   */
   function intersects(a, b) {
     if (!a || !b) return false;
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
   }
 
+  /**
+   * @param {Array<Rect | null | undefined>} rects
+   * @returns {Rect | null}
+   */
   function unionRect(rects) {
+    /** @type {Rect | null} */
     var out = null;
     for (var i = 0; i < rects.length; i++) {
       var r = rects[i];
@@ -37,6 +57,13 @@
     return out;
   }
 
+  /**
+   * @param {Point} pos
+   * @param {Size} size
+   * @param {Size} viewport
+   * @param {number} margin
+   * @returns {Rect}
+   */
   function clamp(pos, size, viewport, margin) {
     var maxX = Math.max(margin, viewport.w - size.w - margin);
     var maxY = Math.max(margin, viewport.h - size.h - margin);
@@ -52,6 +79,8 @@
    * Choose a panel position. Returns { x, y, w, h } or the string 'pill'.
    * Candidate order: the preferred spot, the four corners, then the four sides of the
    * exclusion rect — first one that fits the viewport and clears the game wins.
+   * @param {PlaceOpts} opts
+   * @returns {PlaceResult}
    */
   function place(opts) {
     var size = { w: opts.panel.w, h: opts.panel.h };
@@ -69,6 +98,7 @@
     var bottom = viewport.h - size.h - margin;
     // Top-left first: the game's coin and upgrade controls live in the top-right strip, and the
     // panel swallows pointer events, so parking over them would make them unclickable.
+    /** @type {Point[]} */
     var corners = [
       { x: margin, y: top },
       { x: margin, y: bottom },
@@ -76,6 +106,7 @@
       { x: right, y: top }
     ];
 
+    /** @type {Point[]} */
     var candidates = [];
     if (opts.preferred) candidates.push({ x: opts.preferred.x, y: opts.preferred.y });
     candidates = candidates.concat(corners);

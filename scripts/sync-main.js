@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * Move the local `main` branch to origin/main, so a checkout that follows main picks up merged work
  * without a manual trip into it.

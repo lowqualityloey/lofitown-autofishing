@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 'use strict';
 /**
  * Regenerate the species catalogue embedded in autofish.js.
@@ -133,12 +134,14 @@ function existingRows(src) {
   return rows;
 }
 
-/** Base table first, so a name in both keeps its explicit gold. Names compare case-insensitively. */
-function merge() {
+/** Base table first, so a name in both keeps its explicit gold. Names compare case-insensitively.
+ * @param {...any[]} lists
+ */
+function merge(...lists) {
   const seen = new Set();
   const out = [];
-  for (let i = 0; i < arguments.length; i++) {
-    for (const row of arguments[i]) {
+  for (let i = 0; i < lists.length; i++) {
+    for (const row of lists[i]) {
       const key = row[0].toLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -212,7 +215,7 @@ function main(argv) {
   const write = args.includes('--write');
   const fresh = args.includes('--fresh');
   const found = inputFiles(args);
-  if (found.error) {
+  if (found.error || !found.files) {
     console.error(found.error);
     return 2;
   }

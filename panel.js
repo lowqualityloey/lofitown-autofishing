@@ -1,3 +1,4 @@
+// @ts-check
 /* panel.js — the AutoFish control panel, injected into the lofi.town page.
  *
  * Loaded by the bookmarklet (or the userscript) from fishserve. It pulls autofish.js, session.js
@@ -17,7 +18,7 @@
   // null when the panel was inlined in the userscript: there is no server to talk to, and the
   // session clock must not depend on one. Only the bookmarklet path (a real <script src>) has one.
   var BASE = (function () {
-    var s = document.currentScript;
+    var s = /** @type {HTMLScriptElement | null} */ (document.currentScript);
     if (s && s.src) { try { return new URL(s.src).origin; } catch (e) { /* fall through */ } }
     return null;
   })();
@@ -28,27 +29,36 @@
   var BUDGET_PREFIX = BUDGET_KEY + ':';
   var TICK_MS = 1000;
 
-  var state = null;
+  /** @type {SessionState} */
+  var state = /** @type {any} */ (null);
   var logScope = 'all';       // the rarity strip shows all-time or today
   var baseTodayMs = 0;        // fishing minutes already logged today before this session
   var budgetAt = 0;           // last periodic write of BUDGET_KEY
   var budgetDay = '';         // the local day BUDGET_KEY belongs to, for a rollover mid-run
   var banner = '';
+  /** @type {number | null} */
   var tickTimer = null;
+  /** @type {number | null} */
   var placeTimer = null;
   var heartbeatAt = 0;
   var diagSent = false;       // one UI frame per session, when a run never sees a prompt
   var diagAt = 0;
+  /** @type {number | null} */
   var guardTimer = null;      // its own timer: a throw inside tick() must not also disable the check
   var TICK_GUARD_MS = 5000;
   var lastTickAt = 0;         // when tick() was last entered
+  /** @type {number | null} */
   var hiddenAt = null;        // wall clock when the tab went hidden; visibility events survive timer throttling
   var tickErrors = 0;
   var lastTickError = '';
   var zombieRevives = 0;
+  /** @type {number[]} */
   var reviveTimes = [];       // rolling window for the crash-loop cap; an accepted Start clears it
+  /** @type {WakeLockSentinel | null} */
   var wakeSentinel = null;
+  /** @type {Point | null} */
   var dragged = null;         // {x, y} once the user moved the panel
+  /** @type {any} */
   var dragging = null;
   var placed = false;         // keep a clear position instead of snapping back when a card clears
   var collapsed = false;
@@ -56,14 +66,18 @@
   // the panel again inside the same place() call - a pill that looks clickable and does nothing.
   // An overlapping panel the owner asked for beats a panel that refuses to open.
   var userExpanded = false;
+  /** @type {HTMLDivElement | null} */
   var host = null;
+  /** @type {ShadowRoot | null} */
   var root = null;
+  /** @type {Record<string, any>} */
   var ui = {};
 
   /* ------------------------------------------------------------- deps ----- */
 
+  /** @param {string} src @returns {Promise<void>} */
   function loadScriptFrom(src) {
-    return new Promise(function (res, rej) {
+    return new Promise(/** @param {(v?: void) => void} res */ function (res, rej) {
       var s = document.createElement('script');
       s.src = src;
       s.onload = function () { res(); };
@@ -88,7 +102,7 @@
   /* ------------------------------------------------------------ prefs ----- */
 
   function readJSON(key, fallback) {
-    try { var v = JSON.parse(localStorage.getItem(key)); return v || fallback; } catch (e) { return fallback; }
+    try { var v = JSON.parse(localStorage.getItem(key) || 'null'); return v || fallback; } catch (e) { return fallback; }
   }
   function writeJSON(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
@@ -117,6 +131,7 @@
   }
 
   function savePrefs() {
+    if (!window.__panel) window.__panel = {};
     writeJSON(PREF_KEY, {
       durationMs: state.durationMs,
       cooldownMs: state.cooldownMs,
@@ -198,6 +213,7 @@
   var UPSELL_ID = 'focus-fishing-upgrade-description';
   var UPSELL_ATTR = 'data-autofish-upsell';
   var upsellOn = false;
+  /** @type {number | null} */
   var upsellTimer = null;
 
   function upsellRoot() {
@@ -206,7 +222,9 @@
     // display:none from our own tag would empty getClientRects() and make the sweep untag the root
     // it just tagged, i.e. show the modal again every 500 ms. A root we are hiding still counts.
     if (!desc.closest('[' + UPSELL_ATTR + ']') && !desc.getClientRects().length) return null;
+    /** @type {HTMLElement | null} */
     var node = desc;
+    /** @type {HTMLElement | null} */
     var top = null;
     while (node && node !== document.documentElement) {
       var style = getComputedStyle(node);
@@ -362,11 +380,11 @@
   function applyPromptMask() {
     // The core finds every element on the UI layer itself - the prompt bubble and the lure button -
     // so the panel only says "hide it while the hold is engaged", never where it is.
-    try { window.__fish.setPromptMask({ resolve: true }); } catch (e) {}
+    try { if (window.__fish && window.__fish.setPromptMask) window.__fish.setPromptMask({ resolve: true }); } catch (e) {}
   }
 
   function clearPromptMask() {
-    try { if (window.__fish.setPromptMask) window.__fish.setPromptMask(null); } catch (e) {}
+    try { if (window.__fish && window.__fish.setPromptMask) window.__fish.setPromptMask(null); } catch (e) {}
   }
 
   /* ------------------------------------------------- overnight capture ---- */
@@ -537,7 +555,7 @@
     if (why === 'post' || why === 'stale') {
       // Its timer is still running, so forcing one snapshot retries the POST without loading a
       // second sampler over the first.
-      try { window.__overnight.now(); } catch (e) {}
+      try { if (window.__overnight) window.__overnight.now(); } catch (e) {}
       return;
     }
     armOvernight();
@@ -675,7 +693,8 @@
 
   /* ---------------------------------------------------------- actions ----- */
 
-  function fish() { return window.__fish; }
+  /** @returns {FishApi} */
+  function fish() { return /** @type {FishApi} */ (/** @type {unknown} */ (window.__fish)); }
 
   /** The core latch, including the short window before the session reducer has seen it. */
   function resultMissingNow() {
@@ -763,6 +782,7 @@
     return true;
   }
 
+  /** @satisfies {Record<SessionAction['type'], (a: any) => void>} */
   var RUNNERS = {
     startCore: function (a) {
       // A new core has a fresh detector. The watchdog starts it without a reducer action, so clear
@@ -811,7 +831,7 @@
     // Only an accepted Start begins a new crash-loop budget. A refused Start during cooldown used
     // to clear the window too, erasing the evidence of the loop that put the session there.
     var startedAt = state.startedAt;
-    var out = window.AutoFishSession.reduce(state, fact);
+    var out = /** @type {AutoFishSessionApi} */ (window.AutoFishSession).reduce(state, fact);
     if (fact.type === 'start' && out.state.startedAt !== startedAt) reviveTimes = [];
     state = out.state;
     apply(out.actions);
@@ -1104,6 +1124,7 @@
     // reload of the game still shows yesterday's ledger.
     var logBox = el('div', 'logbox');
     var strip = el('div', 'strip');
+    /** @type {Array<{ name: string, num: HTMLElement, cell?: HTMLElement }>} */
     var tierCells = TIER_NAMES.map(function (name) {
       var cell = el('div', 'tier');
       var num = el('b', null, '0');
@@ -1190,9 +1211,9 @@
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
     ['pointerdown', 'pointerup', 'click', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'wheel'].forEach(function (type) {
-      host.addEventListener(type, function (e) { e.stopPropagation(); }, false);
+      if (host) host.addEventListener(type, function (e) { e.stopPropagation(); }, false);
     });
-    host.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    if (host) host.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
     min.addEventListener('click', function () { userExpanded = false; setCollapsed(true); });
     pill.addEventListener('click', function () { userExpanded = true; setCollapsed(false); });
@@ -1259,12 +1280,12 @@
       savePrefs();
     });
     reloadToggle.addEventListener('click', function () {
-      window.__panel.resumeAfterReload = !window.__panel.resumeAfterReload;
+      if (window.__panel) window.__panel.resumeAfterReload = !window.__panel.resumeAfterReload;
       savePrefs();
       render();
     });
     postToggle.addEventListener('click', function () {
-      window.__panel.postCatches = !window.__panel.postCatches;
+      if (window.__panel) window.__panel.postCatches = !window.__panel.postCatches;
       savePrefs();
       render();
     });
@@ -1278,7 +1299,7 @@
       if (!captureServer()) next = !!askCaptureAddress();
       overnightPref = next;
       captureClearBackoff();
-      window.__panel.overnight = overnightPref;
+      if (window.__panel) window.__panel.overnight = overnightPref;
       savePrefs();
       if (next) armOvernight(); else disarmOvernight();
       render();
@@ -1410,6 +1431,7 @@
 
   /** Press-and-hold with acceleration, so 5-minute steps can still cross an hour. */
   function bindStep(minus, plus, key, dl, dr) {
+    /** @type {number | null} */
     var timer = null;
     var speed = 0;
     function apply(delta) {
@@ -1587,10 +1609,12 @@
    */
   function renderLog() {
     if (!ui.tierCells) return;
+    /** @type {any} */
     var book = null;
     try { book = (fish() && fish().log) ? fish().log() : null; } catch (e) { book = null; }
     var today = (book && book.today) || { n: 0, shiny: 0, golden: 0, byRarity: [] };
     var rows = (logScope === 'today' ? today.byRarity : (book && book.byRarity)) || [];
+    /** @type {Record<string, number>} */
     var byTier = {};
     rows.forEach(function (r) { byTier[r.rarity] = r.n || 0; });
     ui.tierCells.forEach(function (cell) {
@@ -1643,6 +1667,7 @@
   function renderPerf() {
     if (!ui.perfLine) return;
     if (ui.accLine) {
+      /** @type {any} */
       var a = null;
       try { a = (fish() && fish().accuracy) ? fish().accuracy() : null; } catch (e) { a = null; }
       if (!a || (!a.attempts && !a.presses)) {
@@ -1669,6 +1694,7 @@
         }
       }
     }
+    /** @type {any} */
     var p = null;
     try { p = (fish() && fish().perf) ? fish().perf() : null; } catch (e) { p = null; }
     if (!p || !p.frames) { ui.perfLine.textContent = 'No frames measured yet'; ui.perfMore.textContent = ''; ui.perfRate.textContent = ''; return; }
@@ -1691,6 +1717,7 @@
 
   /* The phase chip says "paused"; it never said why or since when, and that answer lived in
    * __panel.state. This is the same fact, in the place the player is already looking. */
+  /** @satisfies {Record<PauseReason, string>} */
   var PAUSE_WHY = {
     user: 'you paused it',
     hidden: 'the tab was hidden',
@@ -1727,6 +1754,7 @@
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
+    /** @type {FishStatus | null} */
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
     // A stalled core still looks like "running" from the outside - the phase never changed, the
@@ -1735,6 +1763,7 @@
     // The core's own verdict, and only a high-severity one: the chip is the phase label the owner
     // reads at a glance, so a warning would be noise next to it. A named failure ("detector-blind",
     // "snapshot-fallback") is worth more than "running" when the bot has silently stopped working.
+    /** @type {any} */
     var doc = null;
     try { doc = (fish() && fish().doctor) ? fish().doctor() : null; } catch (e) { doc = null; }
     var alarm = !!(doc && doc.severity === 'high' && !stalled);
@@ -1767,12 +1796,14 @@
     if (!focused(ui.time_from.val)) ui.time_from.val.value = state.window.start;
     if (!focused(ui.time_to.val)) ui.time_to.val.value = state.window.stop;
 
+    /** @type {Record<string, any>} */
     var stats = (status && status.stats) || {};
 
     // A long-blind detector is not a slow bite: after the doctor's 45 s warning the session pauses
     // as cast-stall and retries, so the age of the silence has to outlive those pauses. The note
     // stays in the banner chain below, ahead of the cast-stall retry and any transient log-offline
     // line, so it remains visible until the detector sees something again.
+    /** @type {number | null} */
     var blindMs = null;
     try {
       if (window.AutoFishSession && window.AutoFishSession.blindWarning) {
@@ -1918,10 +1949,11 @@
 
   function zoneRect() {
     var f = fish();
-    if (!f || !f.zones) return null;
+    var L = window.AutoFishLayout;
+    if (!f || !f.zones || !L) return null;
     try {
       var z = f.zones();
-      return window.AutoFishLayout.unionRect([z.bubble, z.dial, z.card, z.hintZone]);
+      return L.unionRect([z.bubble, z.dial, z.card, z.hintZone]);
     } catch (e) { return null; }
   }
 
@@ -1980,7 +2012,7 @@
   }
 
   function startDrag(e) {
-    if (e.button != null && e.button !== 0) return;
+    if (!host || (e.button != null && e.button !== 0)) return;
     // The head is the drag handle AND the home of the collapse button. setPointerCapture(host)
     // retargets the later pointerup to the host, so the browser computes the click against the host
     // and the button's own click handler never runs - a dead button that looks alive. Leave
@@ -1999,7 +2031,7 @@
   }
 
   function onDrag(e) {
-    if (!dragging) return;
+    if (!dragging || !host) return;
     var x = Math.max(0, Math.min(window.innerWidth - 60, e.clientX - dragging.dx));
     var y = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dragging.dy));
     dragged = { x: x, y: y };
@@ -2039,6 +2071,7 @@
 
   /** What the row should carry when the guard gives up: enough to diagnose the night without the tab. */
   function guardDiag() {
+    /** @type {any} */
     var doctor = null;
     try { doctor = fish() && fish().doctor ? fish().doctor().verdict : null; } catch (e) {}
     return {
@@ -2085,9 +2118,11 @@
    */
   function blindDiag() {
     if (!state) return { phase: null, pauseReason: null, silenceMs: null, warning: false };
+    /** @type {FishStatus | null} */
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
     var facts = blindFacts(status);
+    /** @type {any} */
     var out = Object.assign({}, facts, { silenceMs: null, warning: false });
     try {
       if (window.AutoFishSession) {
@@ -2121,8 +2156,10 @@
         noteTickError('watchdog', new Error('no tick for ' + (Date.now() - lastTickAt) + ' ms'));
         tick();                       // re-enter it: reporting a dead loop is not enough
       }
+      /** @type {FishStatus | null} */
       var status = null;
       try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+      if (!window.AutoFishSession) return;
       if (window.AutoFishSession.coreGuard(state, status) === 'revive') {
         // A core that keeps dying is not a liveness problem any more: after three restarts in ten
         // minutes the game is the problem, and an honest stop beats restarting for hours.
@@ -2154,6 +2191,7 @@
       baseTodayMs = 0;
       state.todayMs = 0;
     }
+    /** @type {FishStatus | null} */
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
 
@@ -2226,7 +2264,7 @@
       throw e;
     }
 
-    var S = window.AutoFishSession;
+    var S = /** @type {AutoFishSessionApi} */ (window.AutoFishSession);
     var prefs = loadPrefs();
     // Resolved here, before loadToday(): captureServer() reads this, and the day's read-back would
     // otherwise see no address on an inlined install and stay silent on the very first mount.
@@ -2257,6 +2295,7 @@
     syncBudget();
 
     // A core already running from a previous session is not ours to guess about.
+    /** @type {FishStatus | null} */
     var before = null;
     try { before = fish().status ? fish().status() : null; } catch (e) {}
     if (before && before.running) { try { fish().stop(); } catch (e) {} banner = 'stopped a session that was already running'; }
@@ -2328,10 +2367,10 @@
 
   function mountAdoption() {
     // The page can drop our host on navigation inside the SPA; put it back.
-    if (mount.timer) clearInterval(mount.timer);
-    mount.timer = setInterval(function () {
+    if (/** @type {any} */ (mount).timer) clearInterval(/** @type {any} */ (mount).timer);
+    /** @type {any} */ (mount).timer = setInterval(function () {
       if (!host || !document.documentElement.contains(host)) {
-        try { document.documentElement.appendChild(host); } catch (e) {}
+        try { if (host) document.documentElement.appendChild(host); } catch (e) {}
       }
     }, 2000);
   }
@@ -2341,7 +2380,7 @@
     if (tickTimer) clearInterval(tickTimer);
     if (guardTimer) clearInterval(guardTimer);
     if (placeTimer) clearInterval(placeTimer);
-    if (mount.timer) clearInterval(mount.timer);
+    if (/** @type {any} */ (mount).timer) clearInterval(/** @type {any} */ (mount).timer);
 
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', onVisible);

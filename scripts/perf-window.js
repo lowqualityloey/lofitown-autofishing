@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * Attribute frame time on a running AutoFish build, including builds older than __fish.perf().
  *

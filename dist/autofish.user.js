@@ -16,6 +16,7 @@
 if (window.__autofishInstalled) return;
 window.__autofishInstalled = true;
 
+// @ts-check
 /**
  * lofi.town autofish v3 — continuous cast -> reel -> dial loop.
  *
@@ -57,12 +58,13 @@ window.__autofishInstalled = true;
  * the one proven to reach the game; 'space' stays available for A/B tests.
  */
 (() => {
-  if (window.__fish) { try { window.__fish.stop(); } catch (e) {} }
+  if (window.__fish && window.__fish.stop) { try { window.__fish.stop(); } catch (e) {} }
 
   /**
    * build-userscript.js replaces 'dev' with package.json's version, so the header, __fish.version
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
+   * @type {FishCore}
    */
   const F = { version: "3.9.64" };
   const now = () => performance.now();
@@ -72,13 +74,13 @@ window.__autofishInstalled = true;
    * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
    * average cost of each detector, so a change can be justified by numbers rather than a guess.
    */
-  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0, ltN: 0, ltMax: 0, ltRing: [] };
+  /** @type {FishPerf} */
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0, ltN: 0, ltMax: 0, ltRing: [], lockMemo: 0, lockMemoN: 0, lockMemoSkipped: 0, lockMemoCold: 0, lockGrab: 0, lockMask: 0, lockScan: 0, lockRefine: 0 };
   /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
    * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
    * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
    * time names itself instead of being inferred. */
-  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
    *  inside a reel (the dial persists across presses) at a third of the old read count. */
   /**
@@ -89,6 +91,7 @@ window.__autofishInstalled = true;
    * the cheapest honest witness: no readback, no timer, no allocation per entry beyond the ring.
    * 3.9.11's once-a-second stall was invisible for a day because nothing counted this.
    */
+  /** @type {PerformanceObserver | null} */
   let ltObs = null;
   function watchLongTasks() {
     if (ltObs || typeof PerformanceObserver === 'undefined') return;
@@ -474,6 +477,7 @@ window.__autofishInstalled = true;
     const delta = st.delta == null ? wrap180(0 - (st.mid || 0)) : st.delta;
     const omega = isFinite(st.omega) ? st.omega : null;
     const pred = omega == null ? delta : wrap180(delta + omega * lead);
+    /** @type {{ delta: number, pred: number, win: number, press: boolean, armAt: number | null, at: number | null, cancel: boolean, reason: string }} */
     const out = { delta, pred, win, press: false, armAt: null, at: null, cancel: false, reason: '' };
 
     if (omega == null || Math.abs(omega) < minOmega) {
@@ -889,16 +893,18 @@ window.__autofishInstalled = true;
     const rows = Array.isArray(log) ? log.filter(Boolean) : [];
     const deg = rows.map((r) => Math.abs(r.err)).filter((v) => isFinite(v)).sort((a, b) => a - b);
     const ms = rows.map((r) => (r.om ? (Math.abs(r.err) / Math.abs(r.om)) * 1000 : null))
-      .filter((v) => v != null && isFinite(v)).sort((a, b) => a - b);
+      .filter(/** @param {number | null} v @returns {v is number} */ (v) => v != null && isFinite(v)).sort((a, b) => a - b);
     const q = (arr, p) => (arr.length ? +arr[Math.min(arr.length - 1, Math.floor(p * arr.length))].toFixed(1) : null);
     const mean = (arr) => (arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null);
+    const mDeg = mean(deg);
+    const mMs = mean(ms);
     return {
       samples: rows.length,
-      meanAbsDeg: deg.length ? +mean(deg).toFixed(1) : null,
+      meanAbsDeg: mDeg != null ? +mDeg.toFixed(1) : null,
       p50Deg: q(deg, 0.5),
       p95Deg: q(deg, 0.95),
       maxDeg: deg.length ? +deg[deg.length - 1].toFixed(1) : null,
-      meanAbsMs: ms.length ? +mean(ms).toFixed(1) : null,
+      meanAbsMs: mMs != null ? +mMs.toFixed(1) : null,
       p50Ms: q(ms, 0.5),
       p95Ms: q(ms, 0.95),
       maxMs: ms.length ? +ms[ms.length - 1].toFixed(1) : null,
@@ -995,6 +1001,7 @@ window.__autofishInstalled = true;
   }
 
   function loadDialMemory() {
+    /** @type {string | null} */
     let raw = null;
     try { raw = window.localStorage.getItem(DIAL_KEY); } catch (e) { return null; }
     if (!raw) return null;
@@ -1104,7 +1111,7 @@ const SPECIES = [
   const TIER_BY_LOWER = {};
   for (const tier of TIER_ORDER) TIER_BY_LOWER[tier.toLowerCase()] = tier;
   const SPECIES_BY_NAME = {};
-  for (const row of SPECIES) SPECIES_BY_NAME[row[0].toLowerCase()] = row;
+  for (const row of SPECIES) SPECIES_BY_NAME[String(row[0]).toLowerCase()] = row;
 
   // Display names the game prints that are not names in its own fish table. Both are hard-coded
   // in the bundle: 'Pharooh Cuddlefish' prints as 'Pharaoh Cuttlefish', and a special 'Pink Canny'
@@ -1119,7 +1126,8 @@ const SPECIES = [
   for (const alias of DISPLAY_ALIASES) DISPLAY_ALIASES_BY_LOWER[alias.name.toLowerCase()] = alias;
   // Every name the worklist can explain: the catalogue rows plus the display renames. Built once,
   // because log() may be called every panel tick and this list never changes.
-  const KNOWN_NAMES = SPECIES.map((row) => row[0]).concat(DISPLAY_ALIASES.map((alias) => alias.name));
+  /** @type {string[]} */
+  const KNOWN_NAMES = SPECIES.map((row) => String(row[0])).concat(DISPLAY_ALIASES.map((alias) => alias.name));
 
   function tidyName(s) {
     return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
@@ -1269,7 +1277,10 @@ const SPECIES = [
   function trimLog(log, maxDays) {
     const keep = maxDays == null ? 60 : maxDays;
     const days = Object.keys(log.days || {}).sort();
-    while (days.length > keep) delete log.days[days.shift()];
+    while (days.length > keep) {
+      const oldest = days.shift();
+      if (oldest !== undefined) delete log.days[oldest];
+    }
     return log;
   }
 
@@ -1279,6 +1290,7 @@ const SPECIES = [
     const byRarity = TIER_ORDER.map((tier) => ({ rarity: tier, n: book.rarity[tier] || 0 }));
     for (const key of Object.keys(book.rarity)) if (TIER_ORDER.indexOf(key) < 0) byRarity.push({ rarity: key, n: book.rarity[key] });
     const names = Object.keys(book.species);
+    /** @type {{ species: string, weightKg: number, at: number } | null} */
     let best = null;
     for (const name of names) {
       const s = book.species[name];
@@ -1331,15 +1343,17 @@ const SPECIES = [
     const unknown = log.unknown || {};
     const seen = log.species || {};
     const names = Object.keys(unknown);
+    /** @type {Record<string, any[]>} */
     const kinds = { resolved: [], fragment: [], nonFish: [], open: [] };
     for (const name of names) {
       const info = speciesInfo(name);
       const base = tidyName(info.base || name);
       const lower = base.toLowerCase();
+      /** @type {string[]} */
       const candidates = [];
       if (!info.known && lower) {
         for (const row of KNOWN_NAMES) {
-          const low = row.toLowerCase();
+          const low = String(row).toLowerCase();
           if (low.indexOf(lower + ' ') === 0 || low.slice(-(lower.length + 1)) === ' ' + lower) {
             candidates.push(row);
           }
@@ -1394,9 +1408,11 @@ const SPECIES = [
    * localStorage is the whole persistence story of the one-file userscript: a few kilobytes, one
    * write per catch, never able to break the loop. A blocked or full store just means no history.
    */
+  /** @type {any} */
   let ledger = null;
   function loadLedger() {
     if (ledger) return ledger;
+    /** @type {string | null} */
     let raw = null;
     try { raw = window.localStorage.getItem(logKey()); } catch (e) { raw = null; }
     if (!raw && logProfile === 'default') {
@@ -1440,8 +1456,15 @@ const SPECIES = [
   }
 
   /* -------------------------------------------------------- surfaces ----- */
-  let uiCanvas = null, gameCanvas = null;
-  let inkBuf = null, inkCtx = null, uiBlank = 0, uiAdopted = false, uiCheckAt = 0;
+  /** @type {HTMLCanvasElement | null} */
+  let uiCanvas = null;
+  /** @type {HTMLCanvasElement | null} */
+  let gameCanvas = null;
+  /** @type {HTMLCanvasElement | null} */
+  let inkBuf = null;
+  /** @type {CanvasRenderingContext2D | null} */
+  let inkCtx = null;
+  let uiBlank = 0, uiAdopted = false, uiCheckAt = 0;
   function surfaces() {
     const cans = [...document.querySelectorAll('canvas')];
     const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
@@ -1469,6 +1492,7 @@ const SPECIES = [
       inkBuf.width = 16; inkBuf.height = 16;
       inkCtx = inkBuf.getContext('2d', { willReadFrequently: true });
     }
+    if (!inkCtx) return { ink: false, density: 0 };
     inkCtx.clearRect(0, 0, 16, 16);
     try { inkCtx.drawImage(c, 0, 0, 16, 16); } catch (e) { return { ink: false, density: 0 }; }
     const d = inkCtx.getImageData(0, 0, 16, 16).data;
@@ -1495,6 +1519,7 @@ const SPECIES = [
     // leave the bot reading the world and mistaking cream ground for a catch card.
     if (probingSurface) return false;
     probingSurface = true;
+    /** @type {any} */
     let found = null;
     try { found = probeOtherSurface(true); } finally { probingSurface = false; }
     return !!found;
@@ -1518,6 +1543,7 @@ const SPECIES = [
     if (!alt) return null;
     const cur = uiCanvas;
     uiCanvas = alt; snapAt = 0;
+    /** @type {any} */
     let found = null;
     try { if (snapshot() && bubbleGate()) found = bubbleInBox(); } catch (e) { found = null; }
     uiCanvas = cur; snapAt = 0;
@@ -1578,6 +1604,7 @@ const SPECIES = [
     F.hint = { x: Math.round(cw / 2), y: Math.round(ch * 0.42) };
     L('surface resized', { w: cw, h: ch });
   }
+  /** @type {(() => void) | null} */
   let surfaceWatch = null;
   function watchSurfaces() {
     if (surfaceWatch) return;
@@ -1626,7 +1653,15 @@ const SPECIES = [
   function glRowY(bh, y, h) { return bh - (y + h); }
   // </readback-core>
 
-  let glCanvasRef = null, glCtx = null, glBuf = null, glRow = null, glFails = 0;
+  /** @type {HTMLCanvasElement | null} */
+  let glCanvasRef = null;
+  /** @type {any} */
+  let glCtx = null;
+  /** @type {Uint8Array | null} */
+  let glBuf = null;
+  /** @type {Uint8Array | null} */
+  let glRow = null;
+  let glFails = 0;
 
   /**
    * The WebGL context that owns this canvas, or null for a 2D layer. Cached per canvas: a 2D
@@ -1647,7 +1682,10 @@ const SPECIES = [
     return glCtx;
   }
 
-  let ubuf = null, uctx = null;
+  /** @type {HTMLCanvasElement | null} */
+  let ubuf = null;
+  /** @type {CanvasRenderingContext2D | null} */
+  let uctx = null;
   /** The allocating 2D read: the only reader for a plain 2D surface and the GL path's fallback. */
   function readUI2d(x, y, w, h) {
     if (!ubuf) {
@@ -1655,6 +1693,7 @@ const SPECIES = [
       ubuf.width = 520; ubuf.height = 520;
       uctx = ubuf.getContext('2d', { willReadFrequently: true });
     }
+    if (!uctx || !uiCanvas) return null;
     if (ubuf.width < w || ubuf.height < h) {
       ubuf.width = Math.max(ubuf.width, w);
       ubuf.height = Math.max(ubuf.height, h);
@@ -1802,7 +1841,9 @@ const SPECIES = [
           if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) cols[x]++;
         }
       }
-      let s = -1, best = null;
+      let s = -1;
+      /** @type {any} */
+      let best = null;
       for (let x = 0; x <= r.w; x++) {
         const on = x < r.w && cols[x] > 3;
         if (on && s < 0) s = x;
@@ -1878,8 +1919,24 @@ const SPECIES = [
    * resized window degrades to doing nothing rather than tapping blind.
    */
   const SDOWN = 4;
-  let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
-  let sgl = null, sglCanvas = null, sglTex = null, sglFbo = null, sbytes = null, sglOff = false, sglChecked = false, sglFails = 0;
+  /** @type {HTMLCanvasElement | null} */
+  let sbuf = null;
+  /** @type {CanvasRenderingContext2D | null} */
+  let sctx = null;
+  /** @type {any} */
+  let sdata = null;
+  let sw = 0, sh = 0;
+  /** @type {any} */
+  let sgl = null;
+  /** @type {any} */
+  let sglTex = null;
+  /** @type {any} */
+  let sglFbo = null;
+  /** @type {HTMLCanvasElement | null} */
+  let sglCanvas = null;
+  /** @type {Uint8Array | null} */
+  let sbytes = null;
+  let sglOff = false, sglChecked = false, sglFails = 0;
 
   /**
    * The quarter-scale copy WITHOUT a fresh array every tick.
@@ -1933,7 +1990,8 @@ const SPECIES = [
         if (++sglFails >= 3) { sglOff = true; L('downscale readback', { via: '2d', why: 'context lost' }); }
         return null;
       }
-      if (sglCanvas.width !== w || sglCanvas.height !== h) {
+      if (!sglCanvas || sglCanvas.width !== w || sglCanvas.height !== h) {
+        if (!sglCanvas) return null;
         sglCanvas.width = w; sglCanvas.height = h;
         sbytes = null;
         if (!sglAttach(w, h)) {
@@ -1949,7 +2007,7 @@ const SPECIES = [
       sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
       sgl.readPixels(0, 0, w, h, sgl.RGBA, sgl.UNSIGNED_BYTE, sbytes);
       if (sgl.getError() !== sgl.NO_ERROR) return null;
-      if (!sglChecked) {
+      if (!sglChecked && sctx) {
         sglChecked = true;
         const ref = sctx.getImageData(0, 0, w, h).data;
         let bad = 0, seen = 0;
@@ -1979,6 +2037,7 @@ const SPECIES = [
       sctx = sbuf.getContext('2d', { willReadFrequently: true });
     }
     if (sbuf.width !== w || sbuf.height !== h) { sbuf.width = w; sbuf.height = h; }
+    if (!sctx) return false;
     sctx.clearRect(0, 0, w, h);
     try { sctx.drawImage(uiCanvas, 0, 0, w * SDOWN, h * SDOWN, 0, 0, w, h); } catch (e) { return false; }
     const glBytes = downscaleGl(w, h);
@@ -2044,7 +2103,9 @@ const SPECIES = [
       seen[p0] = 1;
       let x0 = w, y0 = h, x1 = 0, y1 = 0, count = 0;
       while (stack.length) {
-        const p = stack.pop(), x = p % w, y = (p / w) | 0;
+        const p = stack.pop();
+        if (p === undefined) continue;
+        const x = p % w, y = (p / w) | 0;
         count++;
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
@@ -2067,6 +2128,7 @@ const SPECIES = [
   }
   // </scan-core>
 
+  /** @type {Uint8Array | null} */
   let seenBuf = null;
   function blobs(match, minPx) {
     const total = sw * sh;
@@ -2097,6 +2159,7 @@ const SPECIES = [
     promptAt = t;
     if (F.geo) return null;                       // a dial on screen means the prompt is already gone
     if (!snapshot()) return null;                 // shared quarter read, no second copy of the layer
+    /** @type {any} */
     let best = null;
     const comps = blobs(WHT_S, 30);
     for (let i = 0; i < comps.length; i++) {
@@ -2323,6 +2386,7 @@ const SPECIES = [
    */
   const CARD_MIN_W = 180, CARD_MIN_H = 250, CARD_MAX_W = 760, CARD_MAX_H = 820;
   let shapeAt = 0;
+  /** @type {Int32Array | null} */
   let cardI = null;                 // the integral image is reused: this runs up to 2.5x/s
   function cardByShape() {
     const t = now();
@@ -2333,6 +2397,7 @@ const SPECIES = [
     const need = stride * (sh + 1);
     // Row 0 and column 0 are never written by the pass below, so a reused buffer keeps its zeros.
     if (!cardI || cardI.length !== need) cardI = new Int32Array(need);
+    /** @type {Int32Array} */
     const I = cardI;
     for (let y = 0; y < sh; y++) {
       let row = 0;
@@ -2344,6 +2409,7 @@ const SPECIES = [
     const sum = (x0, y0, x1, y1) => I[y1 * stride + x1] - I[y0 * stride + x1] - I[y1 * stride + x0] + I[y0 * stride + x0];
     const CW = Math.ceil(CARD_MIN_W / SDOWN), CH = Math.ceil(CARD_MIN_H / SDOWN);
     if (sw < CW || sh < CH) return null;
+    /** @type {{ x: number, y: number, n: number } | null} */
     let seed = null;
     for (let y = 0; y + CH <= sh; y++) {
       for (let x = 0; x + CW <= sw; x++) {
@@ -2366,7 +2432,7 @@ const SPECIES = [
     }
     const W = (x1 - x0) * SDOWN, H = (y1 - y0) * SDOWN;
     if (W < CARD_MIN_W || W > CARD_MAX_W || H < CARD_MIN_H || H > CARD_MAX_H) return null;
-    if (W * H > uiCanvas.width * uiCanvas.height * 0.7) return null;    // the layer itself is opaque, not a card
+    if (!uiCanvas || W * H > uiCanvas.width * uiCanvas.height * 0.7) return null;    // the layer itself is opaque, not a card
     const r = readUI(x0 * SDOWN, y0 * SDOWN, W, H);
     if (!r) return null;
     const ink = inkMix(r);
@@ -2639,10 +2705,12 @@ const SPECIES = [
    * allocation on its own - the same large-object pressure that made the whole page hitch.
    * Only one mask is live at a time (every caller finishes with it before the next read).
    */
+  /** @type {Uint8Array | null} */
   let rimMaskBuf = null;
   function rimMask(r) {
     const d = r.d, n = r.w * r.h;
     if (!rimMaskBuf || rimMaskBuf.length < n) rimMaskBuf = new Uint8Array(n);
+    /** @type {Uint8Array} */
     const m = rimMaskBuf;
     m.fill(0, 0, n);
     for (let p = 0, i = 0; p < n; p++, i += 4) if (isRim(d, i)) m[p] = 1;
@@ -2697,6 +2765,7 @@ const SPECIES = [
    * 2026-10-29). 15/20, not 17 - see the note on the gate below.
    */
   function coarseScan(mask, rw, rh, ox, oy, hintX, hintY, half, step, C, S) {
+    /** @type {{ cx: number, cy: number, R: number, score: number } | null} */
     let best = null;
     for (let dy = -half; dy <= half; dy += step) {
       for (let dx = -half; dx <= half; dx += step) {
@@ -2726,7 +2795,12 @@ const SPECIES = [
    * no closure at all (the direction tables are passed in for exactly that reason). If the page's CSP
    * forbids eval, the call throws and the literal function is used instead: same answer, old cost.
    */
-  let scanDial = coarseScan, scanCompiled = null, scanCompileError = null;
+  /** @type {any} */
+  let scanDial = coarseScan;
+  /** @type {any} */
+  let scanCompiled = null;
+  /** @type {string | null} */
+  let scanCompileError = null;
   try {
     scanCompiled = new Function('"use strict"; return (' + coarseScan.toString() + ');')();
     scanDial = scanCompiled;
@@ -2840,6 +2914,7 @@ const SPECIES = [
       const r = readUI(gx - hw, gy - hw, S, S);
       if (!r) continue;
       const mask = rimMask(r);
+      /** @type {{ cx: number, cy: number, R: number, score: number } | null} */
       let best = null;
       for (const off of ANNULUS) {
         const cx = Math.round(gx + off.dx);
@@ -3176,6 +3251,7 @@ const SPECIES = [
   }
 
   /* One list, not a five-deep ternary: a new verdict has to name its counter here. */
+  /** @satisfies {Record<DialVerdict, string>} */
   const DIAL_COUNTER = {
     hit: 'hits', miss: 'misses', ghost: 'ghosts', skipped: 'skipped', stalled: 'stalled', 'no-press': 'noPress',
   };
@@ -3804,6 +3880,7 @@ const SPECIES = [
    */
   // Both scratch buffers grow once to the largest window and are reused on every probe: this runs
   // while the core is paused, on a page the owner is using, so a fresh buffer per pass is not free.
+  /** @type {Uint8Array | null} */
   let rectSeen = null, rectStack = null;
   function uiRects() {
     if (!uiCanvas || !uiCanvas.width) return null;
@@ -3835,12 +3912,16 @@ const SPECIES = [
       }
       if (seed < 0) { out.push(fallback); continue; }
       const n = wr.w * wr.h;
-      if (!rectSeen || rectSeen.length < n) {
+      if (!rectSeen || !rectStack || rectSeen.length < n) {
         rectSeen = new Uint8Array(n);
+        // @ts-expect-error tests/promptmask.test.js asserts 'let rectSeen = null, rectStack = null;' verbatim
         rectStack = new Int32Array(n);   // each pixel is pushed at most once, so n entries suffice
       }
+      /** @type {Uint8Array} */
       const seen = rectSeen;
       seen.fill(0, 0, n);
+      /** @type {Int32Array} */
+      // @ts-expect-error rectStack initialized above alongside rectSeen (shared decl kept verbatim for promptmask.test.js)
       const stack = rectStack;
       let top = 0;
       stack[top++] = seed;
@@ -4800,6 +4881,7 @@ const SPECIES = [
     const p = F.perf();
     // The panel owns guard/blind state. A missing hook (an older panel) or a throwing one must
     // not make exportRun fail: the export is the night's only record.
+    /** @type {any} */
     let panelState = null;
     try {
       panelState = typeof F.exportDiag === 'function' ? F.exportDiag() : null;
@@ -5012,9 +5094,14 @@ const SPECIES = [
   return { installed: F.version, ui: !!uiCanvas, game: !!gameCanvas };
 })();
 
+// @ts-check
 /* session.js — pure session state machine for the AutoFish panel.
  * No DOM, no timers, no I/O: the panel feeds facts in and executes the actions out.
  * Browser global: AutoFishSession. CommonJS: require('./session.js').
+ */
+/**
+ * @param {any} root
+ * @param {() => AutoFishSessionApi} factory
  */
 (function (root, factory) {
   var api = factory();
@@ -5032,7 +5119,12 @@ const SPECIES = [
     window: { on: false, start: '21:00', stop: '23:00' }
   };
 
+  /**
+   * @param {Partial<SessionState>} [overrides]
+   * @returns {SessionState}
+   */
   function createState(overrides) {
+    /** @type {SessionState} */
     var s = {
       phase: 'idle',
       durationMs: DEFAULTS.durationMs,
@@ -5071,35 +5163,53 @@ const SPECIES = [
     if (overrides) {
       for (var k in overrides) {
         if (!Object.prototype.hasOwnProperty.call(overrides, k)) continue;
-        if (k === 'window') {
+        if (k === 'window' && overrides.window) {
           s.window = { on: !!overrides.window.on, start: overrides.window.start, stop: overrides.window.stop };
         } else {
-          s[k] = overrides[k];
+          /** @type {any} */ (s)[k] = /** @type {any} */ (overrides)[k];
         }
       }
     }
     return s;
   }
 
+  /**
+   * @param {SessionState} state
+   * @returns {SessionState}
+   */
   function clone(state) {
+    /** @type {any} */
     var s = {};
-    for (var k in state) if (Object.prototype.hasOwnProperty.call(state, k)) s[k] = state[k];
+    for (var k in state) if (Object.prototype.hasOwnProperty.call(state, k)) s[k] = /** @type {any} */ (state)[k];
     s.window = { on: state.window.on, start: state.window.start, stop: state.window.stop };
     return s;
   }
 
+  /**
+   * @param {number} at
+   * @returns {number}
+   */
   function minutesOfDay(at) {
     var d = new Date(at);
     return d.getHours() * 60 + d.getMinutes();
   }
 
+  /**
+   * @param {string} hhmm
+   * @returns {number}
+   */
   function parseClock(hhmm) {
     var m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm));
     if (!m) return 0;
     return (Number(m[1]) % 24) * 60 + Number(m[2]);
   }
 
-  /** Is 'at' inside the configured clock window (local time)? A stop before start crosses midnight. */
+  /**
+   * Is 'at' inside the configured clock window (local time)? A stop before start crosses midnight.
+   * @param {ScheduleWindow | null | undefined} win
+   * @param {number} at
+   * @returns {boolean}
+   */
   function withinWindow(win, at) {
     if (!win || !win.on) return true;
     var start = parseClock(win.start);
@@ -5110,19 +5220,33 @@ const SPECIES = [
     return now >= start || now < stop;            // crosses midnight
   }
 
+  /**
+   * @param {SessionPhase} phase
+   * @returns {boolean}
+   */
   function isActive(phase) {
     return phase === 'running' || phase === 'paused' || phase === 'waiting';
   }
 
-  /** Local midnight for 'at'. A run can outlive the day it began, and only the time after this
-   * instant belongs to the new day's cap. */
+  /**
+   * Local midnight for 'at'. A run can outlive the day it began, and only the time after this
+   * instant belongs to the new day's cap.
+   * @param {number} at
+   * @returns {number}
+   */
   function localDayStart(at) {
     var d = new Date(at);
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   }
 
-  /** Credit [from, at] as fishing. The whole stretch is session time, but only its tail after local
-   * midnight is today's, so one night that crosses midnight cannot spend two days' cap. */
+  /**
+   * Credit [from, at] as fishing. The whole stretch is session time, but only its tail after local
+   * midnight is today's, so one night that crosses midnight cannot spend two days' cap.
+   * @param {SessionState} s
+   * @param {number} from
+   * @param {number} at
+   * @returns {void}
+   */
   function credit(s, from, at) {
     var delta = Math.max(0, at - from);
     if (!delta) return;
@@ -5137,7 +5261,12 @@ const SPECIES = [
     s.fishingMs += delta;
   }
 
-  /** A paused run can cross midnight without fishing a frame; its carry still moves. */
+  /**
+   * A paused run can cross midnight without fishing a frame; its carry still moves.
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {void}
+   */
   function rollDay(s, at) {
     var day = localDayStart(at);
     if (!s.dayStartMs) s.dayStartMs = day;
@@ -5147,11 +5276,22 @@ const SPECIES = [
     }
   }
 
-  /** How much of the live session may spend the current day's cap. */
+  /**
+   * How much of the live session may spend the current day's cap.
+   * @param {SessionState} s
+   * @returns {number}
+   */
   function todayFishingMs(s) {
     return Math.max(0, (s.fishingMs || 0) - (s.carriedMs || 0));
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @param {string | null | undefined} reason
+   * @param {Record<string, unknown> | null} [diag]
+   * @returns {SessionAction[]}
+   */
   function stopSession(s, at, reason, diag) {
     if (s.phase === 'running' && s.lastTickAt != null) credit(s, s.lastTickAt, at);
     rollDay(s, at);
@@ -5185,6 +5325,10 @@ const SPECIES = [
   var NO_CATCH_MS = 10 * 60 * 1000;   // nothing bites for this long -> check the page
   var CAST_STALL_MS = 90 * 1000;       // post-catch, no prompt and no dial this long -> the cast never landed
   // cast-stall, player-block and profile-open share no-catch's bounded retry: pause, retry, then stop.
+  /**
+   * @param {PauseReason | null} reason
+   * @returns {reason is 'no-catch' | 'cast-stall' | 'player-block' | 'profile-open'}
+   */
   function retryable(reason) {
     return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block' || reason === 'profile-open';
   }
@@ -5199,22 +5343,42 @@ const SPECIES = [
   var SEAT_STOP_MS = 30 * 60 * 1000;   // an unseated character cannot bite; give up rather than sit there forever
   var SEAT_OVERRIDE_MS = 15 * 1000;    // a Resume or retry runs this long despite the seat fact
 
-  /** A hold the user asked for, not a detector stall. Its time does not count as blindness. */
+  /**
+   * A hold the user asked for, not a detector stall. Its time does not count as blindness.
+   * @param {PauseReason | null} reason
+   * @returns {boolean}
+   */
   function deliberatePause(reason) {
     return reason === 'hidden' || reason === 'user' || reason === 'seat' || reason === 'focus';
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {void}
+   */
   function beginBlindPause(s, at) {
     if (s.blindPauseAt == null) s.blindPauseAt = at;
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {void}
+   */
   function endBlindPause(s, at) {
     if (s.blindPauseAt == null) return;
     s.blindPauseMs = (s.blindPauseMs || 0) + Math.max(0, at - s.blindPauseAt);
     s.blindPauseAt = null;
   }
 
-  /** A new prompt or dial starts a fresh blind interval, so earlier deliberate pauses no longer count. */
+  /**
+   * A new prompt or dial starts a fresh blind interval, so earlier deliberate pauses no longer count.
+   * @param {SessionState} s
+   * @param {Extract<SessionFact, { type: 'tick' }>} fact
+   * @param {number} at
+   * @returns {void}
+   */
   function observeBlindSignals(s, fact, at) {
     var bubble = typeof fact.sinceBubbleMs === 'number' ? fact.sinceBubbleMs : null;
     var dial = typeof fact.sinceDialMs === 'number' ? fact.sinceDialMs : null;
@@ -5228,7 +5392,11 @@ const SPECIES = [
     }
   }
 
-  /** A new core has no pause history, even when a watchdog started it without a reducer action. */
+  /**
+   * A new core has no pause history, even when a watchdog started it without a reducer action.
+   * @param {SessionState} s
+   * @returns {SessionState}
+   */
   function clearBlindPause(s) {
     s.blindPauseMs = 0;
     s.blindPauseAt = null;
@@ -5238,6 +5406,12 @@ const SPECIES = [
     return s;
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @param {PauseReason} reason
+   * @returns {ReduceResult}
+   */
   function paused(s, at, reason) {
     var wasDeliberate = deliberatePause(s.pauseReason);
     var willBeDeliberate = deliberatePause(reason);
@@ -5255,6 +5429,7 @@ const SPECIES = [
     // Keeping it alive is only safe if it cannot ACT while it waits: an unthrottled cast retry puts
     // a line in the water, which removes the prompt the pause is waiting for, so the two would wait
     // forever (measured live 2026-11-02: 69 retries, paused on seat, line out, no recovery).
+    /** @type {SessionAction[]} */
     var actions = [];
     if (reason === 'seat') {
       s.seatSince = at;
@@ -5268,6 +5443,11 @@ const SPECIES = [
     return { state: s, actions: actions };
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {ReduceResult}
+   */
   function runningAgain(s, at) {
     var wasSeat = s.pauseReason === 'seat';
     if (deliberatePause(s.pauseReason)) endBlindPause(s, at);
@@ -5279,10 +5459,17 @@ const SPECIES = [
     s.hiddenSince = null;
     s.seatSince = null;
     s.lastTickAt = at;
+    /** @type {SessionAction[]} */
     var actions = wasSeat ? [{ type: 'holdCasts', on: false }] : [];
     return { state: s, actions: actions.concat([{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }]) };
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @param {Extract<SessionFact, { type: 'tick' }>} fact
+   * @returns {ReduceResult}
+   */
   function tickPaused(s, at, fact) {
     if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
     rollDay(s, at);
@@ -5353,9 +5540,13 @@ const SPECIES = [
     return { state: s, actions: [] };
   }
 
+  /**
+   * @param {SessionState} state
+   * @param {SessionFact} fact
+   * @returns {ReduceResult}
+   */
   function reduce(state, fact) {
     var s = clone(state);
-    var actions = [];
     // A fact without an explicit clock used to fall back to 0, which made the next real tick credit
     // (now - 0) milliseconds of fishing time and stop the session as a daily-cap hit. Fall back to
     // the wall clock instead; every caller that cares passes its own at.
@@ -5365,14 +5556,14 @@ const SPECIES = [
       var patch = fact.patch || {};
       for (var k in patch) {
         if (!Object.prototype.hasOwnProperty.call(patch, k)) continue;
-        if (k === 'window') {
+        if (k === 'window' && patch.window) {
           s.window = {
             on: patch.window.on === undefined ? s.window.on : !!patch.window.on,
             start: patch.window.start === undefined ? s.window.start : patch.window.start,
             stop: patch.window.stop === undefined ? s.window.stop : patch.window.stop
           };
         } else {
-          s[k] = patch[k];
+          /** @type {any} */ (s)[k] = /** @type {any} */ (patch)[k];
         }
       }
       return { state: s, actions: [{ type: 'persist' }] };
@@ -5489,6 +5680,7 @@ const SPECIES = [
       // the user act (reel, or let the retry cast) before the seat hold is re-applied.
       s.seatOverrideUntil = fromSeat ? at + SEAT_OVERRIDE_MS : null;
       s.lastTickAt = at;
+      /** @type {SessionAction[]} */
       var actions = fromSeat ? [{ type: 'holdCasts', on: false }] : [];
       return { state: s, actions: actions.concat([{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }]) };
     }
@@ -5643,7 +5835,7 @@ const SPECIES = [
       }
 
       // 7. nothing has bitten in a while
-      var sinceCatch = at - (s.lastCatchAt == null ? s.startedAt : s.lastCatchAt);
+      var sinceCatch = at - (s.lastCatchAt == null ? (s.startedAt || 0) : s.lastCatchAt);
       // A profile modal open over the game blocks prompts without stopping the clock: pause
       // with a named reason instead of burning the session as a generic no-catch.
       // a profile modal open over the game blocks prompts and swallows inputs: pause first,
@@ -5678,6 +5870,9 @@ const SPECIES = [
    * measured live 2026-11-24: `phase: running`, `fishingMs` no longer moving, core `running: false`.
    * This predicate is pure so the zombie case is testable without a page; panel.js asks it every
    * 5 s from a timer that is separate from the tick loop.
+   * @param {SessionState | null | undefined} state
+   * @param {CoreStatusLike | null | undefined} status
+   * @returns {'revive' | null}
    */
   function coreGuard(state, status) {
     if (!state || state.phase !== 'running') return null;
@@ -5693,8 +5888,12 @@ const SPECIES = [
    * the game (or the page) is broken, and restarting it for hours hides that. The window is rolling
    * and times are pruned on every call; a refused revive is not recorded, so a stop at the cap keeps
    * the three timestamps that caused it. Pure, so the cap has a unit test.
+   * @param {number[] | null | undefined} times
+   * @param {number} now
+   * @returns {ReviveGateResult}
    */
   function reviveGate(times, now) {
+    /** @type {number[]} */
     var kept = [];
     (times || []).forEach(function (t) {
       if (typeof t === 'number' && now - t < REVIVE_WINDOW_MS) kept.push(t);
@@ -5716,6 +5915,8 @@ const SPECIES = [
    * panel's visibility return, are subtracted; cast-stall and no-catch are detector failures and
    * still count. Returns the raw silence age, or null; blindWarning applies the three-minute
    * boundary. Pure, so both the boundary and the raw age are testable.
+   * @param {BlindFacts | null | undefined} s
+   * @returns {number | null}
    */
   function blindSilence(s) {
     if (!s || s.running !== true || s.stalled || s.visible === false) return null;
@@ -5727,6 +5928,7 @@ const SPECIES = [
     var runAge = typeof s.runAgeMs === 'number' ? s.runAgeMs : null;
     var cap = runAge != null ? runAge : sessionAge;
     if (sessionAge != null && cap != null) cap = Math.min(cap, sessionAge);
+    /** @type {number[]} */
     var ages = [];
     if (typeof s.sinceBubbleMs === 'number') ages.push(s.sinceBubbleMs);
     if (typeof s.sinceDialMs === 'number') ages.push(s.sinceDialMs);
@@ -5737,7 +5939,11 @@ const SPECIES = [
     return blindMs;
   }
 
-  /** The warning boundary: the same silence, or null while it is still a plausible bite wait. */
+  /**
+   * The warning boundary: the same silence, or null while it is still a plausible bite wait.
+   * @param {BlindFacts | null | undefined} s
+   * @returns {number | null}
+   */
   function blindWarning(s) {
     var blindMs = blindSilence(s);
     return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
@@ -5746,8 +5952,13 @@ const SPECIES = [
   return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindSilence: blindSilence, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
 });
 
+// @ts-check
 /* layout.js — where the panel may sit so it never covers the fishing UI.
  * Pure geometry: no DOM. Browser global AutoFishLayout, CommonJS require('./layout.js').
+ */
+/**
+ * @param {any} root
+ * @param {() => AutoFishLayoutApi} factory
  */
 (function (root, factory) {
   var api = factory();
@@ -5758,18 +5969,33 @@ const SPECIES = [
 
   var MARGIN = 12;
 
+  /**
+   * @param {Rect | null | undefined} rect
+   * @param {number} by
+   * @returns {Rect | null}
+   */
   function inflate(rect, by) {
     if (!rect) return null;
     return { x: rect.x - by, y: rect.y - by, w: rect.w + by * 2, h: rect.h + by * 2 };
   }
 
-  /** Strict overlap: rects that only share an edge do not intersect. */
+  /**
+   * Strict overlap: rects that only share an edge do not intersect.
+   * @param {Rect | null | undefined} a
+   * @param {Rect | null | undefined} b
+   * @returns {boolean}
+   */
   function intersects(a, b) {
     if (!a || !b) return false;
     return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
   }
 
+  /**
+   * @param {Array<Rect | null | undefined>} rects
+   * @returns {Rect | null}
+   */
   function unionRect(rects) {
+    /** @type {Rect | null} */
     var out = null;
     for (var i = 0; i < rects.length; i++) {
       var r = rects[i];
@@ -5785,6 +6011,13 @@ const SPECIES = [
     return out;
   }
 
+  /**
+   * @param {Point} pos
+   * @param {Size} size
+   * @param {Size} viewport
+   * @param {number} margin
+   * @returns {Rect}
+   */
   function clamp(pos, size, viewport, margin) {
     var maxX = Math.max(margin, viewport.w - size.w - margin);
     var maxY = Math.max(margin, viewport.h - size.h - margin);
@@ -5800,6 +6033,8 @@ const SPECIES = [
    * Choose a panel position. Returns { x, y, w, h } or the string 'pill'.
    * Candidate order: the preferred spot, the four corners, then the four sides of the
    * exclusion rect — first one that fits the viewport and clears the game wins.
+   * @param {PlaceOpts} opts
+   * @returns {PlaceResult}
    */
   function place(opts) {
     var size = { w: opts.panel.w, h: opts.panel.h };
@@ -5817,6 +6052,7 @@ const SPECIES = [
     var bottom = viewport.h - size.h - margin;
     // Top-left first: the game's coin and upgrade controls live in the top-right strip, and the
     // panel swallows pointer events, so parking over them would make them unclickable.
+    /** @type {Point[]} */
     var corners = [
       { x: margin, y: top },
       { x: margin, y: bottom },
@@ -5824,6 +6060,7 @@ const SPECIES = [
       { x: right, y: top }
     ];
 
+    /** @type {Point[]} */
     var candidates = [];
     if (opts.preferred) candidates.push({ x: opts.preferred.x, y: opts.preferred.y });
     candidates = candidates.concat(corners);
@@ -5846,6 +6083,7 @@ const SPECIES = [
   return { MARGIN: MARGIN, inflate: inflate, intersects: intersects, unionRect: unionRect, place: place };
 });
 
+// @ts-check
 /* panel.js — the AutoFish control panel, injected into the lofi.town page.
  *
  * Loaded by the bookmarklet (or the userscript) from fishserve. It pulls autofish.js, session.js
@@ -5865,7 +6103,7 @@ const SPECIES = [
   // null when the panel was inlined in the userscript: there is no server to talk to, and the
   // session clock must not depend on one. Only the bookmarklet path (a real <script src>) has one.
   var BASE = (function () {
-    var s = document.currentScript;
+    var s = /** @type {HTMLScriptElement | null} */ (document.currentScript);
     if (s && s.src) { try { return new URL(s.src).origin; } catch (e) { /* fall through */ } }
     return null;
   })();
@@ -5876,27 +6114,36 @@ const SPECIES = [
   var BUDGET_PREFIX = BUDGET_KEY + ':';
   var TICK_MS = 1000;
 
-  var state = null;
+  /** @type {SessionState} */
+  var state = /** @type {any} */ (null);
   var logScope = 'all';       // the rarity strip shows all-time or today
   var baseTodayMs = 0;        // fishing minutes already logged today before this session
   var budgetAt = 0;           // last periodic write of BUDGET_KEY
   var budgetDay = '';         // the local day BUDGET_KEY belongs to, for a rollover mid-run
   var banner = '';
+  /** @type {number | null} */
   var tickTimer = null;
+  /** @type {number | null} */
   var placeTimer = null;
   var heartbeatAt = 0;
   var diagSent = false;       // one UI frame per session, when a run never sees a prompt
   var diagAt = 0;
+  /** @type {number | null} */
   var guardTimer = null;      // its own timer: a throw inside tick() must not also disable the check
   var TICK_GUARD_MS = 5000;
   var lastTickAt = 0;         // when tick() was last entered
+  /** @type {number | null} */
   var hiddenAt = null;        // wall clock when the tab went hidden; visibility events survive timer throttling
   var tickErrors = 0;
   var lastTickError = '';
   var zombieRevives = 0;
+  /** @type {number[]} */
   var reviveTimes = [];       // rolling window for the crash-loop cap; an accepted Start clears it
+  /** @type {WakeLockSentinel | null} */
   var wakeSentinel = null;
+  /** @type {Point | null} */
   var dragged = null;         // {x, y} once the user moved the panel
+  /** @type {any} */
   var dragging = null;
   var placed = false;         // keep a clear position instead of snapping back when a card clears
   var collapsed = false;
@@ -5904,14 +6151,18 @@ const SPECIES = [
   // the panel again inside the same place() call - a pill that looks clickable and does nothing.
   // An overlapping panel the owner asked for beats a panel that refuses to open.
   var userExpanded = false;
+  /** @type {HTMLDivElement | null} */
   var host = null;
+  /** @type {ShadowRoot | null} */
   var root = null;
+  /** @type {Record<string, any>} */
   var ui = {};
 
   /* ------------------------------------------------------------- deps ----- */
 
+  /** @param {string} src @returns {Promise<void>} */
   function loadScriptFrom(src) {
-    return new Promise(function (res, rej) {
+    return new Promise(/** @param {(v?: void) => void} res */ function (res, rej) {
       var s = document.createElement('script');
       s.src = src;
       s.onload = function () { res(); };
@@ -5936,7 +6187,7 @@ const SPECIES = [
   /* ------------------------------------------------------------ prefs ----- */
 
   function readJSON(key, fallback) {
-    try { var v = JSON.parse(localStorage.getItem(key)); return v || fallback; } catch (e) { return fallback; }
+    try { var v = JSON.parse(localStorage.getItem(key) || 'null'); return v || fallback; } catch (e) { return fallback; }
   }
   function writeJSON(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {}
@@ -5965,6 +6216,7 @@ const SPECIES = [
   }
 
   function savePrefs() {
+    if (!window.__panel) window.__panel = {};
     writeJSON(PREF_KEY, {
       durationMs: state.durationMs,
       cooldownMs: state.cooldownMs,
@@ -6046,6 +6298,7 @@ const SPECIES = [
   var UPSELL_ID = 'focus-fishing-upgrade-description';
   var UPSELL_ATTR = 'data-autofish-upsell';
   var upsellOn = false;
+  /** @type {number | null} */
   var upsellTimer = null;
 
   function upsellRoot() {
@@ -6054,7 +6307,9 @@ const SPECIES = [
     // display:none from our own tag would empty getClientRects() and make the sweep untag the root
     // it just tagged, i.e. show the modal again every 500 ms. A root we are hiding still counts.
     if (!desc.closest('[' + UPSELL_ATTR + ']') && !desc.getClientRects().length) return null;
+    /** @type {HTMLElement | null} */
     var node = desc;
+    /** @type {HTMLElement | null} */
     var top = null;
     while (node && node !== document.documentElement) {
       var style = getComputedStyle(node);
@@ -6210,11 +6465,11 @@ const SPECIES = [
   function applyPromptMask() {
     // The core finds every element on the UI layer itself - the prompt bubble and the lure button -
     // so the panel only says "hide it while the hold is engaged", never where it is.
-    try { window.__fish.setPromptMask({ resolve: true }); } catch (e) {}
+    try { if (window.__fish && window.__fish.setPromptMask) window.__fish.setPromptMask({ resolve: true }); } catch (e) {}
   }
 
   function clearPromptMask() {
-    try { if (window.__fish.setPromptMask) window.__fish.setPromptMask(null); } catch (e) {}
+    try { if (window.__fish && window.__fish.setPromptMask) window.__fish.setPromptMask(null); } catch (e) {}
   }
 
   /* ------------------------------------------------- overnight capture ---- */
@@ -6385,7 +6640,7 @@ const SPECIES = [
     if (why === 'post' || why === 'stale') {
       // Its timer is still running, so forcing one snapshot retries the POST without loading a
       // second sampler over the first.
-      try { window.__overnight.now(); } catch (e) {}
+      try { if (window.__overnight) window.__overnight.now(); } catch (e) {}
       return;
     }
     armOvernight();
@@ -6523,7 +6778,8 @@ const SPECIES = [
 
   /* ---------------------------------------------------------- actions ----- */
 
-  function fish() { return window.__fish; }
+  /** @returns {FishApi} */
+  function fish() { return /** @type {FishApi} */ (/** @type {unknown} */ (window.__fish)); }
 
   /** The core latch, including the short window before the session reducer has seen it. */
   function resultMissingNow() {
@@ -6611,6 +6867,7 @@ const SPECIES = [
     return true;
   }
 
+  /** @satisfies {Record<SessionAction['type'], (a: any) => void>} */
   var RUNNERS = {
     startCore: function (a) {
       // A new core has a fresh detector. The watchdog starts it without a reducer action, so clear
@@ -6659,7 +6916,7 @@ const SPECIES = [
     // Only an accepted Start begins a new crash-loop budget. A refused Start during cooldown used
     // to clear the window too, erasing the evidence of the loop that put the session there.
     var startedAt = state.startedAt;
-    var out = window.AutoFishSession.reduce(state, fact);
+    var out = /** @type {AutoFishSessionApi} */ (window.AutoFishSession).reduce(state, fact);
     if (fact.type === 'start' && out.state.startedAt !== startedAt) reviveTimes = [];
     state = out.state;
     apply(out.actions);
@@ -6952,6 +7209,7 @@ const SPECIES = [
     // reload of the game still shows yesterday's ledger.
     var logBox = el('div', 'logbox');
     var strip = el('div', 'strip');
+    /** @type {Array<{ name: string, num: HTMLElement, cell?: HTMLElement }>} */
     var tierCells = TIER_NAMES.map(function (name) {
       var cell = el('div', 'tier');
       var num = el('b', null, '0');
@@ -7038,9 +7296,9 @@ const SPECIES = [
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
     ['pointerdown', 'pointerup', 'click', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'wheel'].forEach(function (type) {
-      host.addEventListener(type, function (e) { e.stopPropagation(); }, false);
+      if (host) host.addEventListener(type, function (e) { e.stopPropagation(); }, false);
     });
-    host.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    if (host) host.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
     min.addEventListener('click', function () { userExpanded = false; setCollapsed(true); });
     pill.addEventListener('click', function () { userExpanded = true; setCollapsed(false); });
@@ -7107,12 +7365,12 @@ const SPECIES = [
       savePrefs();
     });
     reloadToggle.addEventListener('click', function () {
-      window.__panel.resumeAfterReload = !window.__panel.resumeAfterReload;
+      if (window.__panel) window.__panel.resumeAfterReload = !window.__panel.resumeAfterReload;
       savePrefs();
       render();
     });
     postToggle.addEventListener('click', function () {
-      window.__panel.postCatches = !window.__panel.postCatches;
+      if (window.__panel) window.__panel.postCatches = !window.__panel.postCatches;
       savePrefs();
       render();
     });
@@ -7126,7 +7384,7 @@ const SPECIES = [
       if (!captureServer()) next = !!askCaptureAddress();
       overnightPref = next;
       captureClearBackoff();
-      window.__panel.overnight = overnightPref;
+      if (window.__panel) window.__panel.overnight = overnightPref;
       savePrefs();
       if (next) armOvernight(); else disarmOvernight();
       render();
@@ -7258,6 +7516,7 @@ const SPECIES = [
 
   /** Press-and-hold with acceleration, so 5-minute steps can still cross an hour. */
   function bindStep(minus, plus, key, dl, dr) {
+    /** @type {number | null} */
     var timer = null;
     var speed = 0;
     function apply(delta) {
@@ -7435,10 +7694,12 @@ const SPECIES = [
    */
   function renderLog() {
     if (!ui.tierCells) return;
+    /** @type {any} */
     var book = null;
     try { book = (fish() && fish().log) ? fish().log() : null; } catch (e) { book = null; }
     var today = (book && book.today) || { n: 0, shiny: 0, golden: 0, byRarity: [] };
     var rows = (logScope === 'today' ? today.byRarity : (book && book.byRarity)) || [];
+    /** @type {Record<string, number>} */
     var byTier = {};
     rows.forEach(function (r) { byTier[r.rarity] = r.n || 0; });
     ui.tierCells.forEach(function (cell) {
@@ -7491,6 +7752,7 @@ const SPECIES = [
   function renderPerf() {
     if (!ui.perfLine) return;
     if (ui.accLine) {
+      /** @type {any} */
       var a = null;
       try { a = (fish() && fish().accuracy) ? fish().accuracy() : null; } catch (e) { a = null; }
       if (!a || (!a.attempts && !a.presses)) {
@@ -7517,6 +7779,7 @@ const SPECIES = [
         }
       }
     }
+    /** @type {any} */
     var p = null;
     try { p = (fish() && fish().perf) ? fish().perf() : null; } catch (e) { p = null; }
     if (!p || !p.frames) { ui.perfLine.textContent = 'No frames measured yet'; ui.perfMore.textContent = ''; ui.perfRate.textContent = ''; return; }
@@ -7539,6 +7802,7 @@ const SPECIES = [
 
   /* The phase chip says "paused"; it never said why or since when, and that answer lived in
    * __panel.state. This is the same fact, in the place the player is already looking. */
+  /** @satisfies {Record<PauseReason, string>} */
   var PAUSE_WHY = {
     user: 'you paused it',
     hidden: 'the tab was hidden',
@@ -7575,6 +7839,7 @@ const SPECIES = [
   function render() {
     if (!ui.card) return;
     var phase = state.phase;
+    /** @type {FishStatus | null} */
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
     // A stalled core still looks like "running" from the outside - the phase never changed, the
@@ -7583,6 +7848,7 @@ const SPECIES = [
     // The core's own verdict, and only a high-severity one: the chip is the phase label the owner
     // reads at a glance, so a warning would be noise next to it. A named failure ("detector-blind",
     // "snapshot-fallback") is worth more than "running" when the bot has silently stopped working.
+    /** @type {any} */
     var doc = null;
     try { doc = (fish() && fish().doctor) ? fish().doctor() : null; } catch (e) { doc = null; }
     var alarm = !!(doc && doc.severity === 'high' && !stalled);
@@ -7615,12 +7881,14 @@ const SPECIES = [
     if (!focused(ui.time_from.val)) ui.time_from.val.value = state.window.start;
     if (!focused(ui.time_to.val)) ui.time_to.val.value = state.window.stop;
 
+    /** @type {Record<string, any>} */
     var stats = (status && status.stats) || {};
 
     // A long-blind detector is not a slow bite: after the doctor's 45 s warning the session pauses
     // as cast-stall and retries, so the age of the silence has to outlive those pauses. The note
     // stays in the banner chain below, ahead of the cast-stall retry and any transient log-offline
     // line, so it remains visible until the detector sees something again.
+    /** @type {number | null} */
     var blindMs = null;
     try {
       if (window.AutoFishSession && window.AutoFishSession.blindWarning) {
@@ -7766,10 +8034,11 @@ const SPECIES = [
 
   function zoneRect() {
     var f = fish();
-    if (!f || !f.zones) return null;
+    var L = window.AutoFishLayout;
+    if (!f || !f.zones || !L) return null;
     try {
       var z = f.zones();
-      return window.AutoFishLayout.unionRect([z.bubble, z.dial, z.card, z.hintZone]);
+      return L.unionRect([z.bubble, z.dial, z.card, z.hintZone]);
     } catch (e) { return null; }
   }
 
@@ -7828,7 +8097,7 @@ const SPECIES = [
   }
 
   function startDrag(e) {
-    if (e.button != null && e.button !== 0) return;
+    if (!host || (e.button != null && e.button !== 0)) return;
     // The head is the drag handle AND the home of the collapse button. setPointerCapture(host)
     // retargets the later pointerup to the host, so the browser computes the click against the host
     // and the button's own click handler never runs - a dead button that looks alive. Leave
@@ -7847,7 +8116,7 @@ const SPECIES = [
   }
 
   function onDrag(e) {
-    if (!dragging) return;
+    if (!dragging || !host) return;
     var x = Math.max(0, Math.min(window.innerWidth - 60, e.clientX - dragging.dx));
     var y = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dragging.dy));
     dragged = { x: x, y: y };
@@ -7887,6 +8156,7 @@ const SPECIES = [
 
   /** What the row should carry when the guard gives up: enough to diagnose the night without the tab. */
   function guardDiag() {
+    /** @type {any} */
     var doctor = null;
     try { doctor = fish() && fish().doctor ? fish().doctor().verdict : null; } catch (e) {}
     return {
@@ -7933,9 +8203,11 @@ const SPECIES = [
    */
   function blindDiag() {
     if (!state) return { phase: null, pauseReason: null, silenceMs: null, warning: false };
+    /** @type {FishStatus | null} */
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
     var facts = blindFacts(status);
+    /** @type {any} */
     var out = Object.assign({}, facts, { silenceMs: null, warning: false });
     try {
       if (window.AutoFishSession) {
@@ -7969,8 +8241,10 @@ const SPECIES = [
         noteTickError('watchdog', new Error('no tick for ' + (Date.now() - lastTickAt) + ' ms'));
         tick();                       // re-enter it: reporting a dead loop is not enough
       }
+      /** @type {FishStatus | null} */
       var status = null;
       try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+      if (!window.AutoFishSession) return;
       if (window.AutoFishSession.coreGuard(state, status) === 'revive') {
         // A core that keeps dying is not a liveness problem any more: after three restarts in ten
         // minutes the game is the problem, and an honest stop beats restarting for hours.
@@ -8002,6 +8276,7 @@ const SPECIES = [
       baseTodayMs = 0;
       state.todayMs = 0;
     }
+    /** @type {FishStatus | null} */
     var status = null;
     try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
 
@@ -8074,7 +8349,7 @@ const SPECIES = [
       throw e;
     }
 
-    var S = window.AutoFishSession;
+    var S = /** @type {AutoFishSessionApi} */ (window.AutoFishSession);
     var prefs = loadPrefs();
     // Resolved here, before loadToday(): captureServer() reads this, and the day's read-back would
     // otherwise see no address on an inlined install and stay silent on the very first mount.
@@ -8105,6 +8380,7 @@ const SPECIES = [
     syncBudget();
 
     // A core already running from a previous session is not ours to guess about.
+    /** @type {FishStatus | null} */
     var before = null;
     try { before = fish().status ? fish().status() : null; } catch (e) {}
     if (before && before.running) { try { fish().stop(); } catch (e) {} banner = 'stopped a session that was already running'; }
@@ -8176,10 +8452,10 @@ const SPECIES = [
 
   function mountAdoption() {
     // The page can drop our host on navigation inside the SPA; put it back.
-    if (mount.timer) clearInterval(mount.timer);
-    mount.timer = setInterval(function () {
+    if (/** @type {any} */ (mount).timer) clearInterval(/** @type {any} */ (mount).timer);
+    /** @type {any} */ (mount).timer = setInterval(function () {
       if (!host || !document.documentElement.contains(host)) {
-        try { document.documentElement.appendChild(host); } catch (e) {}
+        try { if (host) document.documentElement.appendChild(host); } catch (e) {}
       }
     }, 2000);
   }
@@ -8189,7 +8465,7 @@ const SPECIES = [
     if (tickTimer) clearInterval(tickTimer);
     if (guardTimer) clearInterval(guardTimer);
     if (placeTimer) clearInterval(placeTimer);
-    if (mount.timer) clearInterval(mount.timer);
+    if (/** @type {any} */ (mount).timer) clearInterval(/** @type {any} */ (mount).timer);
 
     window.removeEventListener('resize', place);
     document.removeEventListener('visibilitychange', onVisible);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 /**
  * Read a night of AutoFish into one page you can paste into the notebook.
  *
@@ -190,6 +191,7 @@ function coverageOf(good, attempts, sessions, opts) {
   const beforeMs = sessionStart != null && oldest != null ? Math.max(0, sessionStart - oldest) : 0;
   const missingMs = sessionEnd != null && newest != null ? sessionEnd - newest : 0;
   let verdict = 'unbounded';
+  /** @type {'capture' | 'run' | null} */
   let stopped = null;
   if (sessionEnd != null && newest != null) {
     if (beforeMs > GAP_MS || missingMs > GAP_MS) {
@@ -243,6 +245,7 @@ function analyze(snapshots, opts) {
   const o = opts || {};
   let picked = snapshots;
   let ignored = 0;
+  /** @type {{ snapshots: any[], from: number | null, to: number | null, ignored: number } | null} */
   let window = null;
   if (o.night) {
     const sel = selectNight(snapshots, { hours: o.hours, from: o.since });
@@ -261,8 +264,10 @@ function analyze(snapshots, opts) {
   const merged = mergeAttempts(good);
   // The page store carries rows from runs before this one, so a snapshot can hold attempts older
   // than its own night. They belong to an earlier run, not this report.
-  const rows = window
-    ? merged.attempts.filter((a) => a.t == null || (a.t >= window.from && a.t <= window.to))
+  const winFrom = window ? window.from : null;
+  const winTo = window ? window.to : null;
+  const rows = winFrom != null && winTo != null
+    ? merged.attempts.filter((a) => a.t == null || (a.t >= winFrom && a.t <= winTo))
     : merged.attempts;
   const outside = merged.attempts.length - rows.length;
   const run = runSummary(toAttempts(rows), {});
@@ -466,10 +471,9 @@ if (require.main === module) {
       '  --all          merge every snapshot in the directory, as before',
       '  file.json ...  read exactly these files, with no window',
     ].join('\n'));
-    return;
-  }
-  const files = [];
-  const opts = { night: true };
+  } else {
+    const files = [];
+  const opts = /** @type {{ night: boolean, hours?: number, since?: number }} */ ({ night: true });
   let bad = '';
   for (let i = 0; i < args.length && !bad; i++) {
     const a = args[i];
@@ -506,6 +510,7 @@ if (require.main === module) {
       if (!result.coverage) process.exitCode = 1;
       else if (result.coverage.verdict === 'truncated') process.exitCode = 1;
     }
+  }
   }
 }
 

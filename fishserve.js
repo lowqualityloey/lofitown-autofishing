@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * fishserve - serves the AutoFish files to the lofi.town tab and owns the records.
  *

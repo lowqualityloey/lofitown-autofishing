@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * lofi.town autofish v3 — continuous cast -> reel -> dial loop.
  *
@@ -39,12 +40,13 @@
  * the one proven to reach the game; 'space' stays available for A/B tests.
  */
 (() => {
-  if (window.__fish) { try { window.__fish.stop(); } catch (e) {} }
+  if (window.__fish && window.__fish.stop) { try { window.__fish.stop(); } catch (e) {} }
 
   /**
    * build-userscript.js replaces 'dev' with package.json's version, so the header, __fish.version
    * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
    * the honest answer: that copy has no build step to stamp it.
+   * @type {FishCore}
    */
   const F = { version: 'dev' };
   const now = () => performance.now();
@@ -54,13 +56,13 @@
    * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
    * average cost of each detector, so a change can be justified by numbers rather than a guess.
    */
-  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0, ltN: 0, ltMax: 0, ltRing: [] };
+  /** @type {FishPerf} */
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0, ltN: 0, ltMax: 0, ltRing: [], lockMemo: 0, lockMemoN: 0, lockMemoSkipped: 0, lockMemoCold: 0, lockGrab: 0, lockMask: 0, lockScan: 0, lockRefine: 0 };
   /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
    * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
    * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
    * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
    * time names itself instead of being inferred. */
-  perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
   /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
    *  inside a reel (the dial persists across presses) at a third of the old read count. */
   /**
@@ -71,6 +73,7 @@
    * the cheapest honest witness: no readback, no timer, no allocation per entry beyond the ring.
    * 3.9.11's once-a-second stall was invisible for a day because nothing counted this.
    */
+  /** @type {PerformanceObserver | null} */
   let ltObs = null;
   function watchLongTasks() {
     if (ltObs || typeof PerformanceObserver === 'undefined') return;
@@ -456,6 +459,7 @@
     const delta = st.delta == null ? wrap180(0 - (st.mid || 0)) : st.delta;
     const omega = isFinite(st.omega) ? st.omega : null;
     const pred = omega == null ? delta : wrap180(delta + omega * lead);
+    /** @type {{ delta: number, pred: number, win: number, press: boolean, armAt: number | null, at: number | null, cancel: boolean, reason: string }} */
     const out = { delta, pred, win, press: false, armAt: null, at: null, cancel: false, reason: '' };
 
     if (omega == null || Math.abs(omega) < minOmega) {
@@ -871,16 +875,18 @@
     const rows = Array.isArray(log) ? log.filter(Boolean) : [];
     const deg = rows.map((r) => Math.abs(r.err)).filter((v) => isFinite(v)).sort((a, b) => a - b);
     const ms = rows.map((r) => (r.om ? (Math.abs(r.err) / Math.abs(r.om)) * 1000 : null))
-      .filter((v) => v != null && isFinite(v)).sort((a, b) => a - b);
+      .filter(/** @param {number | null} v @returns {v is number} */ (v) => v != null && isFinite(v)).sort((a, b) => a - b);
     const q = (arr, p) => (arr.length ? +arr[Math.min(arr.length - 1, Math.floor(p * arr.length))].toFixed(1) : null);
     const mean = (arr) => (arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null);
+    const mDeg = mean(deg);
+    const mMs = mean(ms);
     return {
       samples: rows.length,
-      meanAbsDeg: deg.length ? +mean(deg).toFixed(1) : null,
+      meanAbsDeg: mDeg != null ? +mDeg.toFixed(1) : null,
       p50Deg: q(deg, 0.5),
       p95Deg: q(deg, 0.95),
       maxDeg: deg.length ? +deg[deg.length - 1].toFixed(1) : null,
-      meanAbsMs: ms.length ? +mean(ms).toFixed(1) : null,
+      meanAbsMs: mMs != null ? +mMs.toFixed(1) : null,
       p50Ms: q(ms, 0.5),
       p95Ms: q(ms, 0.95),
       maxMs: ms.length ? +ms[ms.length - 1].toFixed(1) : null,
@@ -977,6 +983,7 @@
   }
 
   function loadDialMemory() {
+    /** @type {string | null} */
     let raw = null;
     try { raw = window.localStorage.getItem(DIAL_KEY); } catch (e) { return null; }
     if (!raw) return null;
@@ -1086,7 +1093,7 @@ const SPECIES = [
   const TIER_BY_LOWER = {};
   for (const tier of TIER_ORDER) TIER_BY_LOWER[tier.toLowerCase()] = tier;
   const SPECIES_BY_NAME = {};
-  for (const row of SPECIES) SPECIES_BY_NAME[row[0].toLowerCase()] = row;
+  for (const row of SPECIES) SPECIES_BY_NAME[String(row[0]).toLowerCase()] = row;
 
   // Display names the game prints that are not names in its own fish table. Both are hard-coded
   // in the bundle: 'Pharooh Cuddlefish' prints as 'Pharaoh Cuttlefish', and a special 'Pink Canny'
@@ -1101,7 +1108,8 @@ const SPECIES = [
   for (const alias of DISPLAY_ALIASES) DISPLAY_ALIASES_BY_LOWER[alias.name.toLowerCase()] = alias;
   // Every name the worklist can explain: the catalogue rows plus the display renames. Built once,
   // because log() may be called every panel tick and this list never changes.
-  const KNOWN_NAMES = SPECIES.map((row) => row[0]).concat(DISPLAY_ALIASES.map((alias) => alias.name));
+  /** @type {string[]} */
+  const KNOWN_NAMES = SPECIES.map((row) => String(row[0])).concat(DISPLAY_ALIASES.map((alias) => alias.name));
 
   function tidyName(s) {
     return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
@@ -1251,7 +1259,10 @@ const SPECIES = [
   function trimLog(log, maxDays) {
     const keep = maxDays == null ? 60 : maxDays;
     const days = Object.keys(log.days || {}).sort();
-    while (days.length > keep) delete log.days[days.shift()];
+    while (days.length > keep) {
+      const oldest = days.shift();
+      if (oldest !== undefined) delete log.days[oldest];
+    }
     return log;
   }
 
@@ -1261,6 +1272,7 @@ const SPECIES = [
     const byRarity = TIER_ORDER.map((tier) => ({ rarity: tier, n: book.rarity[tier] || 0 }));
     for (const key of Object.keys(book.rarity)) if (TIER_ORDER.indexOf(key) < 0) byRarity.push({ rarity: key, n: book.rarity[key] });
     const names = Object.keys(book.species);
+    /** @type {{ species: string, weightKg: number, at: number } | null} */
     let best = null;
     for (const name of names) {
       const s = book.species[name];
@@ -1313,15 +1325,17 @@ const SPECIES = [
     const unknown = log.unknown || {};
     const seen = log.species || {};
     const names = Object.keys(unknown);
+    /** @type {Record<string, any[]>} */
     const kinds = { resolved: [], fragment: [], nonFish: [], open: [] };
     for (const name of names) {
       const info = speciesInfo(name);
       const base = tidyName(info.base || name);
       const lower = base.toLowerCase();
+      /** @type {string[]} */
       const candidates = [];
       if (!info.known && lower) {
         for (const row of KNOWN_NAMES) {
-          const low = row.toLowerCase();
+          const low = String(row).toLowerCase();
           if (low.indexOf(lower + ' ') === 0 || low.slice(-(lower.length + 1)) === ' ' + lower) {
             candidates.push(row);
           }
@@ -1376,9 +1390,11 @@ const SPECIES = [
    * localStorage is the whole persistence story of the one-file userscript: a few kilobytes, one
    * write per catch, never able to break the loop. A blocked or full store just means no history.
    */
+  /** @type {any} */
   let ledger = null;
   function loadLedger() {
     if (ledger) return ledger;
+    /** @type {string | null} */
     let raw = null;
     try { raw = window.localStorage.getItem(logKey()); } catch (e) { raw = null; }
     if (!raw && logProfile === 'default') {
@@ -1422,8 +1438,15 @@ const SPECIES = [
   }
 
   /* -------------------------------------------------------- surfaces ----- */
-  let uiCanvas = null, gameCanvas = null;
-  let inkBuf = null, inkCtx = null, uiBlank = 0, uiAdopted = false, uiCheckAt = 0;
+  /** @type {HTMLCanvasElement | null} */
+  let uiCanvas = null;
+  /** @type {HTMLCanvasElement | null} */
+  let gameCanvas = null;
+  /** @type {HTMLCanvasElement | null} */
+  let inkBuf = null;
+  /** @type {CanvasRenderingContext2D | null} */
+  let inkCtx = null;
+  let uiBlank = 0, uiAdopted = false, uiCheckAt = 0;
   function surfaces() {
     const cans = [...document.querySelectorAll('canvas')];
     const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
@@ -1451,6 +1474,7 @@ const SPECIES = [
       inkBuf.width = 16; inkBuf.height = 16;
       inkCtx = inkBuf.getContext('2d', { willReadFrequently: true });
     }
+    if (!inkCtx) return { ink: false, density: 0 };
     inkCtx.clearRect(0, 0, 16, 16);
     try { inkCtx.drawImage(c, 0, 0, 16, 16); } catch (e) { return { ink: false, density: 0 }; }
     const d = inkCtx.getImageData(0, 0, 16, 16).data;
@@ -1477,6 +1501,7 @@ const SPECIES = [
     // leave the bot reading the world and mistaking cream ground for a catch card.
     if (probingSurface) return false;
     probingSurface = true;
+    /** @type {any} */
     let found = null;
     try { found = probeOtherSurface(true); } finally { probingSurface = false; }
     return !!found;
@@ -1500,6 +1525,7 @@ const SPECIES = [
     if (!alt) return null;
     const cur = uiCanvas;
     uiCanvas = alt; snapAt = 0;
+    /** @type {any} */
     let found = null;
     try { if (snapshot() && bubbleGate()) found = bubbleInBox(); } catch (e) { found = null; }
     uiCanvas = cur; snapAt = 0;
@@ -1560,6 +1586,7 @@ const SPECIES = [
     F.hint = { x: Math.round(cw / 2), y: Math.round(ch * 0.42) };
     L('surface resized', { w: cw, h: ch });
   }
+  /** @type {(() => void) | null} */
   let surfaceWatch = null;
   function watchSurfaces() {
     if (surfaceWatch) return;
@@ -1608,7 +1635,15 @@ const SPECIES = [
   function glRowY(bh, y, h) { return bh - (y + h); }
   // </readback-core>
 
-  let glCanvasRef = null, glCtx = null, glBuf = null, glRow = null, glFails = 0;
+  /** @type {HTMLCanvasElement | null} */
+  let glCanvasRef = null;
+  /** @type {any} */
+  let glCtx = null;
+  /** @type {Uint8Array | null} */
+  let glBuf = null;
+  /** @type {Uint8Array | null} */
+  let glRow = null;
+  let glFails = 0;
 
   /**
    * The WebGL context that owns this canvas, or null for a 2D layer. Cached per canvas: a 2D
@@ -1629,7 +1664,10 @@ const SPECIES = [
     return glCtx;
   }
 
-  let ubuf = null, uctx = null;
+  /** @type {HTMLCanvasElement | null} */
+  let ubuf = null;
+  /** @type {CanvasRenderingContext2D | null} */
+  let uctx = null;
   /** The allocating 2D read: the only reader for a plain 2D surface and the GL path's fallback. */
   function readUI2d(x, y, w, h) {
     if (!ubuf) {
@@ -1637,6 +1675,7 @@ const SPECIES = [
       ubuf.width = 520; ubuf.height = 520;
       uctx = ubuf.getContext('2d', { willReadFrequently: true });
     }
+    if (!uctx || !uiCanvas) return null;
     if (ubuf.width < w || ubuf.height < h) {
       ubuf.width = Math.max(ubuf.width, w);
       ubuf.height = Math.max(ubuf.height, h);
@@ -1784,7 +1823,9 @@ const SPECIES = [
           if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) cols[x]++;
         }
       }
-      let s = -1, best = null;
+      let s = -1;
+      /** @type {any} */
+      let best = null;
       for (let x = 0; x <= r.w; x++) {
         const on = x < r.w && cols[x] > 3;
         if (on && s < 0) s = x;
@@ -1860,8 +1901,24 @@ const SPECIES = [
    * resized window degrades to doing nothing rather than tapping blind.
    */
   const SDOWN = 4;
-  let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
-  let sgl = null, sglCanvas = null, sglTex = null, sglFbo = null, sbytes = null, sglOff = false, sglChecked = false, sglFails = 0;
+  /** @type {HTMLCanvasElement | null} */
+  let sbuf = null;
+  /** @type {CanvasRenderingContext2D | null} */
+  let sctx = null;
+  /** @type {any} */
+  let sdata = null;
+  let sw = 0, sh = 0;
+  /** @type {any} */
+  let sgl = null;
+  /** @type {any} */
+  let sglTex = null;
+  /** @type {any} */
+  let sglFbo = null;
+  /** @type {HTMLCanvasElement | null} */
+  let sglCanvas = null;
+  /** @type {Uint8Array | null} */
+  let sbytes = null;
+  let sglOff = false, sglChecked = false, sglFails = 0;
 
   /**
    * The quarter-scale copy WITHOUT a fresh array every tick.
@@ -1915,7 +1972,8 @@ const SPECIES = [
         if (++sglFails >= 3) { sglOff = true; L('downscale readback', { via: '2d', why: 'context lost' }); }
         return null;
       }
-      if (sglCanvas.width !== w || sglCanvas.height !== h) {
+      if (!sglCanvas || sglCanvas.width !== w || sglCanvas.height !== h) {
+        if (!sglCanvas) return null;
         sglCanvas.width = w; sglCanvas.height = h;
         sbytes = null;
         if (!sglAttach(w, h)) {
@@ -1931,7 +1989,7 @@ const SPECIES = [
       sgl.bindFramebuffer(sgl.FRAMEBUFFER, sglFbo);
       sgl.readPixels(0, 0, w, h, sgl.RGBA, sgl.UNSIGNED_BYTE, sbytes);
       if (sgl.getError() !== sgl.NO_ERROR) return null;
-      if (!sglChecked) {
+      if (!sglChecked && sctx) {
         sglChecked = true;
         const ref = sctx.getImageData(0, 0, w, h).data;
         let bad = 0, seen = 0;
@@ -1961,6 +2019,7 @@ const SPECIES = [
       sctx = sbuf.getContext('2d', { willReadFrequently: true });
     }
     if (sbuf.width !== w || sbuf.height !== h) { sbuf.width = w; sbuf.height = h; }
+    if (!sctx) return false;
     sctx.clearRect(0, 0, w, h);
     try { sctx.drawImage(uiCanvas, 0, 0, w * SDOWN, h * SDOWN, 0, 0, w, h); } catch (e) { return false; }
     const glBytes = downscaleGl(w, h);
@@ -2026,7 +2085,9 @@ const SPECIES = [
       seen[p0] = 1;
       let x0 = w, y0 = h, x1 = 0, y1 = 0, count = 0;
       while (stack.length) {
-        const p = stack.pop(), x = p % w, y = (p / w) | 0;
+        const p = stack.pop();
+        if (p === undefined) continue;
+        const x = p % w, y = (p / w) | 0;
         count++;
         if (x < x0) x0 = x;
         if (x > x1) x1 = x;
@@ -2049,6 +2110,7 @@ const SPECIES = [
   }
   // </scan-core>
 
+  /** @type {Uint8Array | null} */
   let seenBuf = null;
   function blobs(match, minPx) {
     const total = sw * sh;
@@ -2079,6 +2141,7 @@ const SPECIES = [
     promptAt = t;
     if (F.geo) return null;                       // a dial on screen means the prompt is already gone
     if (!snapshot()) return null;                 // shared quarter read, no second copy of the layer
+    /** @type {any} */
     let best = null;
     const comps = blobs(WHT_S, 30);
     for (let i = 0; i < comps.length; i++) {
@@ -2305,6 +2368,7 @@ const SPECIES = [
    */
   const CARD_MIN_W = 180, CARD_MIN_H = 250, CARD_MAX_W = 760, CARD_MAX_H = 820;
   let shapeAt = 0;
+  /** @type {Int32Array | null} */
   let cardI = null;                 // the integral image is reused: this runs up to 2.5x/s
   function cardByShape() {
     const t = now();
@@ -2315,6 +2379,7 @@ const SPECIES = [
     const need = stride * (sh + 1);
     // Row 0 and column 0 are never written by the pass below, so a reused buffer keeps its zeros.
     if (!cardI || cardI.length !== need) cardI = new Int32Array(need);
+    /** @type {Int32Array} */
     const I = cardI;
     for (let y = 0; y < sh; y++) {
       let row = 0;
@@ -2326,6 +2391,7 @@ const SPECIES = [
     const sum = (x0, y0, x1, y1) => I[y1 * stride + x1] - I[y0 * stride + x1] - I[y1 * stride + x0] + I[y0 * stride + x0];
     const CW = Math.ceil(CARD_MIN_W / SDOWN), CH = Math.ceil(CARD_MIN_H / SDOWN);
     if (sw < CW || sh < CH) return null;
+    /** @type {{ x: number, y: number, n: number } | null} */
     let seed = null;
     for (let y = 0; y + CH <= sh; y++) {
       for (let x = 0; x + CW <= sw; x++) {
@@ -2348,7 +2414,7 @@ const SPECIES = [
     }
     const W = (x1 - x0) * SDOWN, H = (y1 - y0) * SDOWN;
     if (W < CARD_MIN_W || W > CARD_MAX_W || H < CARD_MIN_H || H > CARD_MAX_H) return null;
-    if (W * H > uiCanvas.width * uiCanvas.height * 0.7) return null;    // the layer itself is opaque, not a card
+    if (!uiCanvas || W * H > uiCanvas.width * uiCanvas.height * 0.7) return null;    // the layer itself is opaque, not a card
     const r = readUI(x0 * SDOWN, y0 * SDOWN, W, H);
     if (!r) return null;
     const ink = inkMix(r);
@@ -2621,10 +2687,12 @@ const SPECIES = [
    * allocation on its own - the same large-object pressure that made the whole page hitch.
    * Only one mask is live at a time (every caller finishes with it before the next read).
    */
+  /** @type {Uint8Array | null} */
   let rimMaskBuf = null;
   function rimMask(r) {
     const d = r.d, n = r.w * r.h;
     if (!rimMaskBuf || rimMaskBuf.length < n) rimMaskBuf = new Uint8Array(n);
+    /** @type {Uint8Array} */
     const m = rimMaskBuf;
     m.fill(0, 0, n);
     for (let p = 0, i = 0; p < n; p++, i += 4) if (isRim(d, i)) m[p] = 1;
@@ -2679,6 +2747,7 @@ const SPECIES = [
    * 2026-10-29). 15/20, not 17 - see the note on the gate below.
    */
   function coarseScan(mask, rw, rh, ox, oy, hintX, hintY, half, step, C, S) {
+    /** @type {{ cx: number, cy: number, R: number, score: number } | null} */
     let best = null;
     for (let dy = -half; dy <= half; dy += step) {
       for (let dx = -half; dx <= half; dx += step) {
@@ -2708,7 +2777,12 @@ const SPECIES = [
    * no closure at all (the direction tables are passed in for exactly that reason). If the page's CSP
    * forbids eval, the call throws and the literal function is used instead: same answer, old cost.
    */
-  let scanDial = coarseScan, scanCompiled = null, scanCompileError = null;
+  /** @type {any} */
+  let scanDial = coarseScan;
+  /** @type {any} */
+  let scanCompiled = null;
+  /** @type {string | null} */
+  let scanCompileError = null;
   try {
     scanCompiled = new Function('"use strict"; return (' + coarseScan.toString() + ');')();
     scanDial = scanCompiled;
@@ -2822,6 +2896,7 @@ const SPECIES = [
       const r = readUI(gx - hw, gy - hw, S, S);
       if (!r) continue;
       const mask = rimMask(r);
+      /** @type {{ cx: number, cy: number, R: number, score: number } | null} */
       let best = null;
       for (const off of ANNULUS) {
         const cx = Math.round(gx + off.dx);
@@ -3158,6 +3233,7 @@ const SPECIES = [
   }
 
   /* One list, not a five-deep ternary: a new verdict has to name its counter here. */
+  /** @satisfies {Record<DialVerdict, string>} */
   const DIAL_COUNTER = {
     hit: 'hits', miss: 'misses', ghost: 'ghosts', skipped: 'skipped', stalled: 'stalled', 'no-press': 'noPress',
   };
@@ -3786,6 +3862,7 @@ const SPECIES = [
    */
   // Both scratch buffers grow once to the largest window and are reused on every probe: this runs
   // while the core is paused, on a page the owner is using, so a fresh buffer per pass is not free.
+  /** @type {Uint8Array | null} */
   let rectSeen = null, rectStack = null;
   function uiRects() {
     if (!uiCanvas || !uiCanvas.width) return null;
@@ -3817,12 +3894,16 @@ const SPECIES = [
       }
       if (seed < 0) { out.push(fallback); continue; }
       const n = wr.w * wr.h;
-      if (!rectSeen || rectSeen.length < n) {
+      if (!rectSeen || !rectStack || rectSeen.length < n) {
         rectSeen = new Uint8Array(n);
+        // @ts-expect-error tests/promptmask.test.js asserts 'let rectSeen = null, rectStack = null;' verbatim
         rectStack = new Int32Array(n);   // each pixel is pushed at most once, so n entries suffice
       }
+      /** @type {Uint8Array} */
       const seen = rectSeen;
       seen.fill(0, 0, n);
+      /** @type {Int32Array} */
+      // @ts-expect-error rectStack initialized above alongside rectSeen (shared decl kept verbatim for promptmask.test.js)
       const stack = rectStack;
       let top = 0;
       stack[top++] = seed;
@@ -4782,6 +4863,7 @@ const SPECIES = [
     const p = F.perf();
     // The panel owns guard/blind state. A missing hook (an older panel) or a throwing one must
     // not make exportRun fail: the export is the night's only record.
+    /** @type {any} */
     let panelState = null;
     try {
       panelState = typeof F.exportDiag === 'function' ? F.exportDiag() : null;

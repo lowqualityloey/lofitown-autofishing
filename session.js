@@ -1,6 +1,11 @@
+// @ts-check
 /* session.js — pure session state machine for the AutoFish panel.
  * No DOM, no timers, no I/O: the panel feeds facts in and executes the actions out.
  * Browser global: AutoFishSession. CommonJS: require('./session.js').
+ */
+/**
+ * @param {any} root
+ * @param {() => AutoFishSessionApi} factory
  */
 (function (root, factory) {
   var api = factory();
@@ -18,7 +23,12 @@
     window: { on: false, start: '21:00', stop: '23:00' }
   };
 
+  /**
+   * @param {Partial<SessionState>} [overrides]
+   * @returns {SessionState}
+   */
   function createState(overrides) {
+    /** @type {SessionState} */
     var s = {
       phase: 'idle',
       durationMs: DEFAULTS.durationMs,
@@ -57,35 +67,53 @@
     if (overrides) {
       for (var k in overrides) {
         if (!Object.prototype.hasOwnProperty.call(overrides, k)) continue;
-        if (k === 'window') {
+        if (k === 'window' && overrides.window) {
           s.window = { on: !!overrides.window.on, start: overrides.window.start, stop: overrides.window.stop };
         } else {
-          s[k] = overrides[k];
+          /** @type {any} */ (s)[k] = /** @type {any} */ (overrides)[k];
         }
       }
     }
     return s;
   }
 
+  /**
+   * @param {SessionState} state
+   * @returns {SessionState}
+   */
   function clone(state) {
+    /** @type {any} */
     var s = {};
-    for (var k in state) if (Object.prototype.hasOwnProperty.call(state, k)) s[k] = state[k];
+    for (var k in state) if (Object.prototype.hasOwnProperty.call(state, k)) s[k] = /** @type {any} */ (state)[k];
     s.window = { on: state.window.on, start: state.window.start, stop: state.window.stop };
     return s;
   }
 
+  /**
+   * @param {number} at
+   * @returns {number}
+   */
   function minutesOfDay(at) {
     var d = new Date(at);
     return d.getHours() * 60 + d.getMinutes();
   }
 
+  /**
+   * @param {string} hhmm
+   * @returns {number}
+   */
   function parseClock(hhmm) {
     var m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm));
     if (!m) return 0;
     return (Number(m[1]) % 24) * 60 + Number(m[2]);
   }
 
-  /** Is 'at' inside the configured clock window (local time)? A stop before start crosses midnight. */
+  /**
+   * Is 'at' inside the configured clock window (local time)? A stop before start crosses midnight.
+   * @param {ScheduleWindow | null | undefined} win
+   * @param {number} at
+   * @returns {boolean}
+   */
   function withinWindow(win, at) {
     if (!win || !win.on) return true;
     var start = parseClock(win.start);
@@ -96,19 +124,33 @@
     return now >= start || now < stop;            // crosses midnight
   }
 
+  /**
+   * @param {SessionPhase} phase
+   * @returns {boolean}
+   */
   function isActive(phase) {
     return phase === 'running' || phase === 'paused' || phase === 'waiting';
   }
 
-  /** Local midnight for 'at'. A run can outlive the day it began, and only the time after this
-   * instant belongs to the new day's cap. */
+  /**
+   * Local midnight for 'at'. A run can outlive the day it began, and only the time after this
+   * instant belongs to the new day's cap.
+   * @param {number} at
+   * @returns {number}
+   */
   function localDayStart(at) {
     var d = new Date(at);
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   }
 
-  /** Credit [from, at] as fishing. The whole stretch is session time, but only its tail after local
-   * midnight is today's, so one night that crosses midnight cannot spend two days' cap. */
+  /**
+   * Credit [from, at] as fishing. The whole stretch is session time, but only its tail after local
+   * midnight is today's, so one night that crosses midnight cannot spend two days' cap.
+   * @param {SessionState} s
+   * @param {number} from
+   * @param {number} at
+   * @returns {void}
+   */
   function credit(s, from, at) {
     var delta = Math.max(0, at - from);
     if (!delta) return;
@@ -123,7 +165,12 @@
     s.fishingMs += delta;
   }
 
-  /** A paused run can cross midnight without fishing a frame; its carry still moves. */
+  /**
+   * A paused run can cross midnight without fishing a frame; its carry still moves.
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {void}
+   */
   function rollDay(s, at) {
     var day = localDayStart(at);
     if (!s.dayStartMs) s.dayStartMs = day;
@@ -133,11 +180,22 @@
     }
   }
 
-  /** How much of the live session may spend the current day's cap. */
+  /**
+   * How much of the live session may spend the current day's cap.
+   * @param {SessionState} s
+   * @returns {number}
+   */
   function todayFishingMs(s) {
     return Math.max(0, (s.fishingMs || 0) - (s.carriedMs || 0));
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @param {string | null | undefined} reason
+   * @param {Record<string, unknown> | null} [diag]
+   * @returns {SessionAction[]}
+   */
   function stopSession(s, at, reason, diag) {
     if (s.phase === 'running' && s.lastTickAt != null) credit(s, s.lastTickAt, at);
     rollDay(s, at);
@@ -171,6 +229,10 @@
   var NO_CATCH_MS = 10 * 60 * 1000;   // nothing bites for this long -> check the page
   var CAST_STALL_MS = 90 * 1000;       // post-catch, no prompt and no dial this long -> the cast never landed
   // cast-stall, player-block and profile-open share no-catch's bounded retry: pause, retry, then stop.
+  /**
+   * @param {PauseReason | null} reason
+   * @returns {reason is 'no-catch' | 'cast-stall' | 'player-block' | 'profile-open'}
+   */
   function retryable(reason) {
     return reason === 'no-catch' || reason === 'cast-stall' || reason === 'player-block' || reason === 'profile-open';
   }
@@ -185,22 +247,42 @@
   var SEAT_STOP_MS = 30 * 60 * 1000;   // an unseated character cannot bite; give up rather than sit there forever
   var SEAT_OVERRIDE_MS = 15 * 1000;    // a Resume or retry runs this long despite the seat fact
 
-  /** A hold the user asked for, not a detector stall. Its time does not count as blindness. */
+  /**
+   * A hold the user asked for, not a detector stall. Its time does not count as blindness.
+   * @param {PauseReason | null} reason
+   * @returns {boolean}
+   */
   function deliberatePause(reason) {
     return reason === 'hidden' || reason === 'user' || reason === 'seat' || reason === 'focus';
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {void}
+   */
   function beginBlindPause(s, at) {
     if (s.blindPauseAt == null) s.blindPauseAt = at;
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {void}
+   */
   function endBlindPause(s, at) {
     if (s.blindPauseAt == null) return;
     s.blindPauseMs = (s.blindPauseMs || 0) + Math.max(0, at - s.blindPauseAt);
     s.blindPauseAt = null;
   }
 
-  /** A new prompt or dial starts a fresh blind interval, so earlier deliberate pauses no longer count. */
+  /**
+   * A new prompt or dial starts a fresh blind interval, so earlier deliberate pauses no longer count.
+   * @param {SessionState} s
+   * @param {Extract<SessionFact, { type: 'tick' }>} fact
+   * @param {number} at
+   * @returns {void}
+   */
   function observeBlindSignals(s, fact, at) {
     var bubble = typeof fact.sinceBubbleMs === 'number' ? fact.sinceBubbleMs : null;
     var dial = typeof fact.sinceDialMs === 'number' ? fact.sinceDialMs : null;
@@ -214,7 +296,11 @@
     }
   }
 
-  /** A new core has no pause history, even when a watchdog started it without a reducer action. */
+  /**
+   * A new core has no pause history, even when a watchdog started it without a reducer action.
+   * @param {SessionState} s
+   * @returns {SessionState}
+   */
   function clearBlindPause(s) {
     s.blindPauseMs = 0;
     s.blindPauseAt = null;
@@ -224,6 +310,12 @@
     return s;
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @param {PauseReason} reason
+   * @returns {ReduceResult}
+   */
   function paused(s, at, reason) {
     var wasDeliberate = deliberatePause(s.pauseReason);
     var willBeDeliberate = deliberatePause(reason);
@@ -241,6 +333,7 @@
     // Keeping it alive is only safe if it cannot ACT while it waits: an unthrottled cast retry puts
     // a line in the water, which removes the prompt the pause is waiting for, so the two would wait
     // forever (measured live 2026-11-02: 69 retries, paused on seat, line out, no recovery).
+    /** @type {SessionAction[]} */
     var actions = [];
     if (reason === 'seat') {
       s.seatSince = at;
@@ -254,6 +347,11 @@
     return { state: s, actions: actions };
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @returns {ReduceResult}
+   */
   function runningAgain(s, at) {
     var wasSeat = s.pauseReason === 'seat';
     if (deliberatePause(s.pauseReason)) endBlindPause(s, at);
@@ -265,10 +363,17 @@
     s.hiddenSince = null;
     s.seatSince = null;
     s.lastTickAt = at;
+    /** @type {SessionAction[]} */
     var actions = wasSeat ? [{ type: 'holdCasts', on: false }] : [];
     return { state: s, actions: actions.concat([{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }]) };
   }
 
+  /**
+   * @param {SessionState} s
+   * @param {number} at
+   * @param {Extract<SessionFact, { type: 'tick' }>} fact
+   * @returns {ReduceResult}
+   */
   function tickPaused(s, at, fact) {
     if (typeof fact.todayMs === 'number') s.todayMs = fact.todayMs;
     rollDay(s, at);
@@ -339,9 +444,13 @@
     return { state: s, actions: [] };
   }
 
+  /**
+   * @param {SessionState} state
+   * @param {SessionFact} fact
+   * @returns {ReduceResult}
+   */
   function reduce(state, fact) {
     var s = clone(state);
-    var actions = [];
     // A fact without an explicit clock used to fall back to 0, which made the next real tick credit
     // (now - 0) milliseconds of fishing time and stop the session as a daily-cap hit. Fall back to
     // the wall clock instead; every caller that cares passes its own at.
@@ -351,14 +460,14 @@
       var patch = fact.patch || {};
       for (var k in patch) {
         if (!Object.prototype.hasOwnProperty.call(patch, k)) continue;
-        if (k === 'window') {
+        if (k === 'window' && patch.window) {
           s.window = {
             on: patch.window.on === undefined ? s.window.on : !!patch.window.on,
             start: patch.window.start === undefined ? s.window.start : patch.window.start,
             stop: patch.window.stop === undefined ? s.window.stop : patch.window.stop
           };
         } else {
-          s[k] = patch[k];
+          /** @type {any} */ (s)[k] = /** @type {any} */ (patch)[k];
         }
       }
       return { state: s, actions: [{ type: 'persist' }] };
@@ -475,6 +584,7 @@
       // the user act (reel, or let the retry cast) before the seat hold is re-applied.
       s.seatOverrideUntil = fromSeat ? at + SEAT_OVERRIDE_MS : null;
       s.lastTickAt = at;
+      /** @type {SessionAction[]} */
       var actions = fromSeat ? [{ type: 'holdCasts', on: false }] : [];
       return { state: s, actions: actions.concat([{ type: 'resumeCore' }, { type: 'wakeLock' }, { type: 'persist' }]) };
     }
@@ -629,7 +739,7 @@
       }
 
       // 7. nothing has bitten in a while
-      var sinceCatch = at - (s.lastCatchAt == null ? s.startedAt : s.lastCatchAt);
+      var sinceCatch = at - (s.lastCatchAt == null ? (s.startedAt || 0) : s.lastCatchAt);
       // A profile modal open over the game blocks prompts without stopping the clock: pause
       // with a named reason instead of burning the session as a generic no-catch.
       // a profile modal open over the game blocks prompts and swallows inputs: pause first,
@@ -664,6 +774,9 @@
    * measured live 2026-11-24: `phase: running`, `fishingMs` no longer moving, core `running: false`.
    * This predicate is pure so the zombie case is testable without a page; panel.js asks it every
    * 5 s from a timer that is separate from the tick loop.
+   * @param {SessionState | null | undefined} state
+   * @param {CoreStatusLike | null | undefined} status
+   * @returns {'revive' | null}
    */
   function coreGuard(state, status) {
     if (!state || state.phase !== 'running') return null;
@@ -679,8 +792,12 @@
    * the game (or the page) is broken, and restarting it for hours hides that. The window is rolling
    * and times are pruned on every call; a refused revive is not recorded, so a stop at the cap keeps
    * the three timestamps that caused it. Pure, so the cap has a unit test.
+   * @param {number[] | null | undefined} times
+   * @param {number} now
+   * @returns {ReviveGateResult}
    */
   function reviveGate(times, now) {
+    /** @type {number[]} */
     var kept = [];
     (times || []).forEach(function (t) {
       if (typeof t === 'number' && now - t < REVIVE_WINDOW_MS) kept.push(t);
@@ -702,6 +819,8 @@
    * panel's visibility return, are subtracted; cast-stall and no-catch are detector failures and
    * still count. Returns the raw silence age, or null; blindWarning applies the three-minute
    * boundary. Pure, so both the boundary and the raw age are testable.
+   * @param {BlindFacts | null | undefined} s
+   * @returns {number | null}
    */
   function blindSilence(s) {
     if (!s || s.running !== true || s.stalled || s.visible === false) return null;
@@ -713,6 +832,7 @@
     var runAge = typeof s.runAgeMs === 'number' ? s.runAgeMs : null;
     var cap = runAge != null ? runAge : sessionAge;
     if (sessionAge != null && cap != null) cap = Math.min(cap, sessionAge);
+    /** @type {number[]} */
     var ages = [];
     if (typeof s.sinceBubbleMs === 'number') ages.push(s.sinceBubbleMs);
     if (typeof s.sinceDialMs === 'number') ages.push(s.sinceDialMs);
@@ -723,7 +843,11 @@
     return blindMs;
   }
 
-  /** The warning boundary: the same silence, or null while it is still a plausible bite wait. */
+  /**
+   * The warning boundary: the same silence, or null while it is still a plausible bite wait.
+   * @param {BlindFacts | null | undefined} s
+   * @returns {number | null}
+   */
   function blindWarning(s) {
     var blindMs = blindSilence(s);
     return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
