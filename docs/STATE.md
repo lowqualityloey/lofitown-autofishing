@@ -20,10 +20,11 @@
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: none new; `docs/specs/2026-11-18-overnight-capture.md` remains the last approved feature spec
-- **Active Task Spec**: none new; the overnight-capture record stays at `docs/tasks/TASK-2026-11-18-overnight-capture.md`
-- **Key Source Files in Flight**: `README.md`, `docs/releases/3.9.63.md`, `docs/README.md`, `tests/docs.test.js`, `docs/STATE.md`, `session.js`, `panel.js`, `tests/blind.test.js`, `tests/zombie.test.js`, `tests/result-missing.test.js`, and `dist/autofish.user.js`; live evidence is in `AUTOFISH.md` and `docs/STATE.md`. 3.9.63 is tagged and published; PR #36 merged the README update; PR #37 merged the docs record and guard at `4a3e0ec`; `release.js --check` is green; the queued field validation follows.
+- **Active RFC / Spec**: `docs/specs/2026-11-27-jsdoc-typecheck-and-architecture.md` (`PLAN-jsdoc-typecheck`, M1–M3 + M5 implemented; M4 deferred)
+- **Active Task Spec**: `docs/tasks/TASK-2026-11-27-jsdoc-typecheck.md` (Level 2)
+- **Key Source Files in Flight**: `tsconfig.json`, `types.d.ts`, `package.json`, `package-lock.json`, `layout.js`, `session.js`, `panel.js`, `autofish.js`, `fishserve.js`, `build-userscript.js`, `scripts/*.js`, `.github/workflows/test.yml`, `README.md`, `AUTOFISH.md`, `PROMPTKIT.md`, `docs/STATE.md`, `docs/README.md`, `dist/autofish.user.js`. Prior `v3.9.64` release + live evidence in `AUTOFISH.md` & `docs/releases/3.9.64.md`.
 - **Verification Commands (Scoped)**:
+  - Typecheck: `npm run typecheck` (`tsc --noEmit` via `typescript@7.0.2`, `checkJs: true`, `strictNullChecks: true`; `devDependencies` only)
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
   - Build: `node build-userscript.js`; a test fails when the committed `dist/` is stale
   - Release mirror: `node scripts/release.js --check` after every tag — verifies both release assets
@@ -31,23 +32,22 @@
   - Server smoke: `FISHSERVE_PORT=8741 node fishserve.js` then `curl -s localhost:8741/recent?n=1`
   - Overnight report: `node scripts/overnight-report.js` (12 h ending at the newest snapshot; `## Coverage`; exit 1 when truncated)
   - Capture live check: start fishserve, enable Overnight capture, confirm the first POST, then read the live review (`docs/reviews/2026-11-18-capture-address-live.md`)
-  - Typecheck / Linter: none configured
 
 ---
 ## 3A. Execution-Control Projection (Optional)
 > `docs/tasks/<task-id>.md` is authoritative; escape `|` as `\|` in tables.
-- **Task ID**: `TASK-<slug>`
-- **Task Record**: `docs/tasks/<task-id>.md`
-- **Ceremony Level**: `[1 | 2 | 3]`
-- **Specification**: `[path]`
-- **Execution Scope**: `[scope]`
-- **Execution State**: `[planned | in_progress | blocked | paused | awaiting_review | completed]`
-- **Mapped `pk:tasks` Status**: `[To Do | In Progress | In Review | Done]`
-- **Active Task Pointer**: `[Task ID or None]`
-- **Owner / Current Actor**: `[person or agent]`
-- **Start Time**: `[YYYY-MM-DD HH:MM UTC]`
-- **Current Revision**: `[commit]`
-- **Next Action**: `[one action]`
+- **Task ID**: `TASK-2026-11-27-jsdoc-typecheck`
+- **Task Record**: `docs/tasks/TASK-2026-11-27-jsdoc-typecheck.md`
+- **Ceremony Level**: `2`
+- **Specification**: `docs/specs/2026-11-27-jsdoc-typecheck-and-architecture.md`
+- **Execution Scope**: M1–M3 + M5 (JSDoc typechecking, CI `typecheck` job, docs sync; M4 deferred)
+- **Execution State**: `completed`
+- **Mapped `pk:tasks` Status**: `Done`
+- **Active Task Pointer**: `TASK-2026-11-27-jsdoc-typecheck`
+- **Owner / Current Actor**: lead / Antigravity
+- **Start Time**: `2026-11-27`
+- **Current Revision**: `00c52dc`
+- **Next Action**: Optional future M4 (`src/` module extraction & headless `step()` simulator).
 
 ---
 
@@ -137,6 +137,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-25 | lead (Freebuff session) | PR #37 merged the 3.9.63 docs record | PR #37 merged `docs/3.9.63-release` into `main` as `4a3e0ec`; the merge added `docs/releases/3.9.63.md`, indexed it in `docs/README.md`, refreshed this tracker and added the release-note guard in `tests/docs.test.js`. Full suite 428/428 and `release.js --check` green against v3.9.63. Mode-only diffs stayed out. | `docs/releases/3.9.63.md`; `docs/README.md`; `tests/docs.test.js`; `docs/STATE.md` |
 | 2026-11-27 | Antigravity (pk:checkpoint) | PromptKit OS 2.6.1 upgrade & STATE.md slimming | Upgraded `.promptkit/` courier from v2.5.0 to v2.6.1 (`node --test` 428/428); archived historical Section 1/2/6/7/8 entries and slimmed v2.5.0 Section 3A/3B boilerplate to `docs/STATE-ARCHIVE.md`. | `docs/STATE.md`; `docs/STATE-ARCHIVE.md`; `PROMPTKIT.md`; `AGENTS.md` |
 | 2026-11-27 | Antigravity (pk:debug / pk:ship prep) | 3.9.64 dial continuity & off-center seat fix | Fixed >90° post-press lock drops (`doPress` `_mid` reset), moved re-arm before `planPress`, raised `maxPressPerDial` to 30 (`maxRejectedPerDial: 5`), added `seatPromptBox`, dial-lock `F.hint` sync, `glyphMetrics` on `bubbleAnywhere`, and 3-strike `downscaleGl` recovery. Live BrowserOS Neo: `0/9` multi-lock (was `61.5%`), `46/46` presses accepted, `82.6%` settled, `(609,578)` promoted to `box`; `431/431` tests green. | `autofish.js`; `dist/autofish.user.js`; `package.json`; `docs/releases/3.9.64.md`; `docs/tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md` |
+| 2026-11-27 | Antigravity (pk:plan / M1–M3+M5) | Dev-only JSDoc static type-checking (`tsc --noEmit`) | Installed `typescript@7.0.2` in `devDependencies`; added `tsconfig.json` (`checkJs: true`, `strictNullChecks: true`, `noEmit: true`) and `types.d.ts`; typed `layout.js`, `session.js`, `panel.js`, `autofish.js`, `fishserve.js`, `build-userscript.js`, and `scripts/*.js` with `@satisfies` on `PAUSE_WHY`, `RUNNERS`, and `DIAL_COUNTER`; added CI `typecheck` job and synced docs (`DECISION-jsdoc-typecheck-001`; M4 deferred). | `tsconfig.json`; `types.d.ts`; `package.json`; `layout.js`; `session.js`; `panel.js`; `autofish.js`; `fishserve.js`; `build-userscript.js`; `scripts/*.js`; `.github/workflows/test.yml`; `docs/specs/2026-11-27-jsdoc-typecheck-and-architecture.md`; `docs/tasks/TASK-2026-11-27-jsdoc-typecheck.md` |
 
 ---
 

@@ -100,9 +100,11 @@ It reports catch rate, width bands, losses, gaps, doctor verdicts and whether th
 
 ## Development
 
-No runtime dependencies. Node.js is only needed for development and the optional server.
+Zero runtime dependencies — `dist/autofish.user.js` remains a single self-contained Tampermonkey script. Node.js is used for tests, building the bundle, dev-only JSDoc type-checking (`typescript@7.0.2`), and the optional capture server.
 
 ```bash
+npm ci                      # installs dev-only typescript for static type-checking
+npm run typecheck           # tsc --noEmit across JS modules (// @ts-check + types.d.ts)
 node --test                 # full suite; never "node --test tests/"
 node build-userscript.js    # rebuild dist/ after editing browser code
 node scripts/release.js --check

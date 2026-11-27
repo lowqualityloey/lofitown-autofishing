@@ -6,6 +6,7 @@
 | [specs/2026-10-28-catch-log.md](specs/2026-10-28-catch-log.md) | Approved spec for the local catch ledger, embedded catalogue and rarity strip. |
 | [specs/2026-11-18-overnight-capture.md](specs/2026-11-18-overnight-capture.md) | Contract for overnight capture (3.9.45-3.9.47): origin resolution, self-healing, the amber address line, row controls and the morning report's coverage verdict. |
 | [specs/2026-11-19-3.9.52-held-forced-prereg.md](specs/2026-11-19-3.9.52-held-forced-prereg.md) | Pre-registered read-only telemetry plan for 3.9.52: metrics, strengthened sample, one-sided 95% Wilson bound, and the 20% cap retirement rule. |
+| [specs/2026-11-27-jsdoc-typecheck-and-architecture.md](specs/2026-11-27-jsdoc-typecheck-and-architecture.md) | Implementation plan (RFC) for incremental JSDoc + `tsc --noEmit` type-checking, optional sentinel modularization, headless `step()` simulator, CI, and docs updates. |
 | [specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md) | Panel design spec: intent, goals, anti-goals, and the control surface chosen on 2026-10-27. |
 | [tasks/autofish-panel.md](tasks/autofish-panel.md) | Task record for the panel milestone (T1-T10, acceptance criteria). Its design spec is [specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md); its decisions live in [STATE.md §6](STATE.md). |
 | [tasks/TASK-2026-10-28-catch-log.md](tasks/TASK-2026-10-28-catch-log.md) | Task record for Catch log v1, with its verify commands. |
@@ -17,6 +18,7 @@
 | [tasks/TASK-2026-11-18-overnight-capture.md](tasks/TASK-2026-11-18-overnight-capture.md) | Task record for overnight capture and address correction, with acceptance and live evidence. |
 | [tasks/TASK-2026-11-18-install-3.9.51.md](tasks/TASK-2026-11-18-install-3.9.51.md) | Post-night install checklist for 3.9.51: restart fishserve first, install the userscript second, and the counters that prove the re-arm change. |
 | [tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md](tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md) | Task record for fixing mid-fish >90° lock drops, 12-press cap losses, re-arm lag, and off-center seat prompt freezes. |
+| [tasks/TASK-2026-11-27-jsdoc-typecheck.md](tasks/TASK-2026-11-27-jsdoc-typecheck.md) | Task record for incremental JSDoc + `tsc --noEmit` typing (M1–M3), CI, and docs alignment (M5). |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
 | [reviews/2026-11-23-catch-and-focus-live.md](reviews/2026-11-23-catch-and-focus-live.md) | Live verification of the rebuilt userscript's catch POST, focus takeover, seat warning and next catch. |

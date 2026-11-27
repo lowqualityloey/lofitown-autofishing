@@ -49,6 +49,10 @@ Live snapshot audit (`225` snapshots, `1,778` attempts, `172` losses) exposed fo
 3. **Off-center pier seats (`y ≈ 580`)**: `promptBox()` missed `CAST!`, `dialAnywhere()` did not update `F.hint`, and `bubbleAnywhere()` lacked `glyphMetrics`. Added `seatPromptBox(F.lastGeo, cw, ch)`, dial-lock `F.hint` sync, and glyph-verified rung-1 `Space`.
 4. **WebGL snapshot fallback**: `downscaleGl()` now retries up to 3 context/FBO failures before falling back to 2D `getImageData`.
 
+## 2026-11-27 Dev-only JSDoc static type-checking (`tsc --noEmit`)
+
+Added zero-emit JSDoc static type-checking (`typescript@7.0.2` devDependency, `tsconfig.json` with `checkJs: true`, `strictNullChecks: true`, `noEmit: true`, and shared contracts in `types.d.ts`) across all runtime scripts (`layout.js`, `session.js`, `panel.js`, `autofish.js`) and Node tooling (`fishserve.js`, `build-userscript.js`, `scripts/*.js`). `@satisfies` exhaustiveness checks protect `PAUSE_WHY`, `RUNNERS`, and `DIAL_COUNTER` from drift while keeping `coarseScan` untouched, preserving zero runtime dependencies and leaving Tampermonkey's single-file `dist/autofish.user.js` install unchanged (RFC `PLAN-jsdoc-typecheck`; M1–M3 + M5 implemented, M4 deferred).
+
 ## 2026-11-24 Fast first press (3.9.57)
 
 `fastFirstPress` is opt-in. It bypasses the first-press stable-fit hold only on narrow or fast
