@@ -2,11 +2,11 @@
 
 A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no build step, and no console paste to install. Install it in Tampermonkey and press **Start**.
 
-![AutoFish running in lofi.town](docs/images/in-game.jpg)
+![AutoFish running in lofi.town (v3.9.31 screenshot; main updates the panel layout below)](docs/images/in-game.jpg)
 
 ## Status
 
-**Actively maintained.** Current release **3.9.64** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.64)) · **full test suite passing** on 2026-11-27 · [MIT](LICENSE)
+**Actively maintained.** Published release **3.9.64** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.64)) · unreleased features on `main` queued for the next tag (`Mode: Flow / Timed`, unified `Local capture`, modular `src/` core, hot-path polish) · **full test suite passing** on 2026-11-27 · [MIT](LICENSE)
 
 Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://www.tampermonkey.net/), the game open, and a character you can seat.
 
@@ -60,11 +60,11 @@ __fish.version
 
 The bot reads the game's rendered frames to find the **CAST!** and **REEL!** prompts, then presses the spinning reel dial at the moment the wedge crosses the pin. It uses a predicted crossing, re-arms after a proven new triangle, and falls back to a full-surface search if its remembered dial is wrong. Detection runs inside a wrapper around the renderer, because the prompts are painted into the game's canvas.
 
-The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, elapsed/remaining timer, catches, presses and today's time. **Session & guards** starts with **Mode (`Flow` / `Timed`)**: **Flow** runs nonstop until you press **Stop** (keeping safety guards active and hiding the **Session**, **Cooldown**, **Daily time cap**, **Clock window**, and **Auto-start** rows), while **Timed** enforces budgeted windows and cooldowns. It also holds **Stop when hidden** (including `off` for pause-only), **Cozier popup**, **Pause in focus sessions**, **Resume after reload**, **Local capture** (streaming both CSV rows and 5-minute `fishserve` snapshots), and **Profile**.
+The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, elapsed/remaining timer, catches, presses and today's time. **Session & guards** holds **Session**, **Cooldown**, **Daily time cap**, **Stop when hidden**, **Clock window**, **Cozier popup**, **Pause in focus sessions**, **Auto-start next run**, **Resume after reload**, and **Profile**; on `main` (queued for the next release), it also adds **Mode (`Flow` / `Timed`)** (**Flow** runs nonstop until you press **Stop** with safety guards active and hides timed/budgeted rows), allows **Stop when hidden: `off`** (pause-only), retires the **Fast first press** UI toggle (still available via `__fish.tune({ fastFirstPress: true })`), and merges **Send catches to CSV** + **Overnight capture** into one **Local capture** toggle.
 
-**Diagnostics** shows fps, frame times, accuracy, and detector cost. Drag the header to move it; the **-** control collapses it to a small pill. (Console power users can still toggle `fastFirstPress` via `__fish.tune({ fastFirstPress: true })`, though the default first-press gate recorded zero unwanted holds in live 3.9.64 runs.)
+**Diagnostics** shows fps, frame times, accuracy, and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
 
-![The AutoFish panel](docs/images/panel.jpg)
+![The AutoFish panel (v3.9.31 screenshot showing Timed drawer before Flow, Pause in focus sessions, and merged Local capture)](docs/images/panel.jpg)
 
 The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.64. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
 
@@ -88,7 +88,7 @@ The page keeps only the last 250 attempts, so a long run needs a local sampler. 
 node fishserve.js
 ```
 
-Open **Session & guards**, turn on **Local capture**, and enter the fishserve origin, usually `http://127.0.0.1:8731`. Catches stream to `catches.csv` and the first run snapshot posts immediately and repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
+Open **Session & guards**, enable capture (**Local capture** on `main`; **Send catches to CSV** + **Overnight capture** in `v3.9.64`), and enter the fishserve origin, usually `http://127.0.0.1:8731`. Catches stream to `catches.csv` and the first run snapshot posts immediately and repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
 
 In the morning:
 
@@ -106,15 +106,17 @@ Zero runtime dependencies — `dist/autofish.user.js` remains a single self-cont
 npm ci                      # installs dev-only typescript for static type-checking
 npm run typecheck           # tsc --noEmit across JS modules (// @ts-check + types.d.ts)
 node --test                 # full suite; never "node --test tests/"
-node build-userscript.js    # rebuild dist/ after editing browser code
+node build-userscript.js    # assemble src/ modules + core/panel/session/layout into dist/
+npm run serve               # start optional local capture server (node fishserve.js)
 node scripts/release.js --check
 ```
 
-The committed `dist/autofish.user.js` is checked against `package.json`; rebuild it before committing browser changes. The design record, measurements and every fix are in [AUTOFISH.md](AUTOFISH.md). Current position, specs and verification history are in [docs/STATE.md](docs/STATE.md).
+The committed `dist/autofish.user.js` is checked against `package.json`; rebuild it before committing browser changes. Shared domain logic lives under `src/` (`diagnostics.js`, `ledger.js`, `vision.js`, `timing.js`, `loop.js`) and is assembled alongside `autofish.js`, `session.js`, `layout.js`, and `panel.js`. The design record, measurements and every fix are in [AUTOFISH.md](AUTOFISH.md). Current position, specs and verification history are in [docs/STATE.md](docs/STATE.md).
 
 ## Documentation and licence
 
 - [AUTOFISH.md](AUTOFISH.md) - design record, measurements and known regressions.
+- [docs/README.md](docs/README.md) - index of specs, reviews, tasks, and release notes.
 - [docs/STATE.md](docs/STATE.md) - current position, decisions and next actions.
 - [docs/specs/](docs/specs/) - approved feature contracts.
 - [docs/reviews/](docs/reviews/) - live verification records.

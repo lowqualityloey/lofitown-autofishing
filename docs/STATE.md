@@ -2,10 +2,10 @@
 
 <!-- Bounded projection: respect `state-guard:` thresholds in `PROMPTKIT.md`; `pk:checkpoint` archives completed history to `docs/STATE-ARCHIVE.md`. -->
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.64 (dial continuity, 30-press cap, off-center seat prompt box, GL snapshot recovery; release-prep pending v3.9.64 tag/publish); in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.64 published at `v3.9.64` / `94626a4`; `main` ahead with M4 modular core, Flow mode, unified `Local capture`, and hot-path perf polish)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — **3.9.64** release-prep ready (live-verified in BrowserOS Neo, `431/431` tests); prior published baseline **v3.9.63** (`406,879` bytes, sha256 `02904b8c7112…`, source + `lofitown-autofishing-dist` mirror green). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
-- **Current Working Branch**: `main` (`4a3e0ec`, PR #37 merged 3.9.63 docs record & guard; `node --test` 428/428 & `release.js --check` green; `run.sh` & `docs/releases/3.9.51.md` hold mode-only diffs).
+- **Overall Status**: ACTIVE — **v3.9.64** published (`94626a4`, `408,592` bytes, `sha256 5f6ecdaf6281`, source + `lofitown-autofishing-dist` mirror green via `release.js --check`); `main` at `9c7dae7` (`440/440` tests, `tsc --noEmit` exit `0`, `dist/autofish.user.js` `413,732` bytes). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
+- **Current Working Branch**: `main` (`9c7dae7`, ahead of `v3.9.64`; pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
 - **Last Updated**: 2026-11-27
 - **Engine Version**: v2.6.1 @ unknown
 - **Runtime**: Node v26.13.1 (WSL), zero dependencies, no bundler
@@ -20,9 +20,9 @@
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-11-27-flow-mode-and-panel-simplification.md` (`PLAN-flow-mode-panel` — Implemented & committed (`8efe8c8`); prior M4 `PLAN-m4-modular-core` shipped & live-verified in `ff5657d`)
+- **Active RFC / Spec**: `docs/specs/2026-11-27-flow-mode-and-panel-simplification.md` (`PLAN-flow-mode-panel` — Implemented & verified (`8efe8c8`, Flow `resume` + perf polish in `9c7dae7`); prior M4 `PLAN-m4-modular-core` shipped & live-verified in `ff5657d`)
 - **Active Task Spec**: `docs/tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md` (Level 2)
-- **Key Source Files in Flight**: `session.js`, `src/loop.js`, `autofish.js`, `panel.js`, `types.d.ts`, `dist/autofish.user.js`, `tests/{panel,session,simulator}.test.js`, `README.md`, `AUTOFISH.md`, `docs/*`. Prior `v3.9.64` release + live evidence in `AUTOFISH.md` & `docs/releases/3.9.64.md`.
+- **Key Source Files in Flight**: `session.js`, `src/{diagnostics,ledger,vision,timing,loop}.js`, `autofish.js`, `panel.js`, `types.d.ts`, `dist/autofish.user.js`, `tests/*.test.js`, `README.md`, `AUTOFISH.md`, `docs/*`. Published `v3.9.64` release + live evidence in `AUTOFISH.md` & `docs/releases/3.9.64.md`.
 - **Verification Commands (Scoped)**:
   - Typecheck: `npm run typecheck` (`tsc --noEmit` via `typescript@7.0.2`, `checkJs: true`, `strictNullChecks: true`; `devDependencies` only)
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
@@ -46,8 +46,8 @@
 - **Active Task Pointer**: `TASK-2026-11-27-flow-mode-and-panel-simplification`
 - **Owner / Current Actor**: lead / Antigravity
 - **Start Time**: `2026-11-27`
-- **Current Revision**: `8efe8c8`
-- **Next Action**: Reinstall `http://127.0.0.1:8731/autofish.user.js` to verify Flow mode & Local capture live in BrowserOS Neo (or push `main`).
+- **Current Revision**: `9c7dae7`
+- **Next Action**: Capture fresh Flow-mode panel screenshots for `README.md`, live-verify Flow mode & `Local capture` in BrowserOS Neo, and cut next release tag (`v3.9.65`) when ready.
 
 ---
 
@@ -119,8 +119,8 @@ Older decisions (2026-10-27–2026-11-17) are archived in `docs/STATE-ARCHIVE.md
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. **Field-run 3.9.63 across an overnight capture.** Verify `## Guard and blind` and `## Session notes` on a fresh night, then investigate the 34-minute gap and 01:20 `core-crash`.
-2. **Field-run 3.9.56 across local midnight.** Verify that only the post-midnight share spends the new day's cap.
+1. **Live-verify Flow mode + `Local capture` & refresh `README.md` screenshots.** Capture updated `docs/images/{in-game,panel}.jpg` in BrowserOS Neo so the README matches the Flow / `Local capture` UI, then prepare `v3.9.65` release (`pk:ship`).
+2. **Field-run across local midnight.** Verify that only the post-midnight share spends the new day's cap (`Timed` mode) and that `Flow` mode runs smoothly across rollover.
 3. **Measure the Zen frame budget.** Use `__fish.perf()` on Gecko before changing any scan throttle.
 4. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat bubbles) at untested window sizes.
 
@@ -140,6 +140,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-27 | Antigravity (pk:plan / M1–M3+M5) | Dev-only JSDoc static type-checking (`tsc --noEmit`) | Installed `typescript@7.0.2` in `devDependencies`; added `tsconfig.json` (`checkJs: true`, `strictNullChecks: true`, `noEmit: true`) and `types.d.ts`; typed `layout.js`, `session.js`, `panel.js`, `autofish.js`, `fishserve.js`, `build-userscript.js`, and `scripts/*.js` with `@satisfies` on `PAUSE_WHY`, `RUNNERS`, and `DIAL_COUNTER`; added CI `typecheck` job and synced docs (`DECISION-jsdoc-typecheck-001`; M4 deferred). | `tsconfig.json`; `types.d.ts`; `package.json`; `layout.js`; `session.js`; `panel.js`; `autofish.js`; `fishserve.js`; `build-userscript.js`; `scripts/*.js`; `.github/workflows/test.yml`; `docs/specs/2026-11-27-jsdoc-typecheck-and-architecture.md`; `docs/tasks/TASK-2026-11-27-jsdoc-typecheck.md` |
 | 2026-11-27 | Antigravity (pk:plan / M4) | Modular core extraction (`src/`) & headless simulator | Extracted `src/{diagnostics,ledger,vision,timing,loop}.js` (`// @ts-check` UMD modules), shared `assembleCore()` across `build-userscript.js` + `fishserve.js` (`GET /autofish.js`), migrated sentinel tests & `scripts/{gen-catalogue,overnight-report}.js` to `require('../src/...')`, and added `tests/simulator.test.js` (`PLAN-m4-modular-core`, committed `0c71e6e`/`7802bf4`; `436/436` tests, `tsc --noEmit` exit `0`). Verified live in BrowserOS Neo: `['3.9.64', true x 5]`, `10/10` caught (`d: 1`), `53/53` accepted, `143.1 fps`, `snapshot.gl: 4233 / canvas2d: 0`. | `src/*.js`; `autofish.js`; `build-userscript.js`; `fishserve.js`; `types.d.ts`; `tsconfig.json`; `scripts/*.js`; `tests/*.test.js`; `dist/autofish.user.js`; `AUTOFISH.md`; `docs/specs/2026-11-27-m4-modular-core-and-simulator.md`; `docs/tasks/TASK-2026-11-27-m4-modular-core.md`; `docs/reviews/2026-11-27-m4-modular-core-live.md`; `docs/STATE.md` |
 | 2026-11-27 | Antigravity (pk:plan) | Flow mode & panel simplification | Added `Mode: Flow \| Timed` (`maxMinutes: 0`, `hiddenStopMs: 0`), kept safety guards + `Cozier popup`, retired `Fast first press` UI + amber warning, and unified `Send catches to CSV` + `Overnight capture` into one `Local capture` toggle with Expand-Contract pref migration (`PLAN-flow-mode-panel`, committed `8efe8c8`; `438/438` tests, `tsc --noEmit` exit `0`). | `session.js`; `src/loop.js`; `autofish.js`; `panel.js`; `types.d.ts`; `dist/autofish.user.js`; `tests/{panel,session,simulator}.test.js`; `README.md`; `AUTOFISH.md`; `docs/specs/2026-11-27-flow-mode-and-panel-simplification.md`; `docs/tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md`; `docs/STATE.md` |
+| 2026-11-27 | Antigravity (pk:review / pk:fix) | Flow `resume` fix, perf polish & docs sync | Bypassed `dailyCapMs`/`window` checks on Flow `resume` (`session.js`), added `createLedger().getEpoch()` + `F.log()` memoization, reused `tickOnce()` status in `render()`, eliminated `PX()` in `creamFraction` and unused `pat`/array allocs in `F.sample()`, consolidated `src/diagnostics.js` filter passes (`9c7dae7`; `440/440` tests, `tsc --noEmit` exit `0`), and synced `README.md`, `docs/STATE.md`, `docs/releases/3.9.64.md`, and `docs/README.md` (flagging stale `3.9.31` README screenshots). | `session.js`; `src/{ledger,diagnostics}.js`; `autofish.js`; `panel.js`; `dist/autofish.user.js`; `tests/{session,catchlog,perf}.test.js`; `README.md`; `docs/STATE.md`; `docs/releases/3.9.64.md`; `docs/README.md` |
 
 ---
 
