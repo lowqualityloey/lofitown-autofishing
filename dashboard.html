@@ -3,140 +3,192 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AutoFish — Local Capture Dashboard</title>
+<title>AutoFish Local Dashboard</title>
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0f1318;
     --card: #161b22;
-    --border: rgba(255,255,255,.09);
+    --row-hover: rgba(255,255,255,.035);
+    --border: rgba(255,255,255,.10);
     --text: #e8ecef;
-    --muted: #8b95a0;
+    --muted: #9aa4ae;
     --accent: #5ad18b;
     --warn: #f2c14e;
-    --bad: #ff7b7b;
+    --bad: #ff8585;
     --pink: #ff8fa3;
+    --sky: #8be9fd;
+    --gold: #ffd970;
+    --radius: 14px;
   }
   * { box-sizing: border-box; }
+  ::selection { background: rgba(90,209,139,.28); color: var(--text); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.26); }
+
   body {
     margin: 0;
     padding: 24px;
     background: var(--bg);
     color: var(--text);
     font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow-x: hidden;
   }
   .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
   .header {
-    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
-    background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 18px;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px;
   }
-  .title { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+  .title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
+  h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.015em; line-height: 1.25; }
   .badge {
-    font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 99px;
-    border: 1px solid var(--border); color: var(--muted); text-transform: uppercase; letter-spacing: .4px;
+    display: inline-flex; align-items: center; font-size: 11px; font-weight: 600;
+    padding: 2px 9px; border-radius: 99px; white-space: nowrap;
+    border: 1px solid var(--border); color: var(--muted); text-transform: uppercase; letter-spacing: .35px;
   }
-  .badge.ok { color: var(--accent); border-color: rgba(90,209,139,.35); background: rgba(90,209,139,.10); }
-  .badge.warn { color: var(--warn); border-color: rgba(242,193,78,.35); background: rgba(242,193,78,.10); }
+  .badge.ok { color: var(--accent); border-color: rgba(90,209,139,.38); background: rgba(90,209,139,.11); }
+  .badge.warn { color: var(--warn); border-color: rgba(242,193,78,.38); background: rgba(242,193,78,.11); }
+  .badge.bad { color: var(--bad); border-color: rgba(255,133,133,.38); background: rgba(255,133,133,.11); }
+
   .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   button {
     border: 1px solid var(--border); background: rgba(255,255,255,.05); color: var(--text);
-    font: inherit; font-size: 12px; padding: 6px 11px; border-radius: 8px; cursor: pointer;
+    font: inherit; font-size: 12px; font-weight: 500; padding: 6px 11px; min-height: 32px;
+    border-radius: 8px; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, color .14s ease;
   }
-  button:hover { background: rgba(255,255,255,.10); }
-  button.active { background: rgba(90,209,139,.16); border-color: rgba(90,209,139,.4); color: var(--accent); }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  button:hover:not(:disabled) { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.18); }
+  button:active:not(:disabled) { background: rgba(255,255,255,.14); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:disabled { opacity: .55; cursor: progress; }
+  button.active { background: rgba(90,209,139,.16); border-color: rgba(90,209,139,.42); color: var(--accent); }
+
+  .notice {
+    display: none; padding: 10px 14px; border-radius: 10px; font-size: 12.5px;
+    border: 1px solid rgba(255,133,133,.35); background: rgba(255,133,133,.10); color: #ffd6d6;
+  }
+  .notice.show { display: block; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 12px; }
   .kpi, .panel {
-    background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px;
+    min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px;
   }
-  .kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
-  .kpi-val { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .kpi-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
-  h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .kpi-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .35px; }
+  .kpi-val { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.015em; }
+  .kpi-sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
+  h2 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+
+  .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   th, td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; }
+  tbody tr:hover { background: var(--row-hover); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.nowrap { white-space: nowrap; font-variant-numeric: tabular-nums; }
   tr:last-child td { border-bottom: 0; }
-  .empty { color: var(--muted); padding: 16px 0; font-size: 12.5px; }
+  .empty { color: var(--muted); padding: 12px 0; font-size: 12.5px; }
+
+  .diag-list { display: flex; flex-direction: column; gap: 9px; font-size: 12.5px; }
+  .diag-row { display: grid; grid-template-columns: 128px 1fr; gap: 8px; align-items: baseline; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .diag-row:last-child { padding-bottom: 0; border-bottom: 0; }
+  .diag-key { color: var(--muted); font-size: 11.5px; font-weight: 600; }
+  .diag-val { color: var(--text); font-variant-numeric: tabular-nums; word-break: break-word; }
+  .diag-more { color: var(--muted); font-size: 11.5px; }
+
   .tag {
     display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px;
-    background: rgba(255,255,255,.07); color: var(--text); margin-right: 4px;
+    background: rgba(255,255,255,.07); color: var(--text); margin-right: 4px; white-space: nowrap;
   }
   .tag.leg { color: var(--warn); background: rgba(242,193,78,.14); }
   .tag.sec { color: var(--pink); background: rgba(255,143,163,.16); }
-  .tag.sh { color: #8be9fd; background: rgba(139,233,253,.14); }
-  .tag.go { color: #ffd970; background: rgba(255,217,112,.14); }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; white-space: pre-wrap; color: #b9c2cb; }
-  @media (max-width: 640px) { body { padding: 12px; } }
+  .tag.sh { color: var(--sky); background: rgba(139,233,253,.14); }
+  .tag.go { color: var(--gold); background: rgba(255,217,112,.14); }
+
+  @media (max-width: 640px) {
+    body { padding: 12px; }
+    .header { padding: 12px 14px; }
+    .kpi, .panel { padding: 12px 14px; }
+    .diag-row { grid-template-columns: 1fr; gap: 2px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    button { transition: none; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="header">
-    <div class="title">
-      <span>AutoFish Local Dashboard</span>
-      <span id="covBadge" class="badge">loading…</span>
+<main class="wrap">
+  <header class="header">
+    <div class="title-row">
+      <h1>AutoFish Local Dashboard</h1>
+      <span id="covBadge" class="badge" aria-live="polite">Loading...</span>
     </div>
     <div class="controls">
-      <button id="winNight" class="active" type="button">Last 12h</button>
-      <button id="winAll" type="button">All snapshots</button>
-      <button id="autoBtn" class="active" type="button">Auto 30s: on</button>
+      <button id="winNight" class="active" type="button" aria-pressed="true">Last 12h</button>
+      <button id="winAll" type="button" aria-pressed="false">All snapshots</button>
+      <button id="autoBtn" class="active" type="button" aria-pressed="true">Auto 30s: on</button>
       <button id="refreshBtn" type="button">Refresh</button>
     </div>
-  </div>
+  </header>
 
-  <div class="kpis">
-    <div class="kpi"><div class="kpi-label">Catch rate</div><div id="kpiRate" class="kpi-val">—</div><div id="kpiRateSub" class="kpi-sub">no snapshots yet</div></div>
-    <div class="kpi"><div class="kpi-label">Press accept rate</div><div id="kpiPress" class="kpi-val">—</div><div id="kpiPressSub" class="kpi-sub">—</div></div>
-    <div class="kpi"><div class="kpi-label">Logged catches (CSV)</div><div id="kpiCatches" class="kpi-val">—</div><div id="kpiCatchesSub" class="kpi-sub">—</div></div>
-    <div class="kpi"><div class="kpi-label">Snapshot store</div><div id="kpiRuns" class="kpi-val">—</div><div id="kpiRunsSub" class="kpi-sub">—</div></div>
-  </div>
+  <div id="errNotice" class="notice" role="status" aria-live="polite"></div>
+
+  <section class="kpis" aria-label="Session totals">
+    <div class="kpi"><div class="kpi-label">Catch rate</div><div id="kpiRate" class="kpi-val">--</div><div id="kpiRateSub" class="kpi-sub">No snapshots yet</div></div>
+    <div class="kpi"><div class="kpi-label">Press accept rate</div><div id="kpiPress" class="kpi-val">--</div><div id="kpiPressSub" class="kpi-sub">--</div></div>
+    <div class="kpi"><div class="kpi-label">Logged catches (CSV)</div><div id="kpiCatches" class="kpi-val">--</div><div id="kpiCatchesSub" class="kpi-sub">--</div></div>
+    <div class="kpi"><div class="kpi-label">Snapshot store</div><div id="kpiRuns" class="kpi-val">--</div><div id="kpiRunsSub" class="kpi-sub">--</div></div>
+  </section>
 
   <div class="grid">
-    <div class="panel">
+    <section class="panel">
       <h2>Dial width bands</h2>
-      <div id="bandsBody" class="empty">Waiting for snapshots…</div>
-    </div>
-    <div class="panel">
+      <div id="bandsBody" class="empty">Waiting for snapshots...</div>
+    </section>
+    <section class="panel">
       <h2>Losses, stalls &amp; guard verdicts</h2>
-      <div id="diagBody" class="empty">Waiting for snapshots…</div>
-    </div>
+      <div id="diagBody" class="empty">Waiting for snapshots...</div>
+    </section>
   </div>
 
   <div class="grid">
-    <div class="panel">
+    <section class="panel">
       <h2>Recent rare &amp; variant catches</h2>
       <div id="trophyBody" class="empty">No Legendary, Secret, Shiny, or Golden catches in recent CSV rows.</div>
-    </div>
-    <div class="panel">
+    </section>
+    <section class="panel">
       <h2>Logged sessions in window</h2>
       <div id="sessionsBody" class="empty">No session rows in this window.</div>
-    </div>
+    </section>
   </div>
 
-  <div class="panel">
+  <section class="panel">
     <h2>Recent catches (catches.csv)</h2>
     <div id="recentBody" class="empty">No catches recorded yet.</div>
-  </div>
-</div>
+  </section>
+</main>
 
 <script>
 (function () {
   var allMode = false;
   var autoOn = true;
   var timer = null;
+  var loading = false;
 
   var el = function (id) { return document.getElementById(id); };
-  var pct = function (v) { return v == null ? '—' : (v * 100).toFixed(1) + '%'; };
+  var pct = function (v) { return v == null ? '--' : (v * 100).toFixed(1) + '%'; };
   var dur = function (ms) {
-    if (ms == null) return '—';
+    if (ms == null) return '--';
     var m = Math.round(ms / 60000);
     return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm';
   };
   var fmtTime = function (isoOrMs) {
-    if (!isoOrMs) return '—';
+    if (!isoOrMs) return '--';
     var d = new Date(isoOrMs);
-    return isNaN(d.getTime()) ? '—' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return isNaN(d.getTime()) ? '--' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
   var esc = function (s) {
     return String(s == null ? '' : s)
@@ -145,32 +197,86 @@
 
   function renderTable(headers, rows, emptyText) {
     if (!rows.length) return '<div class="empty">' + esc(emptyText) + '</div>';
-    var h = '<table><thead><tr>' + headers.map(function (c) {
+    var h = '<div class="table-scroll"><table><thead><tr>' + headers.map(function (c) {
       return '<th class="' + (c.num ? 'num' : '') + '">' + esc(c.label) + '</th>';
     }).join('') + '</tr></thead><tbody>';
     rows.forEach(function (r) {
       h += '<tr>' + r.map(function (cell, i) {
-        return '<td class="' + (headers[i].num ? 'num' : '') + '">' + cell + '</td>';
+        var cls = headers[i].num ? 'num' : (headers[i].nowrap ? 'nowrap' : '');
+        return '<td class="' + cls + '">' + cell + '</td>';
       }).join('') + '</tr>';
     });
-    return h + '</tbody></table>';
+    return h + '</tbody></table></div>';
+  }
+
+  function renderDiag(s) {
+    if (!s) return '<div class="empty">No diagnostic summary yet.</div>';
+    var lossKeys = Object.keys(s.losses || {});
+    var lossText = lossKeys.length
+      ? lossKeys.map(function (k) { return k + ' x ' + s.losses[k]; }).join(', ')
+      : 'None';
+
+    var gaps = Array.isArray(s.gaps) ? s.gaps : [];
+    var gapText = 'None';
+    if (gaps.length) {
+      var shown = gaps.slice(0, 6).map(function (g) {
+        return fmtTime(g.from) + ' to ' + fmtTime(g.to) + ' (' + dur(g.ms) + ')';
+      }).join(', ');
+      gapText = shown + (gaps.length > 6 ? ' <span class="diag-more">(+' + (gaps.length - 6) + ' earlier gaps)</span>' : '');
+    }
+
+    var docKeys = Object.keys(s.doctors || {});
+    var docText = docKeys.length
+      ? docKeys.map(function (k) { return k + ' x ' + s.doctors[k]; }).join(', ')
+      : 'None';
+
+    var guardText = '--';
+    if (s.guard) {
+      var blindStr = s.guard.maxBlindMs != null ? (s.guard.maxBlindMs / 60000).toFixed(1) + 'm max' : 'unrecorded';
+      var revStr = s.guard.revives != null ? String(s.guard.revives) : '0';
+      guardText = 'Blind silence ' + blindStr + ', guard revives peak ' + revStr;
+    }
+
+    var rows = [
+      ['Losses', esc(lossText)],
+      ['Stall gaps (>10m)', gapText],
+      ['Doctor verdicts', esc(docText)],
+      ['Blind & guard', esc(guardText)]
+    ];
+    return '<div class="diag-list">' + rows.map(function (pair) {
+      return '<div class="diag-row"><div class="diag-key">' + esc(pair[0]) + '</div><div class="diag-val">' + pair[1] + '</div></div>';
+    }).join('') + '</div>';
+  }
+
+  function setBusy(busy) {
+    loading = busy;
+    el('refreshBtn').disabled = busy;
+    el('winNight').disabled = busy;
+    el('winAll').disabled = busy;
+    el('refreshBtn').textContent = busy ? 'Refreshing...' : 'Refresh';
   }
 
   async function refresh() {
+    if (loading) return;
+    setBusy(true);
+    var notice = el('errNotice');
     try {
       var repReq = fetch('/report' + (allMode ? '?all=1' : ''));
       var recReq = fetch('/recent?n=200');
       var res = await Promise.all([repReq, recReq]);
+      if (!res[0].ok || !res[1].ok) throw new Error('HTTP ' + res[0].status + '/' + res[1].status);
       var rep = await res[0].json();
       var rec = await res[1].json();
+      notice.className = 'notice';
+      notice.textContent = '';
 
       var badge = el('covBadge');
       var cov = rep.coverage;
       if (!cov) {
-        badge.textContent = 'no snapshots';
+        badge.textContent = 'No snapshots';
         badge.className = 'badge';
       } else {
-        badge.textContent = cov.verdict + ' · ' + cov.snapshots + ' snapshots';
+        badge.textContent = cov.verdict + ' (' + cov.snapshots + ' snapshots)';
         badge.className = 'badge ' + (cov.verdict === 'complete' ? 'ok' : 'warn');
       }
 
@@ -179,15 +285,15 @@
         var r = s.run;
         el('kpiRate').textContent = pct(r.catchRate);
         el('kpiRateSub').textContent = r.caught + ' / ' + r.attempts + ' caught' +
-          (r.catchCi ? ' · 95% CI ' + pct(r.catchCi.lo) + '–' + pct(r.catchCi.hi) : '');
+          (r.catchCi ? ' (95% CI ' + pct(r.catchCi.lo) + ' to ' + pct(r.catchCi.hi) + ')' : '');
         el('kpiPress').textContent = pct(r.pressAcceptRate);
         el('kpiPressSub').textContent = r.accepted + ' / ' + r.presses + ' presses' +
-          (r.pressesPerCatch != null ? ' · ' + r.pressesPerCatch + '/catch' : '');
+          (r.pressesPerCatch != null ? ' (' + r.pressesPerCatch + '/catch)' : '');
       } else {
-        el('kpiRate').textContent = '—';
+        el('kpiRate').textContent = '--';
         el('kpiRateSub').textContent = 'Enable Local capture in the AutoFish panel';
-        el('kpiPress').textContent = '—';
-        el('kpiPressSub').textContent = '—';
+        el('kpiPress').textContent = '--';
+        el('kpiPressSub').textContent = '--';
       }
 
       var recent = Array.isArray(rec.rows) ? rec.rows : [];
@@ -198,7 +304,7 @@
       el('kpiCatchesSub').textContent = rares.length + ' rare/variant in last ' + recent.length + ' rows';
 
       el('kpiRuns').textContent = String(rep.runsFiles || 0) + ' files';
-      el('kpiRunsSub').textContent = cov ? ('captured ' + fmtTime(cov.firstPostAt) + ' → ' + fmtTime(cov.lastPostAt)) : 'data/runs/';
+      el('kpiRunsSub').textContent = cov ? ('Captured ' + fmtTime(cov.firstPostAt) + ' to ' + fmtTime(cov.lastPostAt)) : 'data/runs/';
 
       if (s && Array.isArray(s.widths)) {
         el('bandsBody').innerHTML = renderTable(
@@ -212,40 +318,24 @@
         el('bandsBody').innerHTML = '<div class="empty">No snapshots yet.</div>';
       }
 
-      if (s) {
-        var diagLines = [];
-        var lossKeys = Object.keys(s.losses || {});
-        diagLines.push('Losses: ' + (lossKeys.length ? lossKeys.map(function (k) { return k + ' × ' + s.losses[k]; }).join(', ') : 'none'));
-        diagLines.push('Stall gaps (>10m): ' + ((s.gaps && s.gaps.length) ? s.gaps.map(function (g) {
-          return fmtTime(g.from) + '–' + fmtTime(g.to) + ' (' + dur(g.ms) + ')';
-        }).join(', ') : 'none'));
-        var docKeys = Object.keys(s.doctors || {});
-        diagLines.push('Doctor verdicts: ' + (docKeys.length ? docKeys.map(function (k) { return k + ' × ' + s.doctors[k]; }).join(', ') : 'none'));
-        if (s.guard) {
-          diagLines.push('Blind max: ' + (s.guard.maxBlindMs != null ? (s.guard.maxBlindMs / 60000).toFixed(1) + 'm' : '—') +
-            ' · guard revives peak: ' + (s.guard.revives != null ? s.guard.revives : '—'));
-        }
-        el('diagBody').innerHTML = '<div class="mono">' + esc(diagLines.join('\n')) + '</div>';
-      } else {
-        el('diagBody').innerHTML = '<div class="empty">No diagnostic summary yet.</div>';
-      }
+      el('diagBody').innerHTML = renderDiag(s);
 
       el('trophyBody').innerHTML = renderTable(
-        [{ label: 'Time' }, { label: 'Species' }, { label: 'Tags' }, { label: 'Weight' }],
+        [{ label: 'Time', nowrap: true }, { label: 'Species' }, { label: 'Tags' }, { label: 'Weight', num: true }],
         rares.slice().reverse().slice(0, 30).map(function (c) {
           var tags = '';
           if (c.rarity === 'Legendary') tags += '<span class="tag leg">Legendary</span>';
           else if (c.rarity === 'Secret') tags += '<span class="tag sec">Secret</span>';
           if (c.shiny) tags += '<span class="tag sh">Shiny</span>';
           if (c.golden) tags += '<span class="tag go">Golden</span>';
-          return [fmtTime(c.time), esc(c.species), tags, esc(c.weight || '—')];
+          return [fmtTime(c.time), esc(c.species), tags, esc(c.weight || '--')];
         }),
         'No Legendary, Secret, Shiny, or Golden catches in recent CSV rows.'
       );
 
       var sess = (s && Array.isArray(s.sessions)) ? s.sessions : [];
       el('sessionsBody').innerHTML = renderTable(
-        [{ label: 'Ended' }, { label: 'Profile' }, { label: 'Min', num: true }, { label: 'Catches', num: true }, { label: 'Reason' }],
+        [{ label: 'Ended', nowrap: true }, { label: 'Profile' }, { label: 'Min', num: true }, { label: 'Catches', num: true }, { label: 'Reason' }],
         sess.slice(-20).reverse().map(function (row) {
           return [fmtTime(row.time), esc(row.profile), row.minutes, row.catches, esc(row.reason + (row.note ? ' (' + row.note + ')' : ''))];
         }),
@@ -253,18 +343,22 @@
       );
 
       el('recentBody').innerHTML = renderTable(
-        [{ label: 'Time' }, { label: 'Profile' }, { label: 'Species' }, { label: 'Rarity' }, { label: 'Variants' }, { label: 'Weight' }, { label: 'Value' }],
+        [{ label: 'Time', nowrap: true }, { label: 'Profile' }, { label: 'Species' }, { label: 'Rarity' }, { label: 'Variants' }, { label: 'Weight', num: true }, { label: 'Value', num: true }],
         recent.slice().reverse().slice(0, 50).map(function (c) {
           var v = [];
           if (c.shiny) v.push('Shiny');
           if (c.golden) v.push('Golden');
-          return [fmtTime(c.time), esc(c.profile || 'default'), esc(c.species), esc(c.rarity || '—'), esc(v.join(', ') || '—'), esc(c.weight || '—'), esc(c.value || '—')];
+          return [fmtTime(c.time), esc(c.profile || 'default'), esc(c.species), esc(c.rarity || 'Common'), esc(v.join(', ') || '--'), esc(c.weight || '--'), esc(c.value || '--')];
         }),
         'No catches recorded yet.'
       );
     } catch (e) {
-      el('covBadge').textContent = 'offline';
-      el('covBadge').className = 'badge warn';
+      el('covBadge').textContent = 'Offline';
+      el('covBadge').className = 'badge bad';
+      notice.textContent = 'Could not reach fishserve. Start "node fishserve.js" and click Refresh.';
+      notice.className = 'notice show';
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -277,18 +371,23 @@
     allMode = false;
     el('winNight').classList.add('active');
     el('winAll').classList.remove('active');
+    el('winNight').setAttribute('aria-pressed', 'true');
+    el('winAll').setAttribute('aria-pressed', 'false');
     refresh();
   });
   el('winAll').addEventListener('click', function () {
     allMode = true;
     el('winAll').classList.add('active');
     el('winNight').classList.remove('active');
+    el('winAll').setAttribute('aria-pressed', 'true');
+    el('winNight').setAttribute('aria-pressed', 'false');
     refresh();
   });
   el('autoBtn').addEventListener('click', function () {
     autoOn = !autoOn;
     el('autoBtn').textContent = 'Auto 30s: ' + (autoOn ? 'on' : 'off');
     el('autoBtn').classList.toggle('active', autoOn);
+    el('autoBtn').setAttribute('aria-pressed', autoOn ? 'true' : 'false');
     syncTimer();
   });
   el('refreshBtn').addEventListener('click', refresh);

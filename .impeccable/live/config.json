@@ -1,0 +1,9 @@
+{
+  "files": [
+    "dashboard.html",
+    "install.html"
+  ],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}
