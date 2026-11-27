@@ -25,6 +25,8 @@
 | [tasks/TASK-2026-11-27-m4-modular-core.md](tasks/TASK-2026-11-27-m4-modular-core.md) | Task record for M4 `src/` modular core extraction, test/script migration, and headless `step()` simulator. |
 | [tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md](tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md) | Task record for nonstop `Flow` fishing mode, retiring `Fast first press` UI, and unified `Local capture` toggle. |
 | [tasks/TASK-2026-11-28-trophy-alerts-and-local-dashboard.md](tasks/TASK-2026-11-28-trophy-alerts-and-local-dashboard.md) | Task record for rare catch chimes, 24h IndexedDB trophy viewer, update badge, `fishserve` dashboard, and false-loss / retention fixes. |
+| [tasks/TASK-2026-11-28-daily-missions-scoping.md](tasks/TASK-2026-11-28-daily-missions-scoping.md) | Task record scoping the lofi.town daily-missions bot: directions D1-D3, the Cozier paywall as a hard constraint, assumption records, and the M0-M2 milestone sketch. |
+| [tasks/TASK-2026-11-28-daily-missions-scoping.scope-1.md](tasks/TASK-2026-11-28-daily-missions-scoping.scope-1.md) | Scope change record: added the docs index rows this suite requires for the missions-scoping task record. |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
 | [reviews/2026-11-23-catch-and-focus-live.md](reviews/2026-11-23-catch-and-focus-live.md) | Live verification of the rebuilt userscript's catch POST, focus takeover, seat warning and next catch. |
