@@ -496,7 +496,7 @@ test('a stop says what stopped it, and the hidden threshold is configurable', ()
 test('fast first press is retired from the panel UI, Cozier popup stays, and Flow mode hides timed controls', () => {
   assert.ok(!src.includes('Fast first press'), 'the obsolete UI toggle is retired');
   assert.ok(!src.includes('fastnote{'), 'the permanent amber warning is retired');
-  assert.ok(src.includes("'Cozier popup'"), 'Cozier popup control is kept');
+  assert.ok(src.includes("'Hide Cozier popup'"), 'Hide Cozier popup control is kept');
   assert.ok(src.includes("el('div', 'label', 'Mode')"), 'Mode switch is present');
   assert.ok(src.includes('timedWrap.style.display = flow ? \'none\' : \'\''), 'Flow mode hides timed/budget rows');
   assert.ok(src.includes("if (key === 'hidden') return { field: 'hiddenStopMs', min: 0"), 'Stop when hidden can step down to off');
@@ -547,4 +547,15 @@ test('panel UI polish: semantic pill, global focus-visible, Escape dialog, Troph
   assert.ok(src.includes("daysKept === 1 ? ' day kept' : ' days kept'"), 'singular day pluralization fixed');
   assert.ok(src.includes("'confirm?'") && src.includes("clearConfirmUntil"), 'destructive trophy clear requires 2-step confirmation');
   assert.ok(src.includes('.banner.success{') && src.includes("showTempBanner('downloaded '"), 'CSV download uses auto-clearing success banner');
+});
+
+test('panel critique final polish: toggle aria-labelledby, modal focus trap, inline trophy clear status, syntax hints, and deduped log', () => {
+  assert.ok(src.includes("af-lbl-") && src.includes("'aria-labelledby'"), 'all settings toggles link to row labels via aria-labelledby');
+  assert.ok(src.includes("pop-open") && src.includes("card.append(head, bannerEl, body, trophyPop)"), 'banner sits under head and hides cleanly while pop-open modal expands');
+  assert.ok(src.includes("trophyStatus") && src.includes("'Cleared saved trophy cards.'"), 'trophy clear reports inline status inside the dialog');
+  assert.ok(src.includes("e.key === 'Tab'") && src.includes("button:not(:disabled)"), 'modal traps Tab/Shift+Tab inside enabled trophy dialog controls');
+  assert.ok(src.includes('invalid duration') && src.includes('invalid time') && src.includes("removeAttribute('aria-invalid')"), 'stepper and clock inputs revert invalid text, clear aria-invalid, and show syntax hint');
+  assert.ok(src.includes("var name = String(rawName || '').trim()"), 'profile prompt trims leading/trailing whitespace');
+  assert.ok(src.includes("'View 24-hour ' + cell.name + ' trophy cards'") && src.includes("'View 24-hour Shiny and Golden trophy cards'"), 'clickable trophy triggers expose descriptive aria-labels');
+  assert.ok(src.includes("daysKept + dayWord") && !src.includes("daysKept + dayWord +\n        (trophyCounts"), 'logMeta and logTotal avoid duplicating shiny/golden and day counts');
 });

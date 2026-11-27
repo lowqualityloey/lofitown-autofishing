@@ -6736,6 +6736,7 @@ const SPECIES = [
     if (!ui.upsellToggle) return;
     ui.upsellToggle.textContent = upsellOn ? 'on' : 'off';
     ui.upsellToggle.style.color = upsellOn ? '#5ad18b' : '#9aa4ae';
+    ui.upsellToggle.setAttribute('aria-pressed', upsellOn ? 'true' : 'false');
   }
 
   function setUpsellHidden(on) {
@@ -6804,6 +6805,7 @@ const SPECIES = [
     if (!ui.focusToggle) return;
     ui.focusToggle.textContent = focusOn ? 'on' : 'off';
     ui.focusToggle.style.color = focusOn ? '#5ad18b' : '#9aa4ae';
+    ui.focusToggle.setAttribute('aria-pressed', focusOn ? 'true' : 'false');
   }
 
   /**
@@ -7053,6 +7055,7 @@ const SPECIES = [
     if (ui.captureToggle) {
       ui.captureToggle.textContent = overnightPref ? 'on' : 'off';
       ui.captureToggle.style.color = overnightPref ? '#5ad18b' : '#9aa4ae';
+      ui.captureToggle.setAttribute('aria-pressed', overnightPref ? 'true' : 'false');
     }
     var st = captureStatus();
     var line = '';
@@ -7511,8 +7514,11 @@ const SPECIES = [
     trophyPopOpen = false;
     resetClearConfirm();
     revokeTrophyUrls();
+    if (ui.card) ui.card.classList.remove('pop-open');
     if (ui.trophyPop) ui.trophyPop.classList.add('hide');
+    if (ui.trophyStatus) ui.trophyStatus.classList.add('hide');
     if (ui.trophyList) ui.trophyList.textContent = '';
+    place();
   }
 
   function matchesTrophyFilter(rec, filter) {
@@ -7525,20 +7531,26 @@ const SPECIES = [
   async function renderTrophyPop() {
     if (!ui.trophyPop || !ui.trophyList || !trophyPopOpen) return;
     revokeTrophyUrls();
+    if (ui.trophyTitle) ui.trophyTitle.textContent = 'Trophy cards (24h) · ' + profileName();
     if (ui.trophyTabs) {
       ui.trophyTabs.forEach(function (btn) {
-        btn.classList.toggle('active', btn.dataset.filter === trophyFilter);
+        var on = btn.dataset.filter === trophyFilter;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
     }
     ui.trophyList.textContent = '';
     ui.trophyList.appendChild(el('div', 'trophy-empty', 'Loading trophy cards…'));
-    var rows = (await listTrophyCards(profileName())).filter(function (r) {
+    var allForProf = await listTrophyCards(profileName());
+    if (ui.trophyClear) ui.trophyClear.disabled = !allForProf.length;
+    var rows = allForProf.filter(function (r) {
       return matchesTrophyFilter(r, trophyFilter);
     });
     if (!trophyPopOpen || !ui.trophyList) return;
     ui.trophyList.textContent = '';
     if (!rows.length) {
       ui.trophyList.appendChild(el('div', 'trophy-empty', 'No saved trophy cards in the last 24 hours.'));
+      place();
       return;
     }
     rows.forEach(function (rec) {
@@ -7563,12 +7575,15 @@ const SPECIES = [
       item.appendChild(info);
       ui.trophyList.appendChild(item);
     });
+    place();
   }
 
   function openTrophyPop(filter) {
     trophyFilter = filter || 'all';
     trophyPopOpen = true;
     resetClearConfirm();
+    if (ui.trophyStatus) ui.trophyStatus.classList.add('hide');
+    if (ui.card) ui.card.classList.add('pop-open');
     if (ui.trophyPop) {
       ui.trophyPop.classList.remove('hide');
       try { ui.trophyPop.focus(); } catch (e) {}
@@ -7844,23 +7859,23 @@ const SPECIES = [
     '.secondary{flex:none;border:0;border-radius:10px;padding:9px 10px;font:inherit;font-weight:600;cursor:pointer;background:rgba(255,255,255,.10);color:#dfe5ea}',
     '.secondary:hover{background:rgba(255,255,255,.16)}',
     '.secondary:disabled{opacity:.45;cursor:default}',
-    '.banner{font-size:11px;color:#f2c14e;background:rgba(242,193,78,.10);border-top:1px solid rgba(242,193,78,.22);padding:6px 10px}',
+    '.banner{font-size:11px;color:#f2c14e;background:rgba(242,193,78,.10);border-bottom:1px solid rgba(242,193,78,.22);padding:6px 10px}',
     '.banner:empty{display:none}',
-    '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-top-color:rgba(255,120,90,.34)}',
-    '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-top-color:rgba(122,162,247,.30)}',
-    '.banner.info{color:#cfd6dd;background:rgba(255,255,255,.05);border-top-color:rgba(255,255,255,.12)}',
+    '.banner.seat{color:#ffc0b0;background:rgba(255,120,90,.14);border-bottom-color:rgba(255,120,90,.34)}',
+    '.banner.focus{color:#cfe0ff;background:rgba(122,162,247,.12);border-bottom-color:rgba(122,162,247,.30)}',
+    '.banner.info{color:#cfd6dd;background:rgba(255,255,255,.05);border-bottom-color:rgba(255,255,255,.12)}',
     '.dot.stalled{background:#ff6b6b;box-shadow:0 0 0 3px rgba(255,107,107,.20)}',
-    '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
-    '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-top-color:rgba(255,145,80,.34)}',
-    '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-top-color:rgba(255,120,60,.34)}',
-    '.banner.success{color:#5ad18b;background:rgba(90,209,139,.12);border-top-color:rgba(90,209,139,.34)}',
+    '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-bottom-color:rgba(255,90,90,.34)}',
+    '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-bottom-color:rgba(255,145,80,.34)}',
+    '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-bottom-color:rgba(255,120,60,.34)}',
+    '.banner.success{color:#5ad18b;background:rgba(90,209,139,.12);border-bottom-color:rgba(90,209,139,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.loghead{display:flex;align-items:center;gap:4px}',
     '.logmeta{font-size:10px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.logmeta.clickable,.tier.clickable{cursor:pointer;border-radius:6px;padding:1px 2px}',
     '.logmeta.clickable:hover,.tier.clickable:hover{background:rgba(255,255,255,.08)}',
     '.icon.csv{font-size:10px;font-weight:600;padding:2px 5px;color:#b8c2cc}',
-    '.icon.danger{color:#ff8fa3}.icon.danger.armed{background:rgba(255,107,107,.16);color:#ffb3b3}',
+    '.icon.danger{color:#ff8fa3}.icon.danger:disabled{opacity:.35;cursor:default}.icon.danger.armed{background:rgba(255,107,107,.16);color:#ffb3b3}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
     '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
@@ -7887,7 +7902,10 @@ const SPECIES = [
     '.sec.open .chev{transform:rotate(90deg)}',
     '.secbody{display:flex;flex-direction:column;gap:8px;padding-bottom:9px}',
     '.pill{width:48px;height:48px;padding:0;color:#e8ecef;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
-    '.trophy-pop{position:absolute;inset:0;z-index:10;background:#12161c;min-height:280px;display:flex;flex-direction:column;gap:6px;padding:10px}',
+    '.trophy-pop{position:absolute;inset:0;z-index:10;background:#12161c;min-height:280px;max-height:440px;display:flex;flex-direction:column;gap:6px;padding:10px}',
+    '.card.pop-open .body,.card.pop-open .banner{display:none!important}',
+    '.card.pop-open .trophy-pop{position:relative;inset:auto}',
+    '.trophy-status{font-size:10.5px;color:#5ad18b;padding:2px 0}',
     '.trophy-head{display:flex;align-items:center;gap:6px}',
     '.trophy-title{flex:1;font-weight:600;font-size:11.5px;color:#e8ecef}',
     '.trophy-tabs{display:flex;gap:4px}',
@@ -7992,7 +8010,7 @@ const SPECIES = [
 
     // cosmetic only: quietens the in-session Cozier upsell, see setUpsellHidden()
     var upsellRow = el('div', 'row');
-    var upsellLabel = el('div', 'label', 'Cozier popup');
+    var upsellLabel = el('div', 'label', 'Hide Cozier popup');
     var upsellToggle = el('button', 'icon', upsellOn ? 'on' : 'off');
     upsellToggle.type = 'button';
     upsellToggle.title = 'hide the in-session Cozier upsell (cosmetic: a free account still cannot fish in focus)';
@@ -8051,12 +8069,26 @@ const SPECIES = [
     profAdd.type = 'button';
     profAdd.setAttribute('aria-label', 'New profile');
     profAdd.title = 'new profile with its own catch history and daily budget';
-    var profReset = el('button', 'icon', '↺');
+    var profReset = el('button', 'icon danger', '×');
     profReset.type = 'button';
     profReset.setAttribute('aria-label', 'Clear profile catch history');
     profReset.title = 'clear this profile’s catch history (cannot be undone)';
     profRow.append(profLabel, profSel, profAdd, profReset);
     setSec.body.appendChild(profRow);
+    [
+      [modeLabel, modeToggle],
+      [winLabel, winToggle],
+      [chainLabel, chainToggle],
+      [upsellLabel, upsellToggle],
+      [focusLabel, focusToggle],
+      [reloadLabel, reloadToggle],
+      [chimeLabel, chimeToggle],
+      [captureLabel, captureToggle]
+    ].forEach(function (pair, i) {
+      var id = 'af-lbl-' + i;
+      pair[0].id = id;
+      pair[1].setAttribute('aria-labelledby', id);
+    });
 
     var meters = el('div', 'meters');
     meters.append(
@@ -8184,6 +8216,11 @@ const SPECIES = [
       return btn;
     });
     var trophyList = el('div', 'trophy-list');
+    var trophyStatus = el('div', 'trophy-status hide', '');
+    trophyStatus.setAttribute('role', 'status');
+    trophyStatus.setAttribute('aria-live', 'polite');
+    /** @type {any} */
+    var trophyStatusTimer = null;
     var trophyFoot = el('div', 'trophy-foot');
     var trophyHint = el('span', null, 'Auto-expires after 24h');
     var trophyClear = el('button', 'icon csv danger', 'clear');
@@ -8191,9 +8228,9 @@ const SPECIES = [
     trophyClear.setAttribute('aria-label', 'Clear saved trophy cards for this profile');
     trophyClear.title = 'click twice to clear saved trophy cards for this profile';
     trophyFoot.append(trophyHint, trophyClear);
-    trophyPop.append(trophyHead, trophyTabsWrap, trophyList, trophyFoot);
+    trophyPop.append(trophyHead, trophyTabsWrap, trophyStatus, trophyList, trophyFoot);
 
-    card.append(head, body, bannerEl, trophyPop);
+    card.append(head, bannerEl, body, trophyPop);
     var pill = el('button', 'pill hide', '🎣');
     pill.type = 'button';
     pill.title = 'Expand AutoFish panel';
@@ -8216,7 +8253,7 @@ const SPECIES = [
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
-      trophyPop: trophyPop, trophyTabs: trophyTabs, trophyList: trophyList, trophyClear: trophyClear,
+      trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyClear: trophyClear,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
@@ -8374,7 +8411,8 @@ const SPECIES = [
     });
     profAdd.addEventListener('click', function () {
       if (activePhase()) { banner = 'stop the session before switching profiles'; render(); return; }
-      var name = prompt('New profile name (its own catch history and daily budget)', 'alt');
+      var rawName = prompt('New profile name (its own catch history and daily budget)', 'alt');
+      var name = String(rawName || '').trim();
       if (!name) return;
       switchProfile(name);
     });
@@ -8400,6 +8438,7 @@ const SPECIES = [
       if (!box) return;
       box.classList.add('clickable');
       box.setAttribute('role', 'button');
+      box.setAttribute('aria-label', 'View 24-hour ' + cell.name + ' trophy cards');
       box.tabIndex = 0;
       box.addEventListener('click', function () { openTrophyPop(cell.name); });
       box.addEventListener('keydown', function (e) {
@@ -8410,6 +8449,7 @@ const SPECIES = [
     });
     logMeta.classList.add('clickable');
     logMeta.setAttribute('role', 'button');
+    logMeta.setAttribute('aria-label', 'View 24-hour Shiny and Golden trophy cards');
     logMeta.tabIndex = 0;
     logMeta.addEventListener('click', function () { openTrophyPop('variant'); });
     logMeta.addEventListener('keydown', function (e) {
@@ -8422,11 +8462,34 @@ const SPECIES = [
       try { if (ui.logTrophiesBtn) ui.logTrophiesBtn.focus(); } catch (e) {}
     }
     trophyClose.addEventListener('click', closePopWithFocus);
-    trophyPop.addEventListener('keydown', function (e) {
+    wrap.addEventListener('keydown', function (e) {
+      if (!trophyPopOpen) return;
       if (e.key === 'Escape' && trophyPopOpen) {
         e.preventDefault();
         e.stopPropagation();
         closePopWithFocus();
+        return;
+      }
+      if (e.key === 'Tab') {
+        var focusables = Array.prototype.filter.call(
+          trophyPop.querySelectorAll('button:not(:disabled)'),
+          function (b) { return b.offsetParent !== null; }
+        );
+        if (!focusables.length) {
+          e.preventDefault();
+          trophyPop.focus();
+          return;
+        }
+        var first = focusables[0];
+        var last = focusables[focusables.length - 1];
+        var active = (root && root.activeElement) || document.activeElement;
+        if (e.shiftKey && (active === first || !trophyPop.contains(active))) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && (active === last || !trophyPop.contains(active))) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     });
     trophyClear.addEventListener('click', function () {
@@ -8440,7 +8503,12 @@ const SPECIES = [
       }
       resetClearConfirm();
       clearTrophyCards(profileName());
-      showTempBanner('cleared saved trophy cards', 'success', 3000);
+      trophyStatus.textContent = 'Cleared saved trophy cards.';
+      trophyStatus.classList.remove('hide');
+      if (trophyStatusTimer) clearTimeout(trophyStatusTimer);
+      trophyStatusTimer = setTimeout(function () {
+        if (trophyPopOpen) trophyStatus.classList.add('hide');
+      }, 3000);
     });
     head.addEventListener('pointerdown', startDrag);
     fillProfiles();
@@ -8598,7 +8666,8 @@ const SPECIES = [
       var minutes = (key === 'hidden' && (raw === 'off' || raw === 'none')) ? 0 : parseMinutes(input.value);
       if (minutes == null) {
         input.value = stepperText(key, state[conf.field]);
-        input.setAttribute('aria-invalid', 'true');
+        input.removeAttribute('aria-invalid');
+        showTempBanner('invalid duration — try 90, 1h 30, or off', '', 4000);
         return;
       }
       input.removeAttribute('aria-invalid');
@@ -8676,7 +8745,12 @@ const SPECIES = [
     input.addEventListener('input', function () { input.removeAttribute('aria-invalid'); });
     function commit() {
       var next = parseClockInput(input.value);
-      if (!next) { input.value = state.window[key()]; input.setAttribute('aria-invalid', 'true'); return; }
+      if (!next) {
+        input.value = state.window[key()];
+        input.removeAttribute('aria-invalid');
+        showTempBanner('invalid time — enter HH:MM (24-hour)', '', 4000);
+        return;
+      }
       input.removeAttribute('aria-invalid');
       apply(next);
       input.value = state.window[key()];
@@ -8758,13 +8832,11 @@ const SPECIES = [
     var daysKept = (book && book.days) || 0;
     var dayWord = daysKept === 1 ? ' day kept' : ' days kept';
     if (ui.logTotal) {
-      ui.logTotal.textContent = 'all ' + (book && book.total || 0) + ' · today ' + (today.n || 0) +
-        ' · shiny ' + (book && book.shiny || 0) + ' · golden ' + (book && book.golden || 0);
-      ui.logTotal.title = 'all-time totals and today for this profile';
+      ui.logTotal.textContent = 'all ' + (book && book.total || 0) + ' · today ' + (today.n || 0) + ' · ' + daysKept + dayWord;
+      ui.logTotal.title = 'all-time total ' + (book && book.total || 0) + ' (' + (book && book.shiny || 0) + ' shiny · ' + (book && book.golden || 0) + ' golden) across ' + daysKept + dayWord;
     }
     if (ui.logMeta) {
-      ui.logMeta.textContent = 'today ' + (today.shiny || 0) + ' shiny · ' + (today.golden || 0) + ' golden · ' +
-        daysKept + dayWord +
+      ui.logMeta.textContent = 'today ' + (today.shiny || 0) + ' shiny · ' + (today.golden || 0) + ' golden' +
         (trophyCounts.total ? ' · ' + trophyCounts.total + (trophyCounts.total === 1 ? ' card' : ' cards') : '');
       ui.logMeta.title = 'profile ' + profileName() + ' · history is stored in this browser · click to view Shiny/Golden trophy cards (24h)';
     }
