@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.65
+// @version      3.9.66
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -2386,7 +2386,7 @@ const SPECIES = [
    * the honest answer: that copy has no build step to stamp it.
    * @type {FishCore}
    */
-  const F = { version: "3.9.65" };
+  const F = { version: "3.9.66" };
   const now = () => performance.now();
   const { doctor, wilson, runSummary, pressAcceptSummary, predictionSummary, pressVerdictReport, resultMissingDue, createResultMissing } = /** @type {any} */ (window.AutoFishDiagnostics);
   const {

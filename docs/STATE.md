@@ -2,9 +2,9 @@
 
 <!-- Bounded projection: respect `state-guard:` thresholds in `PROMPTKIT.md`; `pk:checkpoint` archives completed history to `docs/STATE-ARCHIVE.md`. -->
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.65: Flow mode, unified `Local capture`, M4 `src/` modular core, JSDoc static type-checking, Flow `resume` fix, hot-path perf cleanups)
+- **Project Name**: lofitown-autofishing (autofish 3.9.66: Rare catch chime, 24h IndexedDB trophy viewer, 1-click CSV, `/dashboard` + `/report`, bounded reload recovery, HUD/ARIA polish)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — **PLAN-trophy-alerts-dashboard** implemented on `main` (`446/446` tests, `tsc --noEmit` exit `0`, `dist/autofish.user.js` `439,292` bytes, uncommitted pending atomic commit/review before cutting `v3.9.66`); prior shipped baseline **v3.9.65** (`fa11ebf` head). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
+- **Overall Status**: ACTIVE — **v3.9.66** release candidate built and verified (`tsc --noEmit` exit `0`, `448/448` unit tests pass), cutting and publishing `v3.9.66`.
 - **Current Working Branch**: `main` (pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
 - **Last Updated**: 2026-11-28
 - **Engine Version**: v2.6.1 @ unknown
@@ -46,8 +46,8 @@
 - **Active Task Pointer**: `TASK-2026-11-28-trophy-alerts-and-local-dashboard`
 - **Owner / Current Actor**: lead / Antigravity
 - **Start Time**: `2026-11-28`
-- **Current Revision**: `main` (post-`v3.9.65`, pre-`v3.9.66`)
-- **Next Action**: Live-verify panel/dashboard/trophies in Ego Lite, push to `origin/main`, and decide whether to ship `v3.9.66`.
+- **Current Revision**: `main` (`v3.9.66`)
+- **Next Action**: Run live in-game smoke test on `v3.9.66` and monitor local `fishserve` `/dashboard` metrics.
 
 ---
 
