@@ -577,4 +577,5 @@ test('panel clears stale reload/info banners on start, resume, user stop, and se
   assert.ok(p.includes("else if (banner === 'session log offline"), 'successful session POST clears a prior session-log-offline banner');
   assert.ok(src.includes("{ id: 'Epic', label: 'EPI' }") && src.includes('function isRareChimeRow('), 'Epic cards are saved and filterable without triggering the rare catch chime');
   assert.ok(src.includes('FISH_ATLAS_PACKS') && src.includes('function resolveTrophySprite(') && src.includes('image-rendering:pixelated'), 'trophy rows resolve crisp Base/Shiny pixel-art sprites from lofi.town texture packs with captured-card lightbox intact');
+  assert.ok(src.includes('lofi-card') && src.includes('UI_ATLAS_FRAMES') && src.includes('cardThemeFor('), 'lightbox renders authentic lofi.town catch cards with game tier badges and PNG export');
 });

@@ -1125,62 +1125,10 @@
     return !!(row && (row.rarity === 'Epic' || row.rarity === 'Legendary' || row.rarity === 'Secret' || row.shiny || row.golden));
   }
 
-  /**
-   * Read the visible catch-card rect (padded for overflowing rare art) synchronously via readUI()
-   * once settled, then downscale and encode as transparent WebP (falling back to PNG) so
-   * transparent overlay regions do not turn into harsh JPEG black bars.
-   */
-  function captureCardBlob(card, cb) {
-    if (!uiCanvas || typeof document === 'undefined' || !card) return cb(null);
-    const base = F.lastCardRect || cardBox(uiCanvas.width, uiCanvas.height);
-    const box = padCardBox(base, uiCanvas.width, uiCanvas.height) || base;
-    const r = readUI(box.x, box.y, box.w, box.h);
-    if (!r || !r.d || !r.w || !r.h) return cb(null);
-    try {
-      const src = document.createElement('canvas');
-      src.width = r.w; src.height = r.h;
-      const sctx = src.getContext('2d');
-      if (!sctx) return cb(null);
-      const img = sctx.createImageData(r.w, r.h);
-      img.data.set(r.d.subarray(0, r.w * r.h * 4));
-      sctx.putImageData(img, 0, 0);
-      const maxW = 480;
-      const scale = r.w > maxW ? maxW / r.w : 1;
-      const dw = Math.max(1, Math.round(r.w * scale));
-      const dh = Math.max(1, Math.round(r.h * scale));
-      const out = document.createElement('canvas');
-      out.width = dw; out.height = dh;
-      const octx = out.getContext('2d');
-      if (!octx) return cb(null);
-      octx.drawImage(src, 0, 0, dw, dh);
-      if (out.toBlob) {
-        out.toBlob((blob) => {
-          if (blob && blob.size) return cb(blob);
-          out.toBlob((png) => cb(png || null), 'image/png');
-        }, 'image/webp', 0.86);
-      } else {
-        cb(null);
-      }
-    } catch (e) { cb(null); }
-  }
-
   F.recordCatch = function (card) {
     const rec = F.parseCatch();
     if (!rec) return 'pending';
     const info = describeCatch(rec);
-    // Hold trophy cards briefly until Pixi finishes its white-flash spawn tween, bounded so
-    // fishing never stalls if readback cannot confirm card ink.
-    if (isTrophyCatch({ rarity: info.rarity, shiny: info.shiny, golden: info.golden })) {
-      const settleMs = F.opts && F.opts.trophySettleMs != null ? F.opts.trophySettleMs : 900;
-      const box = F.lastCardRect || (uiCanvas ? cardBox(uiCanvas.width, uiCanvas.height) : null);
-      const rawCard = box ? readUI(box.x, box.y, box.w, box.h) : null;
-      if (!isCardSettled(rawCard)) {
-        const at = now();
-        if (!F.trophyWaitAt) F.trophyWaitAt = at;
-        if (at - F.trophyWaitAt < settleMs) return 'trophy-wait';
-        L('trophy settle timeout', { species: rec.species, elapsedMs: Math.round(at - F.trophyWaitAt) });
-      }
-    }
     F.trophyWaitAt = 0;
     clearResultMissing('catch card');
     F.txtAt = now();
@@ -1228,7 +1176,7 @@
     }
     if (typeof F.onCatch === 'function') { try { F.onCatch(row); } catch (e) {} }
     if (isTrophyCatch(row) && typeof F.onTrophy === 'function') {
-      try { captureCardBlob(card, (blob) => { try { F.onTrophy(row, blob); } catch (e) {} }); } catch (e) {}
+      try { F.onTrophy(row, null); } catch (e) {}
     }
     return 'logged';
   };
