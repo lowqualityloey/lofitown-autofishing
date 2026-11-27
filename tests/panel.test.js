@@ -567,3 +567,14 @@ test('panel trophy lightbox preview, compact rarity rows, modern dark scrollbars
   assert.ok(src.includes('function openTrophyLightbox(') && src.includes('trophy-lightbox') && src.includes('Save image'), 'clicking a trophy row opens a centered full-res lightbox preview with save support');
   assert.ok(src.includes("e.key === 'ArrowLeft'") && src.includes("e.key === 'ArrowRight'") && src.includes('trophyLightboxUrl'), 'lightbox supports keyboard prev/next navigation and keeps its own object URL');
 });
+
+test('panel clears stale reload/info banners on start, resume, user stop, and session recovery', () => {
+  assert.ok(src.includes('function clearBannerState('), 'central banner reset helper exists');
+  const d = src.slice(src.indexOf('function dispatch(fact)'), src.indexOf('/* -------------------------------------------------------- wake lock'));
+  assert.ok(d.includes("a.type === 'startCore' || a.type === 'resumeCore'") && d.includes("fact.reason === 'user'") && d.includes('clearBannerState()'), 'dispatch clears stale banners on accepted start/resume and user stop');
+  assert.ok(src.includes("showTempBanner(interruptedNotice, 'success', 8000)"), 'auto-resumed reload notice expires automatically instead of pinning forever');
+  const p = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
+  assert.ok(p.includes("else if (banner === 'session log offline"), 'successful session POST clears a prior session-log-offline banner');
+  assert.ok(src.includes("{ id: 'Epic', label: 'EPI' }") && src.includes('function isRareChimeRow('), 'Epic cards are saved and filterable without triggering the rare catch chime');
+  assert.ok(src.includes('FISH_ATLAS_PACKS') && src.includes('function resolveTrophySprite(') && src.includes('image-rendering:pixelated'), 'trophy rows resolve crisp Base/Shiny pixel-art sprites from lofi.town texture packs with captured-card lightbox intact');
+});

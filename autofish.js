@@ -1122,7 +1122,7 @@
    * Species, rarity, weight and value are read from the card's own text, never inferred.
    */
   function isTrophyCatch(row) {
-    return !!(row && (row.rarity === 'Legendary' || row.rarity === 'Secret' || row.shiny || row.golden));
+    return !!(row && (row.rarity === 'Epic' || row.rarity === 'Legendary' || row.rarity === 'Secret' || row.shiny || row.golden));
   }
 
   /**

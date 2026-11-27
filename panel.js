@@ -36,7 +36,7 @@
   var TROPHY_DB = 'autofish:trophies:v1';
   var TROPHY_STORE = 'cards';
   var TROPHY_TTL_MS = 24 * 60 * 60 * 1000;
-  var TROPHY_CAP = 30;
+  var TROPHY_CAP = 40;
   var TICK_MS = 1000;
 
   /** @type {SessionState} */
@@ -719,7 +719,15 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ started_at: started, minutes: minutes, catches: catches, reason: reason, profile: profileName(), note: note || '' })
-      }).then(function (r) { if (!r.ok) banner = 'session log rejected the row'; }).catch(function () { banner = 'session log offline — the session still works'; });
+      }).then(function (r) {
+        if (!r.ok) {
+          banner = 'session log rejected the row';
+          render();
+        } else if (banner === 'session log offline — the session still works' || banner === 'session log rejected the row') {
+          clearBannerState();
+          render();
+        }
+      }).catch(function () { banner = 'session log offline — the session still works'; });
     } catch (e) { banner = 'session log offline — the session still works'; }
   }
 
@@ -842,9 +850,14 @@
 
   /* ---------------------------------------------- Web Audio rare catch chime ---- */
 
-  function isTrophyCatchRow(row) {
+  function isRareChimeRow(row) {
     if (!row) return false;
     return row.rarity === 'Legendary' || row.rarity === 'Secret' || !!row.shiny || !!row.golden;
+  }
+
+  function isTrophyCatchRow(row) {
+    if (!row) return false;
+    return row.rarity === 'Epic' || isRareChimeRow(row);
   }
 
   function unlockAudio() {
@@ -884,8 +897,14 @@
 
   /* --------------------------------------------------- ledger CSV download ---- */
 
-  function showTempBanner(msg, tone, ttlMs) {
+  function clearBannerState() {
     if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+    banner = '';
+    bannerTone = '';
+  }
+
+  function showTempBanner(msg, tone, ttlMs) {
+    clearBannerState();
     banner = msg || '';
     bannerTone = tone || '';
     render();
@@ -893,8 +912,7 @@
       bannerTimer = setTimeout(function () {
         bannerTimer = null;
         if (banner === msg) {
-          banner = '';
-          bannerTone = '';
+          clearBannerState();
           render();
         }
       }, ttlMs);
@@ -988,7 +1006,13 @@
               keptForProf.push(rec);
             }
           });
-          keptForProf.sort(function (a, b) { return a.at - b.at; });
+          // Evict plain Epic cards oldest-first so a burst of Epics never drops Legendary/Secret/Shiny/Golden trophies.
+          keptForProf.sort(function (a, b) {
+            var pa = isRareChimeRow(a) ? 1 : 0;
+            var pb = isRareChimeRow(b) ? 1 : 0;
+            if (pa !== pb) return pa - pb;
+            return a.at - b.at;
+          });
           while (keptForProf.length > TROPHY_CAP) {
             var oldest = keptForProf.shift();
             try { store.delete(oldest.id); } catch (e) {}
@@ -1096,6 +1120,117 @@
     }
   }
 
+  var FISH_ATLAS_PACKS = [
+    { json: 'sheet-fish-standard-0.json', base: 'fish', shiny: 'fish-shiny', ui: 'fish-ui' },
+    { json: 'sheet-fish-swamp-0.json', base: 'swamp-fish', shiny: 'swamp-fish-shiny', ui: 'swamp-fish-ui' },
+    { json: 'sheet-fish-arctic-0.json', base: 'arctic-fish', shiny: 'arctic-fish-shiny', ui: 'arctic-fish-ui' },
+    { json: 'sheet-fish-volcanic-0.json', base: 'volcanic-fish', shiny: 'volcanic-fish-shiny', ui: 'volcanic-fish-ui' }
+  ];
+  /** @type {Promise<Record<string, { pngUrl: string, frame: { x: number, y: number, w: number, h: number } }>> | null} */
+  var fishAtlasPromise = null;
+  /** @type {Record<string, Promise<HTMLImageElement | null>>} */
+  var fishAtlasImages = {};
+  /** @type {Record<string, string>} */
+  var fishSpriteCache = {};
+
+  function atlasOrigin() {
+    if (typeof location !== 'undefined' && /lofi\.town$/i.test(location.hostname || '')) return location.origin;
+    return 'https://app.lofi.town';
+  }
+
+  function loadFishAtlas() {
+    if (fishAtlasPromise) return fishAtlasPromise;
+    fishAtlasPromise = (async function () {
+      /** @type {Record<string, { pngUrl: string, frame: { x: number, y: number, w: number, h: number } }>} */
+      var index = {};
+      if (typeof fetch !== 'function') return index;
+      var origin = atlasOrigin();
+      await Promise.all(FISH_ATLAS_PACKS.map(async function (pack) {
+        try {
+          var res = await fetch(origin + '/texture-packs/' + pack.json);
+          if (!res.ok) return;
+          var json = await res.json();
+          var fileId = json && json.meta && json.meta.png_file_id;
+          var frames = json && json.frames;
+          if (!fileId || !frames) return;
+          var pngUrl = 'https://utfs.io/a/3c8oj5o1o1/' + fileId;
+          Object.keys(frames).forEach(function (k) {
+            var slash = k.indexOf('/');
+            if (slash < 0) return;
+            var prefix = k.slice(0, slash);
+            var kind = prefix === pack.shiny ? 'shiny' : (prefix === pack.base ? 'base' : (prefix === pack.ui ? 'ui' : ''));
+            if (!kind) return;
+            var rest = k.slice(slash + 1);
+            var subSlash = rest.indexOf('/');
+            var speciesKey = (subSlash >= 0 ? rest.slice(0, subSlash) : rest).toLowerCase();
+            var mapKey = kind + ':' + speciesKey;
+            if (!index[mapKey]) {
+              var fr = frames[k] && frames[k].frame;
+              if (fr && fr.w > 0 && fr.h > 0) index[mapKey] = { pngUrl: pngUrl, frame: fr };
+            }
+          });
+        } catch (e) {}
+      }));
+      return index;
+    })();
+    return fishAtlasPromise;
+  }
+
+  function loadAtlasImage(url) {
+    if (Object.prototype.hasOwnProperty.call(fishAtlasImages, url)) return fishAtlasImages[url];
+    fishAtlasImages[url] = new Promise(function (resolve) {
+      if (typeof Image === 'undefined') return resolve(null);
+      var img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { resolve(null); };
+      img.src = url;
+    });
+    return fishAtlasImages[url];
+  }
+
+  async function resolveTrophySprite(rec) {
+    if (!rec || !rec.species || typeof document === 'undefined') return null;
+    var raw = String(rec.species);
+    var base = raw.replace(/^(Shiny|Golden)\s+/i, '').trim();
+    try {
+      if (window.AutoFishLedger && window.AutoFishLedger.speciesInfo) {
+        var info = window.AutoFishLedger.speciesInfo(raw);
+        if (info && info.base) base = info.base;
+      }
+    } catch (e) {}
+    var cacheKey = (rec.shiny ? 'shiny:' : 'base:') + base.toLowerCase();
+    if (fishSpriteCache[cacheKey]) return fishSpriteCache[cacheKey];
+    var atlas = await loadFishAtlas();
+    var cands = [base.toLowerCase()];
+    var qm = base.replace(/\?/g, '-questionMark').toLowerCase();
+    if (qm !== cands[0]) cands.push(qm);
+    var order = rec.shiny ? ['shiny', 'base', 'ui'] : ['base', 'ui'];
+    /** @type {{ pngUrl: string, frame: { x: number, y: number, w: number, h: number } } | null} */
+    var hit = null;
+    for (var i = 0; i < order.length && !hit; i++) {
+      for (var j = 0; j < cands.length && !hit; j++) {
+        hit = atlas[order[i] + ':' + cands[j]] || null;
+      }
+    }
+    if (!hit) return null;
+    var sheetImg = await loadAtlasImage(hit.pngUrl);
+    if (!sheetImg) return null;
+    try {
+      var c = document.createElement('canvas');
+      c.width = hit.frame.w;
+      c.height = hit.frame.h;
+      var ctx = c.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(sheetImg, hit.frame.x, hit.frame.y, hit.frame.w, hit.frame.h, 0, 0, hit.frame.w, hit.frame.h);
+      var url = c.toDataURL('image/png');
+      fishSpriteCache[cacheKey] = url;
+      return url;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function closeTrophyLightbox() {
     trophyLightboxOpen = false;
     revokeLightboxUrl();
@@ -1140,7 +1275,22 @@
         img.alt = rec.species + ' catch card';
         ui.trophyLbStage.appendChild(img);
       } else {
-        ui.trophyLbStage.appendChild(el('div', 'trophy-lb-missing', 'No card image captured'));
+        var fallbackEl = el('div', 'trophy-lb-missing', 'Loading preview…');
+        ui.trophyLbStage.appendChild(fallbackEl);
+        var activeIdx = trophyLightboxIdx;
+        resolveTrophySprite(rec).then(function (spriteUrl) {
+          if (!trophyLightboxOpen || trophyLightboxIdx !== activeIdx || !ui.trophyLbStage) return;
+          if (!spriteUrl) {
+            fallbackEl.textContent = 'No card image captured';
+            return;
+          }
+          ui.trophyLbStage.textContent = '';
+          var spImg = document.createElement('img');
+          spImg.className = 'trophy-lb-img trophy-sprite';
+          spImg.src = spriteUrl;
+          spImg.alt = rec.species + ' sprite';
+          ui.trophyLbStage.appendChild(spImg);
+        });
       }
     }
     if (ui.trophyLbName) ui.trophyLbName.textContent = rec.species;
@@ -1203,6 +1353,7 @@
   }
 
   function matchesTrophyFilter(rec, filter) {
+    if (filter === 'Epic') return rec.rarity === 'Epic';
     if (filter === 'Legendary') return rec.rarity === 'Legendary';
     if (filter === 'Secret') return rec.rarity === 'Secret';
     if (filter === 'variant') return !!(rec.shiny || rec.golden);
@@ -1240,7 +1391,7 @@
       item.type = 'button';
       item.setAttribute('aria-label', 'Preview ' + rec.species + (rec.rarity ? ' (' + rec.rarity + ')' : '') + ' catch card');
       item.title = 'Click to view full card preview';
-      var thumb = el('div', 'trophy-thumb');
+      var thumb = el('div', rec.golden ? 'trophy-thumb golden' : 'trophy-thumb');
       if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
         var img = document.createElement('img');
         img.className = 'trophy-img';
@@ -1252,6 +1403,15 @@
       } else {
         thumb.appendChild(el('span', 'trophy-none', '🐟'));
       }
+      resolveTrophySprite(rec).then(function (spriteUrl) {
+        if (!spriteUrl || !trophyPopOpen || !thumb.isConnected) return;
+        thumb.textContent = '';
+        var sp = document.createElement('img');
+        sp.className = 'trophy-img trophy-sprite';
+        sp.src = spriteUrl;
+        sp.alt = '';
+        thumb.appendChild(sp);
+      });
       item.appendChild(thumb);
       var info = el('div', 'trophy-info');
       info.appendChild(el('div', 'trophy-name', rec.species));
@@ -1445,6 +1605,11 @@
     var startedAt = state.startedAt;
     var out = /** @type {AutoFishSessionApi} */ (window.AutoFishSession).reduce(state, fact);
     if (fact.type === 'start' && out.state.startedAt !== startedAt) reviveTimes = [];
+    // Clear stale pre-start/reload/info banners when a run explicitly starts, resumes, or is
+    // manually stopped by the user; refused actions and programmatic stops keep their alerts.
+    var clearsBanner = (fact.type === 'stop' && fact.reason === 'user') ||
+      (out.actions || []).some(function (a) { return a.type === 'startCore' || a.type === 'resumeCore'; });
+    if (clearsBanner) clearBannerState();
     state = out.state;
     apply(out.actions);
     return out;
@@ -1622,7 +1787,10 @@
     '.trophy-item{width:100%;font:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:6px;color:inherit}',
     '.trophy-item:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18)}',
     '.trophy-thumb{width:46px;height:52px;flex:none;border-radius:6px;background:rgba(0,0,0,.32);border:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;overflow:hidden}',
+    '.trophy-thumb.golden{border-color:rgba(255,217,112,.55);background:radial-gradient(circle,rgba(255,217,112,.16),rgba(0,0,0,.36));box-shadow:inset 0 0 10px rgba(255,217,112,.22)}',
     '.trophy-img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block}',
+    '.trophy-sprite{image-rendering:pixelated}',
+    '.trophy-lb-img.trophy-sprite{min-width:140px;min-height:140px}',
     '.trophy-none{font-size:16px;opacity:.55}',
     '.trophy-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}',
     '.trophy-name{font-size:11.5px;font-weight:600;color:#e8ecef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -1944,6 +2112,7 @@
     /** @type {HTMLButtonElement[]} */
     var trophyTabs = [
       { id: 'all', label: 'All' },
+      { id: 'Epic', label: 'EPI' },
       { id: 'Legendary', label: 'LEG' },
       { id: 'Secret', label: 'SEC' },
       { id: 'variant', label: 'Shiny/Gold' }
@@ -2217,7 +2386,7 @@
       renderLog();
     });
     tierCells.forEach(function (cell) {
-      if (cell.name !== 'Legendary' && cell.name !== 'Secret') return;
+      if (cell.name !== 'Epic' && cell.name !== 'Legendary' && cell.name !== 'Secret') return;
       var box = cell.num.parentElement;
       if (!box) return;
       box.classList.add('clickable');
@@ -3534,7 +3703,10 @@
     // that tick() heals it - a dead sampler or a failing post is retried on a backoff.
     if (overnightPref) armOvernight();
     mountAdoption();
-    banner = checkInterrupted() || banner;
+    var interruptedNotice = checkInterrupted();
+    if (interruptedNotice && interruptedNotice !== 'session resumed after the reload') {
+      banner = interruptedNotice;
+    }
     refreshTrophyCounts();
     if (!BASE) setTimeout(function () { checkForUpdate(false); }, 1500);
 
@@ -3562,7 +3734,7 @@
       fish().exportMissions = exportMissions;
       fish().exportClaimState = exportClaimState;
       fish().onCatch = function (row) {
-        if (isTrophyCatchRow(row)) playRareChime(row);
+        if (isRareChimeRow(row)) playRareChime(row);
       };
       fish().onTrophy = function (row, blob) {
         saveTrophyCard(row, blob);
@@ -3572,6 +3744,9 @@
       return { lastTickAt: lastTickAt, tickErrors: tickErrors, lastTickError: lastTickError, zombieRevives: zombieRevives };
     };
     tick();
+    if (interruptedNotice === 'session resumed after the reload') {
+      showTempBanner(interruptedNotice, 'success', 8000);
+    }
   }
 
   function onVisible() {
