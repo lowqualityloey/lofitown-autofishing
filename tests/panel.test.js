@@ -537,3 +537,14 @@ test('panel includes rare chime, IndexedDB trophy viewer, update badge, CSV expo
   assert.ok(src.includes('function maybeAutoReloadResultMissing(') && src.includes('reloadGate'), 'result-missing auto-reload uses bounded reloadGate');
   assert.ok(src.includes('autoReload: true') && src.includes('!live.autoReload'), 'bounded auto-reload resumes cleanly while user pauses stay paused');
 });
+
+test('panel UI polish: semantic pill, global focus-visible, Escape dialog, Trophies button, chunked settings, and 2-step clear', () => {
+  assert.ok(src.includes("var pill = el('button', 'pill hide', '🎣')"), 'collapsed pill is a focusable <button>');
+  assert.ok(src.includes('button:focus-visible,.pill:focus-visible,[role="button"]:focus-visible'), 'global green :focus-visible outline exists');
+  assert.ok(src.includes("e.key === 'Escape' && trophyPopOpen") && src.includes("'role', 'dialog'"), 'trophy viewer supports dialog semantics and Escape close');
+  assert.ok(src.includes("'Trophies'") && src.includes('Trophies ('), 'explicit Trophies button sits beside CSV and scope toggles');
+  assert.ok(src.includes("chainToggle.style.color = state.chain ? '#5ad18b'"), 'chainToggle renders green active color when on');
+  assert.ok(src.includes("daysKept === 1 ? ' day kept' : ' days kept'"), 'singular day pluralization fixed');
+  assert.ok(src.includes("'confirm?'") && src.includes("clearConfirmUntil"), 'destructive trophy clear requires 2-step confirmation');
+  assert.ok(src.includes('.banner.success{') && src.includes("showTempBanner('downloaded '"), 'CSV download uses auto-clearing success banner');
+});

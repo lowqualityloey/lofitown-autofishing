@@ -46,6 +46,12 @@
   var budgetAt = 0;           // last periodic write of BUDGET_KEY
   var budgetDay = '';         // the local day BUDGET_KEY belongs to, for a rollover mid-run
   var banner = '';
+  var bannerTone = '';        // '' | 'success'
+  /** @type {number | null} */
+  var bannerTimer = null;
+  var clearConfirmUntil = 0;
+  /** @type {number | null} */
+  var clearConfirmTimer = null;
   var rareChimePref = false;
   /** @type {any} */
   var audioCtx = null;
@@ -625,6 +631,7 @@
     }
     captureEditReady = !!(overnightPref && !BASE && tone === 'warn');
     captureDashReady = !!(overnightPref && armed && !captureEditReady && captureServer());
+    if (captureDashReady) line += ' · ↗ dashboard';
     if (ui.captureLine) {
       ui.captureLine.textContent = line;
       ui.captureLine.className = 'capture' + (line ? '' : ' hide') + (tone ? ' ' + tone : '');
@@ -857,12 +864,28 @@
 
   /* --------------------------------------------------- ledger CSV download ---- */
 
+  function showTempBanner(msg, tone, ttlMs) {
+    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
+    banner = msg || '';
+    bannerTone = tone || '';
+    render();
+    if (ttlMs && ttlMs > 0) {
+      bannerTimer = setTimeout(function () {
+        bannerTimer = null;
+        if (banner === msg) {
+          banner = '';
+          bannerTone = '';
+          render();
+        }
+      }, ttlMs);
+    }
+  }
+
   function downloadLedgerCsv() {
     var f = fish();
     var csv = (f && f.logCsv) ? f.logCsv() : '';
     if (!csv || csv.indexOf('\n') < 0) {
-      banner = 'no catch history to export yet';
-      render();
+      showTempBanner('no catch history to export yet', '', 4000);
       return;
     }
     try {
@@ -875,11 +898,9 @@
       a.click();
       a.remove();
       setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 1000);
-      banner = 'downloaded ' + a.download;
-      render();
+      showTempBanner('downloaded ' + a.download, 'success', 4000);
     } catch (e) {
-      banner = 'CSV download unavailable in this browser';
-      render();
+      showTempBanner('CSV download unavailable in this browser', '', 4000);
     }
   }
 
@@ -1023,8 +1044,18 @@
     }
   }
 
+  function resetClearConfirm() {
+    clearConfirmUntil = 0;
+    if (clearConfirmTimer) { clearTimeout(clearConfirmTimer); clearConfirmTimer = null; }
+    if (ui.trophyClear) {
+      ui.trophyClear.textContent = 'clear';
+      ui.trophyClear.classList.remove('armed');
+    }
+  }
+
   function closeTrophyPop() {
     trophyPopOpen = false;
+    resetClearConfirm();
     revokeTrophyUrls();
     if (ui.trophyPop) ui.trophyPop.classList.add('hide');
     if (ui.trophyList) ui.trophyList.textContent = '';
@@ -1083,7 +1114,11 @@
   function openTrophyPop(filter) {
     trophyFilter = filter || 'all';
     trophyPopOpen = true;
-    if (ui.trophyPop) ui.trophyPop.classList.remove('hide');
+    resetClearConfirm();
+    if (ui.trophyPop) {
+      ui.trophyPop.classList.remove('hide');
+      try { ui.trophyPop.focus(); } catch (e) {}
+    }
     renderTrophyPop();
   }
 
@@ -1326,13 +1361,14 @@
     '.dot.running{background:#5ad18b;box-shadow:0 0 0 3px rgba(90,209,139,.18)}',
     '.dot.waiting{background:#f2c14e}.dot.paused{background:#f08a4b}.dot.cooldown{background:#7aa2f7}',
     '.title{font-weight:600;letter-spacing:.2px;flex:1}',
-    '.ver{flex:none;font-size:9px;color:#6d7883;letter-spacing:.3px;font-variant-numeric:tabular-nums}',
+    '.ver{flex:none;font-size:10px;color:#9aa4ae;letter-spacing:.3px;font-variant-numeric:tabular-nums}',
     '.ver.update{cursor:pointer;color:#5ad18b;background:rgba(90,209,139,.14);border:1px solid rgba(90,209,139,.35);border-radius:99px;padding:1px 6px}',
     '.ver.update:hover{background:rgba(90,209,139,.24)}',
     '.ver:empty{display:none}',
     '.chip{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:#aab4bf;border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:1px 7px}',
     '.icon{border:0;background:transparent;color:#9aa4ae;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:6px}',
     '.icon:hover{background:rgba(255,255,255,.08);color:#e8ecef}',
+    'button:focus-visible,.pill:focus-visible,[role="button"]:focus-visible,.sel:focus-visible{outline:2px solid #5ad18b;outline-offset:2px;border-radius:6px}',
     '.body{padding:10px;display:flex;flex-direction:column;gap:9px}',
     '.row{display:flex;align-items:center;gap:6px}',
     '.label{flex:1;color:#aab4bf}',
@@ -1363,41 +1399,48 @@
     '.banner.stall{color:#ffb3b3;background:rgba(255,90,90,.14);border-top-color:rgba(255,90,90,.34)}',
     '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-top-color:rgba(255,145,80,.34)}',
     '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-top-color:rgba(255,120,60,.34)}',
+    '.banner.success{color:#5ad18b;background:rgba(90,209,139,.12);border-top-color:rgba(90,209,139,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.loghead{display:flex;align-items:center;gap:4px}',
-    '.logmeta{font-size:10px;color:#8b95a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.logmeta.clickable,.tier.clickable{cursor:pointer;border-radius:6px}',
+    '.logmeta{font-size:10px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.logmeta.clickable,.tier.clickable{cursor:pointer;border-radius:6px;padding:1px 2px}',
     '.logmeta.clickable:hover,.tier.clickable:hover{background:rgba(255,255,255,.08)}',
-    '.icon.csv{font-size:10px;font-weight:600;padding:2px 5px}',
+    '.icon.csv{font-size:10px;font-weight:600;padding:2px 5px;color:#b8c2cc}',
+    '.icon.danger{color:#ff8fa3}.icon.danger.armed{background:rgba(255,107,107,.16);color:#ffb3b3}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
     '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
-    '.tier span{font-size:8px;letter-spacing:.4px;text-transform:uppercase;color:#8b95a0}',
+    '.tier span{font-size:9.5px;letter-spacing:.3px;text-transform:uppercase;color:#9aa4ae}',
     '.last{font-size:10.5px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.sel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#e8ecef;font:inherit;font-size:11px;padding:2px 4px;max-width:104px}',
     '.sel option{background:#12161c;color:#e8ecef}',
-    '.perfbox{display:flex;flex-direction:column;gap:1px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer}',
-    '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.capture{font-size:10px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.perfbox{display:flex;flex-direction:column;gap:2px;padding:6px 4px 2px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer;border-radius:6px}',
+    '.perfbox:hover{background:rgba(255,255,255,.04)}',
+    '.perf{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.capture{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:4px}',
+    '.capture[role="button"]:hover{text-decoration:underline}',
     '.capture.on{color:#5ad18b}.capture.warn{color:#f2c14e}',
+    '.subhead{font-size:9.5px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:#8b95a0;padding-top:4px;border-top:1px solid rgba(255,255,255,.06)}',
+    '.subhead:first-child{padding-top:0;border-top:0}',
     '.timedgrp{display:flex;flex-direction:column;gap:9px}',
     '.icon.mode{width:auto;min-width:44px;padding:0 7px;font-size:10.5px;font-weight:600;border-radius:7px}',
-    '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
+    '.perfjson{margin:4px 0 0;max-height:150px;overflow:auto;font:10px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
     '.sec{border-top:1px solid rgba(255,255,255,.08)}',
     '.sechead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#aab4bf;font:inherit;font-size:11px;letter-spacing:.3px;padding:8px 0 7px;cursor:pointer;text-align:left}',
     '.sechead:hover{color:#e8ecef}',
     '.sechead:focus-visible{outline:2px solid rgba(90,209,139,.55);outline-offset:2px;border-radius:6px}',
     '.chev{flex:none;display:inline-block;font-size:9px;color:#8b95a0;transition:transform .16s cubic-bezier(.16,1,.3,1)}',
     '.sec.open .chev{transform:rotate(90deg)}',
-    '.secbody{display:flex;flex-direction:column;gap:9px;padding-bottom:9px}',
-    '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
-    '.trophy-pop{position:absolute;inset:0;z-index:10;background:rgba(18,22,28,.98);display:flex;flex-direction:column;gap:6px;padding:10px}',
+    '.secbody{display:flex;flex-direction:column;gap:8px;padding-bottom:9px}',
+    '.pill{width:48px;height:48px;padding:0;color:#e8ecef;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
+    '.trophy-pop{position:absolute;inset:0;z-index:10;background:#12161c;min-height:280px;display:flex;flex-direction:column;gap:6px;padding:10px}',
     '.trophy-head{display:flex;align-items:center;gap:6px}',
     '.trophy-title{flex:1;font-weight:600;font-size:11.5px;color:#e8ecef}',
     '.trophy-tabs{display:flex;gap:4px}',
     '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:#9aa4ae;font:inherit;font-size:10px;padding:3px 7px;border-radius:99px;cursor:pointer}',
     '.trophy-tab.active{background:rgba(90,209,139,.18);color:#5ad18b}',
     '.trophy-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px}',
+    '.trophy-foot{display:flex;align-items:center;justify-content:space-between;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:#8b95a0}',
     '.trophy-item{display:flex;flex-direction:column;gap:4px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:6px}',
     '.trophy-img{width:100%;height:auto;border-radius:6px;display:block}',
     '.trophy-name{font-size:11px;font-weight:600;color:#e8ecef}',
@@ -1436,7 +1479,9 @@
     ver.title = 'build ' + ((fish() && fish().version) || 'unknown');
     var chip = el('div', 'chip', 'idle');
     var min = el('button', 'icon', '–');
+    min.type = 'button';
     min.title = 'collapse';
+    min.setAttribute('aria-label', 'Collapse AutoFish panel');
     head.append(dot, title, ver, chip, min);
 
     var body = el('div', 'body');
@@ -1447,9 +1492,12 @@
     var setSec = section('Session & guards');
     var diagSec = section('Diagnostics');
 
+    setSec.body.appendChild(el('div', 'subhead', 'Schedule'));
+
     var modeRow = el('div', 'row');
     var modeLabel = el('div', 'label', 'Mode');
     var modeToggle = el('button', 'icon mode', 'Timed');
+    modeToggle.type = 'button';
     modeToggle.title = 'Flow: fish nonstop until Stop · Timed: bounded by session, cooldown and daily cap';
     modeRow.append(modeLabel, modeToggle);
     setSec.body.appendChild(modeRow);
@@ -1465,6 +1513,7 @@
     var winRow = el('div', 'row');
     var winLabel = el('div', 'label', 'Clock window');
     var winToggle = el('button', 'icon', 'off');
+    winToggle.type = 'button';
     winToggle.title = 'run only between two times';
     winRow.append(winLabel, winToggle);
     timedWrap.appendChild(winRow);
@@ -1478,17 +1527,20 @@
     var chainRow = el('div', 'row');
     var chainLabel = el('div', 'label', 'Auto-start next run');
     var chainToggle = el('button', 'icon', 'off');
+    chainToggle.type = 'button';
     chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
     chainRow.append(chainLabel, chainToggle);
     timedWrap.appendChild(chainRow);
     setSec.body.appendChild(timedWrap);
 
+    setSec.body.appendChild(el('div', 'subhead', 'Safety guards'));
     setSec.body.appendChild(stepperRow('Stop when hidden', 'hidden'));
 
     // cosmetic only: quietens the in-session Cozier upsell, see setUpsellHidden()
     var upsellRow = el('div', 'row');
     var upsellLabel = el('div', 'label', 'Cozier popup');
     var upsellToggle = el('button', 'icon', upsellOn ? 'on' : 'off');
+    upsellToggle.type = 'button';
     upsellToggle.title = 'hide the in-session Cozier upsell (cosmetic: a free account still cannot fish in focus)';
     upsellRow.append(upsellLabel, upsellToggle);
     setSec.body.appendChild(upsellRow);
@@ -1498,6 +1550,7 @@
     var focusRow = el('div', 'row');
     var focusLabel = el('div', 'label', 'Pause in focus sessions');
     var focusToggle = el('button', 'icon', focusOn ? 'on' : 'off');
+    focusToggle.type = 'button';
     focusToggle.title = 'pause autofish while a focus session is active; the cast prompt is drawn by the game and stays visible';
     focusRow.append(focusLabel, focusToggle);
     setSec.body.appendChild(focusRow);
@@ -1505,13 +1558,17 @@
     var reloadRow = el('div', 'row');
     var reloadLabel = el('div', 'label', 'Resume after reload');
     var reloadToggle = el('button', 'icon', (window.__panel && window.__panel.resumeAfterReload) ? 'on' : 'off');
+    reloadToggle.type = 'button';
     reloadToggle.title = 'start a session again after a page reload; also allows bounded (<=2/h) recovery from waiting-for-result locks';
     reloadRow.append(reloadLabel, reloadToggle);
     setSec.body.appendChild(reloadRow);
 
+    setSec.body.appendChild(el('div', 'subhead', 'Alerts & capture'));
+
     var chimeRow = el('div', 'row');
     var chimeLabel = el('div', 'label', 'Rare catch chime');
     var chimeToggle = el('button', 'icon', rareChimePref ? 'on' : 'off');
+    chimeToggle.type = 'button';
     chimeToggle.title = 'play a gentle Web Audio chime on Legendary, Secret, Shiny, or Golden catches';
     chimeRow.append(chimeLabel, chimeToggle);
     setSec.body.appendChild(chimeRow);
@@ -1520,6 +1577,7 @@
     var captureRow = el('div', 'row');
     var captureLabel = el('div', 'label', 'Local capture');
     var captureToggle = el('button', 'icon', overnightPref ? 'on' : 'off');
+    captureToggle.type = 'button';
     captureToggle.title = 'optional (needs "node fishserve.js"): stream catches.csv & 5m snapshots; Catch history already saves in your browser';
     // The row is the control, not the 14 px switch: the status line tells the owner to click
     // capture, and that has to work wherever on the row they click.
@@ -1533,10 +1591,15 @@
     var profLabel = el('div', 'label', 'Profile');
     var profSel = document.createElement('select');
     profSel.className = 'sel';
+    profSel.setAttribute('aria-label', 'Active catch profile');
     profSel.title = 'which catch history this panel reads and writes';
     var profAdd = el('button', 'icon', '+');
+    profAdd.type = 'button';
+    profAdd.setAttribute('aria-label', 'New profile');
     profAdd.title = 'new profile with its own catch history and daily budget';
     var profReset = el('button', 'icon', '↺');
+    profReset.type = 'button';
+    profReset.setAttribute('aria-label', 'Clear profile catch history');
     profReset.title = 'clear this profile’s catch history (cannot be undone)';
     profRow.append(profLabel, profSel, profAdd, profReset);
     setSec.body.appendChild(profRow);
@@ -1551,6 +1614,17 @@
     // to see that the night is being written down without opening anything.
     var captureLine = el('div', 'capture hide', '');
     body.appendChild(captureLine);
+
+    // Pause/Resume is the primary action while a session is alive; Stop is separate because it is
+    // the one that starts the cooldown. Putting it ahead of Catch history keeps the main control
+    // in one steady place at the top of the card.
+    var primary = el('button', 'primary', 'Start');
+    primary.type = 'button';
+    var secondary = el('button', 'secondary hide', 'Stop');
+    secondary.type = 'button';
+    var actions = el('div', 'actions');
+    actions.append(primary, secondary);
+    body.appendChild(actions);
 
     // Catch history. The core writes it on every parsed catch; the panel only reads it, so a
     // reload of the game still shows yesterday's ledger.
@@ -1580,29 +1654,31 @@
     tierCells.push({ name: 'Unknown', num: unknownNum, cell: unknownCell });
     var logHead = el('div', 'loghead');
     var logLabel = el('div', 'label', 'Catch history');
+    var logTrophiesBtn = el('button', 'icon csv', 'Trophies');
+    logTrophiesBtn.type = 'button';
+    logTrophiesBtn.title = 'view saved Legendary, Secret, Shiny, and Golden catch cards (kept 24h)';
+    logTrophiesBtn.setAttribute('aria-label', 'View 24-hour trophy cards');
     var logCsvBtn = el('button', 'icon csv', '↓ CSV');
+    logCsvBtn.type = 'button';
     logCsvBtn.title = 'download catch history as CSV';
+    logCsvBtn.setAttribute('aria-label', 'Download catch history as CSV');
     var logToggle = el('button', 'icon', 'all');
+    logToggle.type = 'button';
     logToggle.title = 'switch the rarity strip between all-time and today';
-    logHead.append(logLabel, logCsvBtn, logToggle);
+    logHead.append(logLabel, logTrophiesBtn, logCsvBtn, logToggle);
     var logTotal = el('div', 'last', 'all 0 · today 0');
     var logMeta = el('div', 'logmeta', '');
     var lastCatch = el('div', 'last', 'no catches yet');
     logBox.append(logHead, logTotal, strip, logMeta, lastCatch);
     body.appendChild(logBox);
 
-    // Pause/Resume is the primary action while a session is alive; Stop is separate because it is
-    // the one that starts the cooldown. The old single button made every interruption cost 30 minutes.
-    var primary = el('button', 'primary', 'Start');
-    var secondary = el('button', 'secondary hide', 'Stop');
-    var actions = el('div', 'actions');
-    actions.append(primary, secondary);
-    body.appendChild(actions);
-
     // The frame report, on screen. DevTools is not always within reach - Zen takes no synthetic
     // keystrokes, so __fish.perf() cannot be read there - and these are the numbers that decide
     // whether a build needs another detour. Same source; a click expands the whole report.
     var perfBox = el('div', 'perfbox');
+    perfBox.setAttribute('role', 'button');
+    perfBox.tabIndex = 0;
+    perfBox.setAttribute('aria-expanded', 'false');
     var perfLine = el('div', 'perf', 'No frames measured yet');
     var accLine = el('div', 'perf', 'No attempts yet');
     var accMore = el('div', 'perf', '');
@@ -1612,7 +1688,7 @@
     // outgrown by a digit the way a single one can.
     var perfRate = el('div', 'perf', '');
     var perfJson = el('pre', 'perfjson hide', '');
-    perfBox.title = 'frame budget and fish accuracy; click for the full calibration report';
+    perfBox.title = 'frame budget and fish accuracy; click or press Enter for the full calibration report';
     perfBox.append(perfLine, accLine, accMore, perfMore, perfRate, perfJson);
     diagSec.body.appendChild(perfBox);
 
@@ -1620,15 +1696,21 @@
     body.append(setSec.el, diagSec.el);
 
     var bannerEl = el('div', 'banner');
+    bannerEl.setAttribute('role', 'status');
+    bannerEl.setAttribute('aria-live', 'polite');
 
     var trophyPop = el('div', 'trophy-pop hide');
+    trophyPop.setAttribute('role', 'dialog');
+    trophyPop.setAttribute('aria-modal', 'true');
+    trophyPop.setAttribute('aria-label', 'Trophy cards (24h)');
+    trophyPop.tabIndex = -1;
     var trophyHead = el('div', 'trophy-head');
     var trophyTitle = el('div', 'trophy-title', 'Trophy cards (24h)');
-    var trophyClear = el('button', 'icon csv', 'clear');
-    trophyClear.title = 'clear saved trophy cards for this profile';
     var trophyClose = el('button', 'icon', '×');
-    trophyClose.title = 'close trophy viewer';
-    trophyHead.append(trophyTitle, trophyClear, trophyClose);
+    trophyClose.type = 'button';
+    trophyClose.setAttribute('aria-label', 'Close trophy viewer');
+    trophyClose.title = 'close trophy viewer (Esc)';
+    trophyHead.append(trophyTitle, trophyClose);
     var trophyTabsWrap = el('div', 'trophy-tabs');
     /** @type {HTMLButtonElement[]} */
     var trophyTabs = [
@@ -1638,6 +1720,7 @@
       { id: 'variant', label: 'Shiny/Gold' }
     ].map(function (spec) {
       var btn = /** @type {HTMLButtonElement} */ (el('button', 'trophy-tab', spec.label));
+      btn.type = 'button';
       btn.dataset.filter = spec.id;
       btn.addEventListener('click', function () {
         trophyFilter = spec.id;
@@ -1647,10 +1730,20 @@
       return btn;
     });
     var trophyList = el('div', 'trophy-list');
-    trophyPop.append(trophyHead, trophyTabsWrap, trophyList);
+    var trophyFoot = el('div', 'trophy-foot');
+    var trophyHint = el('span', null, 'Auto-expires after 24h');
+    var trophyClear = el('button', 'icon csv danger', 'clear');
+    trophyClear.type = 'button';
+    trophyClear.setAttribute('aria-label', 'Clear saved trophy cards for this profile');
+    trophyClear.title = 'click twice to clear saved trophy cards for this profile';
+    trophyFoot.append(trophyHint, trophyClear);
+    trophyPop.append(trophyHead, trophyTabsWrap, trophyList, trophyFoot);
 
     card.append(head, body, bannerEl, trophyPop);
-    var pill = el('div', 'pill hide', '🎣');
+    var pill = el('button', 'pill hide', '🎣');
+    pill.type = 'button';
+    pill.title = 'Expand AutoFish panel';
+    pill.setAttribute('aria-label', 'Expand AutoFish panel');
     wrap.append(card, pill);
     root.appendChild(wrap);
 
@@ -1668,8 +1761,8 @@
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
-      logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
-      trophyPop: trophyPop, trophyTabs: trophyTabs, trophyList: trophyList,
+      logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
+      trophyPop: trophyPop, trophyTabs: trophyTabs, trophyList: trophyList, trophyClear: trophyClear,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
@@ -1681,9 +1774,16 @@
 
     min.addEventListener('click', function () { userExpanded = false; setCollapsed(true); });
     pill.addEventListener('click', function () { userExpanded = true; setCollapsed(false); });
-    perfBox.addEventListener('click', function () {
+    perfBox.addEventListener('click', function () { togglePerf(); });
+    perfBox.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      togglePerf();
+    });
+    function togglePerf() {
       // Expand, then read: the report is a snapshot of the last ~10 s, not a live feed.
       var hidden = perfJson.classList.toggle('hide');
+      perfBox.setAttribute('aria-expanded', hidden ? 'false' : 'true');
       if (!hidden) {
         try {
           var f = fish();
@@ -1696,7 +1796,7 @@
         } catch (e) { perfJson.textContent = String((e && e.message) || e); }
       }
       place();
-    });
+    }
     primary.addEventListener('click', function () {
       unlockAudio();
       var at = Date.now();
@@ -1834,6 +1934,7 @@
       renderLog();
       render();
     });
+    logTrophiesBtn.addEventListener('click', function () { openTrophyPop('all'); });
     logCsvBtn.addEventListener('click', downloadLedgerCsv);
     logToggle.addEventListener('click', function () {
       logScope = logScope === 'today' ? 'all' : 'today';
@@ -1862,8 +1963,31 @@
       e.preventDefault();
       openTrophyPop('variant');
     });
-    trophyClose.addEventListener('click', closeTrophyPop);
-    trophyClear.addEventListener('click', function () { clearTrophyCards(profileName()); });
+    function closePopWithFocus() {
+      closeTrophyPop();
+      try { if (ui.logTrophiesBtn) ui.logTrophiesBtn.focus(); } catch (e) {}
+    }
+    trophyClose.addEventListener('click', closePopWithFocus);
+    trophyPop.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && trophyPopOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        closePopWithFocus();
+      }
+    });
+    trophyClear.addEventListener('click', function () {
+      if (Date.now() > clearConfirmUntil) {
+        clearConfirmUntil = Date.now() + 3000;
+        trophyClear.textContent = 'confirm?';
+        trophyClear.classList.add('armed');
+        if (clearConfirmTimer) clearTimeout(clearConfirmTimer);
+        clearConfirmTimer = setTimeout(resetClearConfirm, 3000);
+        return;
+      }
+      resetClearConfirm();
+      clearTrophyCards(profileName());
+      showTempBanner('cleared saved trophy cards', 'success', 3000);
+    });
     head.addEventListener('pointerdown', startDrag);
     fillProfiles();
 
@@ -1911,8 +2035,12 @@
     var label = el('div', 'label', labelText);
     var box = el('div', 'step');
     var minus = el('button', null, '−');
+    minus.type = 'button';
+    minus.setAttribute('aria-label', 'Decrease ' + labelText);
     var val = el('input', 'val');
     var plus = el('button', null, '+');
+    plus.type = 'button';
+    plus.setAttribute('aria-label', 'Increase ' + labelText);
     var conf = keyConf(key);
     var hints = {
       dur: 'one session length; Pause holds it without ending it',
@@ -1945,7 +2073,11 @@
     label.setAttribute('aria-label', 'clock window ' + labelText);
     var box = el('div', 'step');
     var minus = el('button', null, '−');
+    minus.type = 'button';
+    minus.setAttribute('aria-label', 'Earlier clock ' + labelText);
     var plus = el('button', null, '+');
+    plus.type = 'button';
+    plus.setAttribute('aria-label', 'Later clock ' + labelText);
     box.style.flex = '1';
     box.append(minus, label, plus);
     ui['time_' + labelText] = { val: label, minus: minus, plus: plus, which: labelText, step: minutes };
@@ -2148,7 +2280,7 @@
     ui.tierCells.forEach(function (cell) {
       var n = byTier[cell.name] || 0;
       cell.num.textContent = String(n);
-      cell.num.style.opacity = n ? '1' : '.35';
+      cell.num.style.opacity = n ? '1' : '.78';
       // UNK only takes space when it has something to say
       if (cell.cell) cell.cell.style.display = n ? '' : 'none';
       if ((cell.name === 'Legendary' || cell.name === 'Secret') && cell.num.parentElement) {
@@ -2157,13 +2289,20 @@
       }
     });
     if (ui.unknownCell) ui.unknownCell.title = unknownTitle(book && book.worklist);
+    if (ui.logTrophiesBtn) {
+      ui.logTrophiesBtn.textContent = trophyCounts.total ? 'Trophies (' + trophyCounts.total + ')' : 'Trophies';
+      ui.logTrophiesBtn.style.color = trophyCounts.total ? '#5ad18b' : '#b8c2cc';
+    }
     if (ui.logToggle) {
       ui.logToggle.textContent = logScope === 'today' ? 'today' : 'all';
       ui.logToggle.style.color = logScope === 'today' ? '#5ad18b' : '#9aa4ae';
+      ui.logToggle.setAttribute('aria-pressed', logScope === 'today' ? 'true' : 'false');
       ui.logToggle.title = logScope === 'today'
         ? 'showing today — click for all-time'
         : 'showing all-time — click for today';
     }
+    var daysKept = (book && book.days) || 0;
+    var dayWord = daysKept === 1 ? ' day kept' : ' days kept';
     if (ui.logTotal) {
       ui.logTotal.textContent = 'all ' + (book && book.total || 0) + ' · today ' + (today.n || 0) +
         ' · shiny ' + (book && book.shiny || 0) + ' · golden ' + (book && book.golden || 0);
@@ -2171,8 +2310,8 @@
     }
     if (ui.logMeta) {
       ui.logMeta.textContent = 'today ' + (today.shiny || 0) + ' shiny · ' + (today.golden || 0) + ' golden · ' +
-        ((book && book.days) || 0) + ' days kept' +
-        (trophyCounts.total ? ' · ' + trophyCounts.total + ' cards' : '');
+        daysKept + dayWord +
+        (trophyCounts.total ? ' · ' + trophyCounts.total + (trophyCounts.total === 1 ? ' card' : ' cards') : '');
       ui.logMeta.title = 'profile ' + profileName() + ' · history is stored in this browser · click to view Shiny/Golden trophy cards (24h)';
     }
     var last = book && book.last;
@@ -2313,6 +2452,7 @@
     if (ui.timedWrap) ui.timedWrap.style.display = flow ? 'none' : '';
     ui.winToggle.textContent = state.window.on ? 'on' : 'off';
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
+    ui.winToggle.setAttribute('aria-pressed', state.window.on ? 'true' : 'false');
     ui.timeRow.style.display = state.window.on ? '' : 'none';
     renderUpsellToggle();
     renderFocusToggle();
@@ -2323,14 +2463,18 @@
     if (!focused(ui.cap.val)) ui.cap.val.value = minutesText(state.dailyCapMs);
     if (!focused(ui.hidden.val)) ui.hidden.val.value = stepperText('hidden', state.hiddenStopMs);
     ui.chainToggle.textContent = state.chain ? 'on' : 'off';
+    ui.chainToggle.style.color = state.chain ? '#5ad18b' : '#9aa4ae';
+    ui.chainToggle.setAttribute('aria-pressed', state.chain ? 'true' : 'false');
     if (ui.reloadToggle) {
       var reloadOn = !!(window.__panel && window.__panel.resumeAfterReload);
       ui.reloadToggle.textContent = reloadOn ? 'on' : 'off';
       ui.reloadToggle.style.color = reloadOn ? '#5ad18b' : '#9aa4ae';
+      ui.reloadToggle.setAttribute('aria-pressed', reloadOn ? 'true' : 'false');
     }
     if (ui.chimeToggle) {
       ui.chimeToggle.textContent = rareChimePref ? 'on' : 'off';
       ui.chimeToggle.style.color = rareChimePref ? '#5ad18b' : '#9aa4ae';
+      ui.chimeToggle.setAttribute('aria-pressed', rareChimePref ? 'true' : 'false');
     }
     renderVerBadge();
     if (!focused(ui.time_from.val)) ui.time_from.val.value = state.window.start;
@@ -2472,6 +2616,7 @@
     else if (blindNote) ui.banner.className = 'banner blind';
     else if ((focus || focusOn) && !banner) ui.banner.className = 'banner focus';
     else if ((pauseNote || stopNote) && !banner) ui.banner.className = 'banner info';
+    else if (banner && bannerTone === 'success') ui.banner.className = 'banner success';
     else ui.banner.className = 'banner';
     ui.banner.style.display = note ? '' : 'none';
 
@@ -2947,6 +3092,7 @@
   function unmount() {
     closeTrophyPop();
     clearPromptMask();
+    if (bannerTimer) { clearTimeout(bannerTimer); bannerTimer = null; }
     if (tickTimer) clearInterval(tickTimer);
     if (guardTimer) clearInterval(guardTimer);
     if (placeTimer) clearInterval(placeTimer);
