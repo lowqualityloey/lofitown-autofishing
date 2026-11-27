@@ -47,7 +47,7 @@
 - **Owner / Current Actor**: lead / Antigravity
 - **Start Time**: `2026-11-27`
 - **Current Revision**: `9c7dae7`
-- **Next Action**: Capture fresh Flow-mode panel screenshots for `README.md`, live-verify Flow mode & `Local capture` in BrowserOS Neo, and cut next release tag (`v3.9.65`) when ready.
+- **Next Action**: Cut next release tag (`v3.9.65`) when ready (`pk:ship`) so Tampermonkey auto-updates ship Flow mode, `Local capture`, and M4 modular core.
 
 ---
 
@@ -119,7 +119,7 @@ Older decisions (2026-10-27–2026-11-17) are archived in `docs/STATE-ARCHIVE.md
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. **Live-verify Flow mode + `Local capture` & refresh `README.md` screenshots.** Capture updated `docs/images/{in-game,panel}.jpg` in BrowserOS Neo so the README matches the Flow / `Local capture` UI, then prepare `v3.9.65` release (`pk:ship`).
+1. **Tag & publish `v3.9.65` (`pk:ship`) when ready** so Tampermonkey auto-updates ship Flow mode, unified `Local capture`, modular `src/` core, and hot-path perf polish.
 2. **Field-run across local midnight.** Verify that only the post-midnight share spends the new day's cap (`Timed` mode) and that `Flow` mode runs smoothly across rollover.
 3. **Measure the Zen frame budget.** Use `__fish.perf()` on Gecko before changing any scan throttle.
 4. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat bubbles) at untested window sizes.

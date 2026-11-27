@@ -30,7 +30,7 @@
 | [reviews/2026-10-27-event-card-freeze.md](reviews/2026-10-27-event-card-freeze.md) | Review of the stuck catch-card bug and its fix. |
 | [reviews/2026-10-28-performance-review.md](reviews/2026-10-28-performance-review.md) | Performance review: where the frame budget actually goes, the findings ranked, and the smallest useful fixes. |
 | [reviews/2026-11-02-lag-and-first-press-review.md](reviews/2026-11-02-lag-and-first-press-review.md) | Two-axis review of the 3.9.10-3.9.12 work, including the snapshot path that silently never ran. |
-| [images/](images/) | README screenshots: `in-game.jpg` and `panel.jpg` (still from 3.9.31 — queued for Flow / `Local capture` screenshot refresh), `panel-folded.jpg`, plus the 3.9.47 capture states (`capture-armed-3.9.47.png`, `capture-stale-3.9.47.png`). |
+| [images/](images/) | README screenshots from the live Flow + Local capture UI (`in-game.jpg`, `panel.jpg`, `panel-folded.jpg`), plus the 3.9.47 capture states (`capture-armed-3.9.47.png`, `capture-stale-3.9.47.png`). |
 
 ## Releases
 

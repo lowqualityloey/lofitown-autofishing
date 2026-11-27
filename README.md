@@ -2,7 +2,7 @@
 
 A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no build step, and no console paste to install. Install it in Tampermonkey and press **Start**.
 
-![AutoFish running in lofi.town (v3.9.31 screenshot; main updates the panel layout below)](docs/images/in-game.jpg)
+![AutoFish running in lofi.town with Flow mode and Local capture](docs/images/in-game.jpg)
 
 ## Status
 
@@ -64,7 +64,7 @@ The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop*
 
 **Diagnostics** shows fps, frame times, accuracy, and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
 
-![The AutoFish panel (v3.9.31 screenshot showing Timed drawer before Flow, Pause in focus sessions, and merged Local capture)](docs/images/panel.jpg)
+![The AutoFish panel showing Flow mode, Local capture, and live diagnostics](docs/images/panel.jpg)
 
 The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.64. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
 
