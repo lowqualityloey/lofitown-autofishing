@@ -42,6 +42,7 @@
 
 | File | What it is |
 | :--- | :--- |
+| [releases/3.9.67.md](releases/3.9.67.md) | 3.9.67: Settled trophy card capture (padded transparent WebP), compact rarity rows, centered lightbox preview, dark scrollbars, and Chromium IDB fix. |
 | [releases/3.9.66.md](releases/3.9.66.md) | 3.9.66: Rare catch chime, 24h IndexedDB trophy viewer, 1-click CSV, fishserve `/dashboard`, bounded reload recovery, and UI/ARIA polish. |
 | [releases/3.9.65.md](releases/3.9.65.md) | 3.9.65: Flow nonstop mode, unified Local capture, M4 modular core (`src/`), JSDoc type-checking, and hot-path perf cleanups. |
 | [releases/3.9.64.md](releases/3.9.64.md) | 3.9.64: dial lock continuity across >90° spawns, 30-press dial cap, off-center seat prompt box, and WebGL snapshot recovery. |

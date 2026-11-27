@@ -712,3 +712,34 @@ test('maxPressPerDial defaults above 12 so high-tier fish do not stall on press 
   assert.ok(Number(m[1]) >= 25, 'maxPressPerDial must allow >12 presses on a dial, got ' + m[1]);
   assert.match(LOOP_SRC, /F\.dialRejected/, 'consecutive rejected presses must still guard against a broken dial');
 });
+
+test('isCardSettled rejects white-flash and transparent frames and padCardBox adds headroom within canvas bounds', () => {
+  const w = 10, h = 10, n = w * h;
+  // Pure white pop-in flash (opaque RGBA 255,255,255,255)
+  const whiteFlash = new Uint8Array(n * 4);
+  whiteFlash.fill(255);
+  assert.equal(T.isCardSettled({ w, h, d: whiteFlash }), false, 'white flash must not count as settled');
+
+  // Empty transparent buffer
+  const blank = new Uint8Array(n * 4);
+  assert.equal(T.isCardSettled({ w, h, d: blank }), false, 'transparent buffer must not count as settled');
+
+  // Settled catch card: cream parchment (249,238,208) + dark border/text pixels
+  const settled = new Uint8Array(n * 4);
+  for (let p = 0; p < n; p++) {
+    const i = p * 4;
+    const dark = p < 15; // 15% dark art/typography ink
+    settled[i] = dark ? 40 : 249;
+    settled[i + 1] = dark ? 35 : 238;
+    settled[i + 2] = dark ? 30 : 208;
+    settled[i + 3] = 255;
+  }
+  const metrics = T.cardInkMetrics({ w, h, d: settled });
+  assert.ok(metrics && metrics.opaqueFrac === 1 && metrics.dark >= 0.1);
+  assert.equal(T.isCardSettled(metrics), true, 'cream parchment + ink card is settled');
+
+  const padded = T.padCardBox({ x: 400, y: 200, w: 300, h: 400 }, 1280, 720);
+  assert.deepEqual(padded, { x: 325, y: 72, w: 450, h: 576 }, 'adds left/right 25%, top 32%, bottom 12% headroom');
+  const clamped = T.padCardBox({ x: 20, y: 10, w: 300, h: 400 }, 350, 420);
+  assert.deepEqual(clamped, { x: 0, y: 0, w: 350, h: 420 }, 'clamps cleanly to canvas boundaries');
+});

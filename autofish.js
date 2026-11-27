@@ -62,9 +62,9 @@
   } = /** @type {any} */ (window.AutoFishVision);
   const {
     wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk,
-    newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressGate,
-    firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait,
-    dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics,
+    isCardSettled, padCardBox, newTriangle, pressOutcome, castRecovery, perfRates, fitStable,
+    firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady,
+    dialFallbackWait, dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics,
   } = /** @type {any} */ (window.AutoFishTiming);
   const {
     cancelPend: loopCancelPend, stepFrame,
@@ -328,7 +328,7 @@
     surfaces();
     uiAdopted = false; uiCheckAt = 0; uiBlank = 0; F.altHit = null; snapAt = 0;
     F.lastBubble = null; F.lastBubbleAt = 0; F.lastCardRect = null;
-    F.cardCheckAt = 0; F.cardScan = 0; F.lastCard = 0; F.cardWait = null;
+    F.cardCheckAt = 0; F.cardScan = 0; F.lastCard = 0; F.cardWait = null; F.trophyWaitAt = 0;
     F.geo = null; F.bad = 0; F.pressesThisDial = 0; F.lastLockAt = 0;
     const cw = (uiCanvas && uiCanvas.width) || window.innerWidth;
     const ch = (uiCanvas && uiCanvas.height) || window.innerHeight;
@@ -1126,12 +1126,14 @@
   }
 
   /**
-   * Read the visible catch-card rect synchronously via readUI() while the WebGL/2D frame is live,
-   * then downscale and JPEG-encode on a small scratch canvas. Never runs on common-epic catches.
+   * Read the visible catch-card rect (padded for overflowing rare art) synchronously via readUI()
+   * once settled, then downscale and encode as transparent WebP (falling back to PNG) so
+   * transparent overlay regions do not turn into harsh JPEG black bars.
    */
   function captureCardBlob(card, cb) {
     if (!uiCanvas || typeof document === 'undefined' || !card) return cb(null);
-    const box = F.lastCardRect || cardBox(uiCanvas.width, uiCanvas.height);
+    const base = F.lastCardRect || cardBox(uiCanvas.width, uiCanvas.height);
+    const box = padCardBox(base, uiCanvas.width, uiCanvas.height) || base;
     const r = readUI(box.x, box.y, box.w, box.h);
     if (!r || !r.d || !r.w || !r.h) return cb(null);
     try {
@@ -1142,7 +1144,7 @@
       const img = sctx.createImageData(r.w, r.h);
       img.data.set(r.d.subarray(0, r.w * r.h * 4));
       sctx.putImageData(img, 0, 0);
-      const maxW = 240;
+      const maxW = 480;
       const scale = r.w > maxW ? maxW / r.w : 1;
       const dw = Math.max(1, Math.round(r.w * scale));
       const dh = Math.max(1, Math.round(r.h * scale));
@@ -1151,21 +1153,41 @@
       const octx = out.getContext('2d');
       if (!octx) return cb(null);
       octx.drawImage(src, 0, 0, dw, dh);
-      if (out.toBlob) out.toBlob((blob) => cb(blob || null), 'image/jpeg', 0.74);
-      else cb(null);
+      if (out.toBlob) {
+        out.toBlob((blob) => {
+          if (blob && blob.size) return cb(blob);
+          out.toBlob((png) => cb(png || null), 'image/png');
+        }, 'image/webp', 0.86);
+      } else {
+        cb(null);
+      }
     } catch (e) { cb(null); }
   }
 
   F.recordCatch = function (card) {
     const rec = F.parseCatch();
     if (!rec) return 'pending';
+    const info = describeCatch(rec);
+    // Hold trophy cards briefly until Pixi finishes its white-flash spawn tween, bounded so
+    // fishing never stalls if readback cannot confirm card ink.
+    if (isTrophyCatch({ rarity: info.rarity, shiny: info.shiny, golden: info.golden })) {
+      const settleMs = F.opts && F.opts.trophySettleMs != null ? F.opts.trophySettleMs : 900;
+      const box = F.lastCardRect || (uiCanvas ? cardBox(uiCanvas.width, uiCanvas.height) : null);
+      const rawCard = box ? readUI(box.x, box.y, box.w, box.h) : null;
+      if (!isCardSettled(rawCard)) {
+        const at = now();
+        if (!F.trophyWaitAt) F.trophyWaitAt = at;
+        if (at - F.trophyWaitAt < settleMs) return 'trophy-wait';
+        L('trophy settle timeout', { species: rec.species, elapsedMs: Math.round(at - F.trophyWaitAt) });
+      }
+    }
+    F.trophyWaitAt = 0;
     clearResultMissing('catch card');
     F.txtAt = now();
     // A parsed catch proves the character was seated and fishing, whatever the watchdog last
     // concluded. Without this, a long attempt or a slow card leaves the flag set and the session
     // pauses on seat until a prompt (or the seat probe) clears it.
     F.needsSeat = false;                                    // a parsed catch: the character is seated
-    const info = describeCatch(rec);
     // The card prints a rarity word only for non-common fish. Fill the blank from the catalogue
     // and carry the source, never a pixel guess.
     if (!rec.rarity) rec.rarity = info.rarity;
@@ -1854,7 +1876,7 @@
       ? { x: F.lastGeo.cx, y: F.lastGeo.cy }
       : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
           y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
-    F.txtAt = now(); F.cardWait = null;                           // only text drawn from here on counts
+    F.txtAt = now(); F.cardWait = null; F.trophyWaitAt = 0;       // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0; F.dialRejected = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;

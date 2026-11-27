@@ -413,3 +413,23 @@ test('simulator 6: unconfirmed cast-prompt flash while awaitingCard does not tri
   assert.equal(sim.F.stats.lost, 1);
   assert.equal(sim.F.attempts[0].why, 'cast prompt');
 });
+
+test('simulator 7: trophy-wait holds catch dismissal until settled without incrementing textGaps', () => {
+  const sim = createHarness();
+  sim.F.startedAt = 1000;
+  sim.F.pendingWin = { closedAt: 1000, presses: 1, verdict: 'hit' };
+  sim.state.catchResult = { cx: 800, cy: 500, w: 320, h: 400, frac: 0.96, via: 'shape' };
+  sim.state.recordVerdict = 'trophy-wait';
+
+  sim.stepAt(1600);
+  assert.equal(sim.taps.length, 0, 'does not dismiss white-flash trophy card early');
+  assert.equal(sim.F.stats.cards, 0);
+  assert.equal(sim.F.stats.textGaps, 0, 'trophy-wait never increments textGaps');
+  assert.equal(sim.F.stats.cardWaits, 1);
+
+  sim.state.recordVerdict = 'logged';
+  sim.stepAt(1700);
+  assert.equal(sim.taps.length, 1, 'dismisses card once settled and logged');
+  assert.equal(sim.F.stats.cards, 1);
+  assert.equal(sim.F.stats.textGaps, 0);
+});

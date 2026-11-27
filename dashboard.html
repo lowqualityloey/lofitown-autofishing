@@ -22,11 +22,13 @@
     --radius: 14px;
   }
   * { box-sizing: border-box; }
+  html, .table-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
   ::selection { background: rgba(90,209,139,.28); color: var(--text); }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: var(--bg); }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 99px; }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.26); }
+  ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 
   body {
     margin: 0;

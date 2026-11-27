@@ -65,6 +65,14 @@
   var trophyFilter = 'all';
   /** @type {string[]} */
   var trophyUrls = [];
+  /** @type {any[]} */
+  var trophyCurrentRows = [];
+  var trophyLightboxOpen = false;
+  var trophyLightboxIdx = 0;
+  /** @type {string | null} */
+  var trophyLightboxUrl = null;
+  /** @type {HTMLElement | null} */
+  var trophyLightboxReturnEl = null;
   /** @type {number | null} */
   var tickTimer = null;
   /** @type {number | null} */
@@ -959,37 +967,44 @@
     }
   }
 
-  function idbGetAll(store) {
-    return new Promise(function (res) {
-      var r = store.getAll();
-      r.onsuccess = function () { res(Array.isArray(r.result) ? r.result : []); };
-      r.onerror = function () { res([]); };
-    });
-  }
-
+  /**
+   * Read and prune trophy records synchronously inside one IDBRequest.onsuccess callback so
+   * Chromium's IDBTransaction stays active for every store.delete() instead of throwing
+   * TransactionInactiveError across Promise microtasks.
+   */
   function pruneTrophiesInStore(store, prof, now) {
-    return idbGetAll(store).then(function (all) {
-      var cutoff = now - TROPHY_TTL_MS;
-      /** @type {any[]} */
-      var keptForProf = [];
-      all.forEach(function (rec) {
-        if (!rec || typeof rec.at !== 'number' || rec.at < cutoff) {
-          try { store.delete(rec.id); } catch (e) {}
-        } else if ((rec.profile || 'default') === prof) {
-          keptForProf.push(rec);
-        }
-      });
-      keptForProf.sort(function (a, b) { return a.at - b.at; });
-      while (keptForProf.length > TROPHY_CAP) {
-        var oldest = keptForProf.shift();
-        try { store.delete(oldest.id); } catch (e) {}
-      }
+    return new Promise(function (resolve) {
+      try {
+        var r = store.getAll();
+        r.onsuccess = function () {
+          var all = Array.isArray(r.result) ? r.result : [];
+          var cutoff = now - TROPHY_TTL_MS;
+          /** @type {any[]} */
+          var keptForProf = [];
+          all.forEach(function (rec) {
+            if (!rec || typeof rec.at !== 'number' || rec.at < cutoff) {
+              try { store.delete(rec.id); } catch (e) {}
+            } else if ((rec.profile || 'default') === prof) {
+              keptForProf.push(rec);
+            }
+          });
+          keptForProf.sort(function (a, b) { return a.at - b.at; });
+          while (keptForProf.length > TROPHY_CAP) {
+            var oldest = keptForProf.shift();
+            try { store.delete(oldest.id); } catch (e) {}
+          }
+          keptForProf.sort(function (a, b) { return b.at - a.at; });
+          resolve(keptForProf);
+        };
+        r.onerror = function () { resolve([]); };
+      } catch (e) { resolve([]); }
     });
   }
 
   async function saveTrophyCard(row, blob) {
     if (!row || !isTrophyCatchRow(row)) return;
     await withTrophyStore(async function (store, tx) {
+      var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
       var at = typeof row.t === 'number' ? row.t : Date.now();
       var prof = String(row.profile || profileName() || 'default');
       store.put({
@@ -1005,7 +1020,7 @@
         blob: blob || null,
       });
       await pruneTrophiesInStore(store, prof, Date.now());
-      await new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+      await txDone;
     }, undefined);
     await refreshTrophyCounts();
     if (trophyPopOpen) renderTrophyPop();
@@ -1013,25 +1028,34 @@
 
   async function listTrophyCards(prof) {
     var target = String(prof || profileName() || 'default');
-    return withTrophyStore(async function (store) {
-      await pruneTrophiesInStore(store, target, Date.now());
-      var rows = await idbGetAll(store);
-      return rows
-        .filter(function (r) { return (r.profile || 'default') === target; })
-        .sort(function (a, b) { return b.at - a.at; });
+    return withTrophyStore(async function (store, tx) {
+      var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+      var rows = await pruneTrophiesInStore(store, target, Date.now());
+      await txDone;
+      return rows;
     }, []);
   }
 
   async function clearTrophyCards(prof) {
     var target = String(prof || profileName() || 'default');
     await withTrophyStore(async function (store, tx) {
-      var rows = await idbGetAll(store);
-      rows.forEach(function (rec) {
-        if ((rec.profile || 'default') === target) {
-          try { store.delete(rec.id); } catch (e) {}
-        }
+      var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+      await new Promise(function (resolve) {
+        try {
+          var r = store.getAll();
+          r.onsuccess = function () {
+            var rows = Array.isArray(r.result) ? r.result : [];
+            rows.forEach(function (rec) {
+              if ((rec.profile || 'default') === target) {
+                try { store.delete(rec.id); } catch (e) {}
+              }
+            });
+            resolve(undefined);
+          };
+          r.onerror = function () { resolve(undefined); };
+        } catch (e) { resolve(undefined); }
       });
-      await new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; });
+      await txDone;
     }, undefined);
     await refreshTrophyCounts();
     if (trophyPopOpen) renderTrophyPop();
@@ -1065,8 +1089,110 @@
     }
   }
 
+  function revokeLightboxUrl() {
+    if (trophyLightboxUrl) {
+      try { URL.revokeObjectURL(trophyLightboxUrl); } catch (e) {}
+      trophyLightboxUrl = null;
+    }
+  }
+
+  function closeTrophyLightbox() {
+    trophyLightboxOpen = false;
+    revokeLightboxUrl();
+    if (ui.trophyLightbox) ui.trophyLightbox.classList.add('hide');
+    if (ui.trophyLbStage) ui.trophyLbStage.textContent = '';
+    var target = trophyLightboxReturnEl;
+    trophyLightboxReturnEl = null;
+    try {
+      if (target && target.isConnected) target.focus();
+      else if (ui.logTrophiesBtn) ui.logTrophiesBtn.focus();
+    } catch (e) {}
+  }
+
+  function buildTrophyBadges(rec, container) {
+    /** @param {string} text @param {string} color */
+    function addBadge(text, color) {
+      var b = el('span', 'trophy-badge', text);
+      b.style.color = color;
+      b.style.borderColor = color;
+      container.appendChild(b);
+    }
+    if (rec.rarity) addBadge(rec.rarity, TIER_COLORS[rec.rarity] || '#aab4bf');
+    if (rec.shiny) addBadge('Shiny', '#8be9fd');
+    if (rec.golden) addBadge('Golden', '#ffd970');
+  }
+
+  function renderTrophyLightbox() {
+    if (!ui.trophyLightbox || !trophyLightboxOpen) return;
+    var rows = trophyCurrentRows;
+    if (!rows.length) { closeTrophyLightbox(); return; }
+    if (trophyLightboxIdx < 0) trophyLightboxIdx = rows.length - 1;
+    if (trophyLightboxIdx >= rows.length) trophyLightboxIdx = 0;
+    var rec = rows[trophyLightboxIdx];
+    revokeLightboxUrl();
+    if (ui.trophyLbStage) {
+      ui.trophyLbStage.textContent = '';
+      if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
+        var img = document.createElement('img');
+        img.className = 'trophy-lb-img';
+        trophyLightboxUrl = URL.createObjectURL(rec.blob);
+        img.src = trophyLightboxUrl;
+        img.alt = rec.species + ' catch card';
+        ui.trophyLbStage.appendChild(img);
+      } else {
+        ui.trophyLbStage.appendChild(el('div', 'trophy-lb-missing', 'No card image captured'));
+      }
+    }
+    if (ui.trophyLbName) ui.trophyLbName.textContent = rec.species;
+    if (ui.trophyLbBadges) {
+      ui.trophyLbBadges.textContent = '';
+      buildTrophyBadges(rec, ui.trophyLbBadges);
+    }
+    if (ui.trophyLbMeta) {
+      var parts = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : ''].filter(Boolean);
+      if (rows.length > 1) parts.push((trophyLightboxIdx + 1) + ' of ' + rows.length);
+      ui.trophyLbMeta.textContent = parts.join(' · ') || 'captured trophy';
+    }
+    if (ui.trophyLbPrev) ui.trophyLbPrev.disabled = rows.length <= 1;
+    if (ui.trophyLbNext) ui.trophyLbNext.disabled = rows.length <= 1;
+    if (ui.trophyLbSave) ui.trophyLbSave.disabled = !rec.blob;
+  }
+
+  /**
+   * @param {number} idx
+   * @param {HTMLElement | null} [trigger]
+   */
+  function openTrophyLightbox(idx, trigger) {
+    if (!trophyCurrentRows.length || !ui.trophyLightbox) return;
+    trophyLightboxIdx = idx || 0;
+    trophyLightboxOpen = true;
+    trophyLightboxReturnEl = trigger || null;
+    ui.trophyLightbox.classList.remove('hide');
+    renderTrophyLightbox();
+    try { ui.trophyLightbox.focus(); } catch (e) {}
+  }
+
+  function downloadTrophyRec(rec) {
+    if (!rec || !rec.blob || typeof URL === 'undefined' || !URL.createObjectURL) return;
+    try {
+      var mime = String(rec.blob.type || 'image/webp');
+      var ext = mime.indexOf('png') !== -1 ? 'png' : (mime.indexOf('jpeg') !== -1 ? 'jpg' : 'webp');
+      var slug = String(rec.species || 'trophy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      var href = URL.createObjectURL(rec.blob);
+      var a = document.createElement('a');
+      a.href = href;
+      a.download = 'autofish-' + (slug || 'trophy') + '.' + ext;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { try { URL.revokeObjectURL(href); } catch (e) {} }, 1000);
+    } catch (e) {}
+  }
+
   function closeTrophyPop() {
+    if (trophyLightboxOpen) closeTrophyLightbox();
     trophyPopOpen = false;
+    trophyCurrentRows = [];
     resetClearConfirm();
     revokeTrophyUrls();
     if (ui.card) ui.card.classList.remove('pop-open');
@@ -1102,32 +1228,42 @@
       return matchesTrophyFilter(r, trophyFilter);
     });
     if (!trophyPopOpen || !ui.trophyList) return;
+    trophyCurrentRows = rows;
     ui.trophyList.textContent = '';
     if (!rows.length) {
       ui.trophyList.appendChild(el('div', 'trophy-empty', 'No saved trophy cards in the last 24 hours.'));
       place();
       return;
     }
-    rows.forEach(function (rec) {
-      var item = el('div', 'trophy-item');
+    rows.forEach(function (rec, idx) {
+      var item = /** @type {HTMLButtonElement} */ (el('button', 'trophy-item'));
+      item.type = 'button';
+      item.setAttribute('aria-label', 'Preview ' + rec.species + (rec.rarity ? ' (' + rec.rarity + ')' : '') + ' catch card');
+      item.title = 'Click to view full card preview';
+      var thumb = el('div', 'trophy-thumb');
       if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
         var img = document.createElement('img');
         img.className = 'trophy-img';
         var objUrl = URL.createObjectURL(rec.blob);
         trophyUrls.push(objUrl);
         img.src = objUrl;
-        img.alt = rec.species;
-        item.appendChild(img);
+        img.alt = '';
+        thumb.appendChild(img);
+      } else {
+        thumb.appendChild(el('span', 'trophy-none', '🐟'));
       }
+      item.appendChild(thumb);
       var info = el('div', 'trophy-info');
-      var tags = [];
-      if (rec.rarity) tags.push(rec.rarity);
-      if (rec.shiny) tags.push('Shiny');
-      if (rec.golden) tags.push('Golden');
-      info.appendChild(el('div', 'trophy-name', rec.species + (tags.length ? ' · ' + tags.join(' · ') : '')));
+      info.appendChild(el('div', 'trophy-name', rec.species));
+      var badges = el('div', 'trophy-badges');
+      buildTrophyBadges(rec, badges);
+      if (badges.childNodes.length) info.appendChild(badges);
       var sub = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : ''].filter(Boolean).join(' · ');
       info.appendChild(el('div', 'trophy-sub', sub || 'captured trophy'));
       item.appendChild(info);
+      item.addEventListener('click', function () {
+        openTrophyLightbox(idx, item);
+      });
       ui.trophyList.appendChild(item);
     });
     place();
@@ -1393,7 +1529,13 @@
     '.icon{border:0;background:transparent;color:#9aa4ae;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:6px}',
     '.icon:hover{background:rgba(255,255,255,.08);color:#e8ecef}',
     'button:focus-visible,.pill:focus-visible,[role="button"]:focus-visible,.sel:focus-visible{outline:2px solid #5ad18b;outline-offset:2px;border-radius:6px}',
-    '.body{padding:10px;display:flex;flex-direction:column;gap:9px}',
+    '.body{padding:10px;display:flex;flex-direction:column;gap:9px;max-height:calc(100vh - 70px);overflow-y:auto}',
+    '.body,.trophy-list,.perfjson{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}',
+    '.body::-webkit-scrollbar,.trophy-list::-webkit-scrollbar,.perfjson::-webkit-scrollbar{width:6px;height:6px}',
+    '.body::-webkit-scrollbar-track,.trophy-list::-webkit-scrollbar-track,.perfjson::-webkit-scrollbar-track{background:transparent}',
+    '.body::-webkit-scrollbar-thumb,.trophy-list::-webkit-scrollbar-thumb,.perfjson::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:99px}',
+    '.body::-webkit-scrollbar-thumb:hover,.trophy-list::-webkit-scrollbar-thumb:hover,.perfjson::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.28)}',
+    '.body::-webkit-scrollbar-button,.trophy-list::-webkit-scrollbar-button,.perfjson::-webkit-scrollbar-button{display:none;width:0;height:0}',
     '.row{display:flex;align-items:center;gap:6px}',
     '.label{flex:1;color:#aab4bf}',
     '.step{display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.05);border-radius:9px;padding:2px}',
@@ -1475,13 +1617,34 @@
     '.trophy-tabs{display:flex;gap:4px}',
     '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:#9aa4ae;font:inherit;font-size:10px;padding:3px 7px;border-radius:99px;cursor:pointer}',
     '.trophy-tab.active{background:rgba(90,209,139,.18);color:#5ad18b}',
-    '.trophy-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px}',
+    '.trophy-list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:5px;padding-right:4px}',
     '.trophy-foot{display:flex;align-items:center;justify-content:space-between;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:#8b95a0}',
-    '.trophy-item{display:flex;flex-direction:column;gap:4px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:6px}',
-    '.trophy-img{width:100%;height:auto;border-radius:6px;display:block}',
-    '.trophy-name{font-size:11px;font-weight:600;color:#e8ecef}',
-    '.trophy-sub{font-size:10px;color:#9aa4ae}',
+    '.trophy-item{width:100%;font:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:6px;color:inherit}',
+    '.trophy-item:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18)}',
+    '.trophy-thumb{width:46px;height:52px;flex:none;border-radius:6px;background:rgba(0,0,0,.32);border:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;overflow:hidden}',
+    '.trophy-img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block}',
+    '.trophy-none{font-size:16px;opacity:.55}',
+    '.trophy-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}',
+    '.trophy-name{font-size:11.5px;font-weight:600;color:#e8ecef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.trophy-badges{display:flex;flex-wrap:wrap;gap:3px}',
+    '.trophy-badge{font-size:9px;font-weight:600;letter-spacing:.2px;padding:0 5px;border-radius:99px;border:1px solid;background:rgba(255,255,255,.04);line-height:1.45}',
+    '.trophy-sub{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.trophy-empty{font-size:11px;color:#8b95a0;text-align:center;padding:24px 8px}',
+    '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.78);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:24px;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
+    '.trophy-lb-panel{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:min(92vw,500px);max-height:92vh;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:14px 16px;box-shadow:0 24px 64px rgba(0,0,0,.65)}',
+    '.trophy-lb-head{width:100%;display:flex;align-items:center;gap:8px}',
+    '.trophy-lb-title{flex:1;min-width:0;font-size:14px;font-weight:600;color:#e8ecef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;min-height:160px;max-height:66vh;width:100%;overflow:hidden}',
+    '.trophy-lb-img{max-width:min(84vw,460px);max-height:64vh;width:auto;height:auto;object-fit:contain;display:block;filter:drop-shadow(0 16px 30px rgba(0,0,0,.65))}',
+    '.trophy-lb-missing{font-size:12px;color:#8b95a0;padding:48px 24px}',
+    '.trophy-lb-meta{width:100%;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 10px;font-size:11.5px;color:#aab4bf;font-variant-numeric:tabular-nums}',
+    '.trophy-lb-actions{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
+    '.trophy-lb-btn{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.07);color:#dfe5ea;font:inherit;font-size:11px;font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer}',
+    '.trophy-lb-btn:hover:not(:disabled){background:rgba(255,255,255,.14)}',
+    '.trophy-lb-btn:disabled{opacity:.35;cursor:default}',
+    '.trophy-lb-btn.save{background:rgba(90,209,139,.16);border-color:rgba(90,209,139,.4);color:#5ad18b}',
+    '.trophy-lb-btn.save:hover:not(:disabled){background:rgba(90,209,139,.26)}',
+    '.trophy-lightbox.hide{display:none}',
     '.hide{display:none}'
   ].join('\n');
 
@@ -1816,7 +1979,38 @@
     pill.title = 'Expand AutoFish panel';
     pill.setAttribute('aria-label', 'Expand AutoFish panel');
     wrap.append(card, pill);
-    root.appendChild(wrap);
+
+    var trophyLightbox = el('div', 'trophy-lightbox hide');
+    trophyLightbox.setAttribute('role', 'dialog');
+    trophyLightbox.setAttribute('aria-modal', 'true');
+    trophyLightbox.setAttribute('aria-label', 'Trophy catch card preview');
+    trophyLightbox.tabIndex = -1;
+    var trophyLbPanel = el('div', 'trophy-lb-panel');
+    var trophyLbHead = el('div', 'trophy-lb-head');
+    var trophyLbName = el('div', 'trophy-lb-title', '');
+    var trophyLbBadges = el('div', 'trophy-badges');
+    var trophyLbClose = el('button', 'icon', '×');
+    trophyLbClose.type = 'button';
+    trophyLbClose.setAttribute('aria-label', 'Close card preview');
+    trophyLbClose.title = 'Close preview (Esc)';
+    trophyLbHead.append(trophyLbName, trophyLbBadges, trophyLbClose);
+    var trophyLbStage = el('div', 'trophy-lb-stage');
+    var trophyLbMeta = el('div', 'trophy-lb-meta', '');
+    var trophyLbActions = el('div', 'trophy-lb-actions');
+    var trophyLbPrev = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-btn', '← Prev'));
+    trophyLbPrev.type = 'button';
+    trophyLbPrev.setAttribute('aria-label', 'Previous trophy card');
+    var trophyLbSave = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-btn save', 'Save image'));
+    trophyLbSave.type = 'button';
+    trophyLbSave.setAttribute('aria-label', 'Save catch card image');
+    var trophyLbNext = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-btn', 'Next →'));
+    trophyLbNext.type = 'button';
+    trophyLbNext.setAttribute('aria-label', 'Next trophy card');
+    trophyLbActions.append(trophyLbPrev, trophyLbSave, trophyLbNext);
+    trophyLbPanel.append(trophyLbHead, trophyLbStage, trophyLbMeta, trophyLbActions);
+    trophyLightbox.appendChild(trophyLbPanel);
+
+    root.append(wrap, trophyLightbox);
 
     document.documentElement.appendChild(host);
 
@@ -1835,6 +2029,9 @@
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
       trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyClear: trophyClear,
+      trophyLightbox: trophyLightbox, trophyLbName: trophyLbName, trophyLbBadges: trophyLbBadges,
+      trophyLbStage: trophyLbStage, trophyLbMeta: trophyLbMeta,
+      trophyLbPrev: trophyLbPrev, trophyLbSave: trophyLbSave, trophyLbNext: trophyLbNext,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
@@ -2049,8 +2246,67 @@
       try { if (ui.logTrophiesBtn) ui.logTrophiesBtn.focus(); } catch (e) {}
     }
     trophyClose.addEventListener('click', closePopWithFocus);
+    trophyLbClose.addEventListener('click', closeTrophyLightbox);
+    trophyLightbox.addEventListener('click', function (e) {
+      if (e.target === trophyLightbox) closeTrophyLightbox();
+    });
+    trophyLbPrev.addEventListener('click', function () {
+      if (trophyCurrentRows.length <= 1) return;
+      trophyLightboxIdx--;
+      renderTrophyLightbox();
+    });
+    trophyLbNext.addEventListener('click', function () {
+      if (trophyCurrentRows.length <= 1) return;
+      trophyLightboxIdx++;
+      renderTrophyLightbox();
+    });
+    trophyLbSave.addEventListener('click', function () {
+      downloadTrophyRec(trophyCurrentRows[trophyLightboxIdx]);
+    });
+    trophyLightbox.addEventListener('keydown', function (e) {
+      if (!trophyLightboxOpen) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeTrophyLightbox();
+        return;
+      }
+      if (e.key === 'ArrowLeft' && trophyCurrentRows.length > 1) {
+        e.preventDefault();
+        trophyLightboxIdx--;
+        renderTrophyLightbox();
+        return;
+      }
+      if (e.key === 'ArrowRight' && trophyCurrentRows.length > 1) {
+        e.preventDefault();
+        trophyLightboxIdx++;
+        renderTrophyLightbox();
+        return;
+      }
+      if (e.key === 'Tab') {
+        var lbFocusables = Array.prototype.filter.call(
+          trophyLbPanel.querySelectorAll('button:not(:disabled)'),
+          function (b) { return b.offsetParent !== null; }
+        );
+        if (!lbFocusables.length) {
+          e.preventDefault();
+          trophyLightbox.focus();
+          return;
+        }
+        var lbFirst = lbFocusables[0];
+        var lbLast = lbFocusables[lbFocusables.length - 1];
+        var lbActive = (root && root.activeElement) || document.activeElement;
+        if (e.shiftKey && (lbActive === lbFirst || !trophyLbPanel.contains(lbActive))) {
+          e.preventDefault();
+          lbLast.focus();
+        } else if (!e.shiftKey && (lbActive === lbLast || !trophyLbPanel.contains(lbActive))) {
+          e.preventDefault();
+          lbFirst.focus();
+        }
+      }
+    });
     wrap.addEventListener('keydown', function (e) {
-      if (!trophyPopOpen) return;
+      if (trophyLightboxOpen || !trophyPopOpen) return;
       if (e.key === 'Escape' && trophyPopOpen) {
         e.preventDefault();
         e.stopPropagation();

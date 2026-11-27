@@ -2,9 +2,9 @@
 
 <!-- Bounded projection: respect `state-guard:` thresholds in `PROMPTKIT.md`; `pk:checkpoint` archives completed history to `docs/STATE-ARCHIVE.md`. -->
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.66: Rare catch chime, 24h IndexedDB trophy viewer, 1-click CSV, `/dashboard` + `/report`, bounded reload recovery, HUD/ARIA polish)
+- **Project Name**: lofitown-autofishing (autofish 3.9.67: Settled trophy capture, padded transparent WebP cards, compact trophy rows, centered lightbox preview, dark scrollbars, IDB fix, plus Missions support)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — **v3.9.66** release candidate built and verified (`tsc --noEmit` exit `0`, `448/448` unit tests pass), cutting and publishing `v3.9.66`.
+- **Overall Status**: ACTIVE — **v3.9.67** release verified (`tsc --noEmit` exit `0`, `469/469` unit tests pass, Ego Lite Chromium trophy list + lightbox screenshots verified), cutting & publishing `v3.9.67`.
 - **Current Working Branch**: `main` (pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
 - **Last Updated**: 2026-11-28
 - **Engine Version**: v2.6.1 @ unknown
@@ -46,7 +46,7 @@
 - **Active Task Pointer**: `TASK-2026-11-28-missions-claim-d2`
 - **Owner / Current Actor**: ZCode session (GLM-5.3-Flash)
 - **Start Time**: `2026-11-28 09:01 (UTC+13)`
-- **Current Revision**: `main` (`v3.9.66`)
+- **Current Revision**: `main` (`v3.9.67`)
 - **Next Action**: Owner sign-off received ('sign-off D2 commit') at 2026-11-28 09:21 (UTC+13); local atomic commit authorized (pre-existing dirt, `.pkab/`, and the scratch #607 log excluded). A live claim smoke against the real Quests panel remains an owner-assisted follow-up - the game has shown zero live claim controls so far (auto-grant), so first live behavior is expected to be honest "nothing to claim" reports.
 
 ---
@@ -123,7 +123,7 @@ Older decisions (2026-10-27–2026-11-17) are archived in `docs/STATE-ARCHIVE.md
 2. **Field-run across local midnight.** Verify that only the post-midnight share spends the new day's cap (`Timed` mode) and that `Flow` mode runs smoothly across rollover.
 3. **Measure the Zen frame budget.** Use `__fish.perf()` on Gecko before changing any scan throttle.
 4. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat bubbles) at untested window sizes.
-5. **Run the `v3.9.66` live in-game smoke test** and monitor local `fishserve` `/dashboard` metrics (carried from the closed trophy task's Next Action).
+5. **Run the `v3.9.67` live in-game smoke test** and monitor local `fishserve` `/dashboard` metrics (carried from the closed trophy task's Next Action).
 6. **Missions-bot follow-up (`TASK-2026-11-28-daily-missions-scoping`, signed off 2026-11-28 - D1 then D2).** M0 spike done (A1-A4 resolved; daily reset ≈08:00 UTC read from the DOM countdown, decoupled from local midnight); D1 implemented and signed off as `TASK-2026-11-28-missions-awareness-d1`; D2 auto-claim awareness/handling implemented under a fresh owner go as `TASK-2026-11-28-missions-claim-d2` (L2 Lite, `preset: solo-fast`): pure exact-match claim planner, opt-in (default off) guarded claim pass with HARD-1 stand-downs (focus session, Cozier upsell), additive panel/dashboard/capture claim state - signed off and committed locally 2026-11-28 (owner reply 'sign-off D2 commit'). A read-only live smoke passed 2026-11-28 (L1, §8); a live claim-action observation remains open (the game showed 0 claim controls — auto-grant). The Cozier focus-fishing paywall stays a hard constraint (detect + report, never bypass); the owner's Cozy/Cozier status and post-spike panel-restart fact remain unknown (recorded as unanswered in the D1 record).
 
 ---

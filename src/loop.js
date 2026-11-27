@@ -382,6 +382,7 @@
           ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
           : { x: card.cx - 183, y: card.cy - 203, w: 366, h: 406 };
         const r = o.recordCatch ? o.recordCatch(card) : (F.recordCatch ? F.recordCatch(card) : 'empty');
+        if (r === 'trophy-wait') { F.stats.cardWaits = (F.stats.cardWaits || 0) + 1; return; }
         if (r !== 'logged') {
           if (F.cardWait == null) F.cardWait = t;
           if (t - F.cardWait < 2500) { F.stats.cardWaits = (F.stats.cardWaits || 0) + 1; return; }

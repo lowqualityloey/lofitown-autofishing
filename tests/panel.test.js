@@ -559,3 +559,11 @@ test('panel critique final polish: toggle aria-labelledby, modal focus trap, inl
   assert.ok(src.includes("'View 24-hour ' + cell.name + ' trophy cards'") && src.includes("'View 24-hour Shiny and Golden trophy cards'"), 'clickable trophy triggers expose descriptive aria-labels');
   assert.ok(src.includes("daysKept + dayWord") && !src.includes("daysKept + dayWord +\n        (trophyCounts"), 'logMeta and logTotal avoid duplicating shiny/golden and day counts');
 });
+
+test('panel trophy lightbox preview, compact rarity rows, modern dark scrollbars, and viewport scroll cap', () => {
+  assert.ok(src.includes('scrollbar-width:thin') && src.includes('::-webkit-scrollbar-thumb') && src.includes('::-webkit-scrollbar-button{display:none'), 'panel Shadow DOM styles custom dark scrollbars without OS white bars or arrows');
+  assert.ok(src.includes('max-height:calc(100vh - 70px);overflow-y:auto'), 'panel body caps height cleanly on shorter screens');
+  assert.ok(src.includes("el('button', 'trophy-item')") && src.includes('trophy-badges') && src.includes('TIER_COLORS[rec.rarity]'), 'trophy rows are compact semantic buttons with color-coded rarity/variant pills');
+  assert.ok(src.includes('function openTrophyLightbox(') && src.includes('trophy-lightbox') && src.includes('Save image'), 'clicking a trophy row opens a centered full-res lightbox preview with save support');
+  assert.ok(src.includes("e.key === 'ArrowLeft'") && src.includes("e.key === 'ArrowRight'") && src.includes('trophyLightboxUrl'), 'lightbox supports keyboard prev/next navigation and keeps its own object URL');
+});

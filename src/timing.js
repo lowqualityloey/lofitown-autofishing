@@ -533,6 +533,66 @@
   }
 
   /**
+   * Measure opaque dark-ink and bright-white ratios on a card RGBA snapshot so we can tell
+   * a white pop-in flash frame apart from a settled catch card.
+   * @param {{ w: number, h: number, d: Uint8Array | Uint8ClampedArray } | null | undefined} r
+   */
+  function cardInkMetrics(r) {
+    if (!r || !r.d || !r.w || !r.h) return null;
+    const d = r.d, n = r.w * r.h;
+    if (!n || d.length < n * 4) return null;
+    let dark = 0, white = 0, opaque = 0;
+    for (let p = 0, i = 0; p < n; p++, i += 4) {
+      if (d[i + 3] > 120) {
+        opaque++;
+        if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 150) dark++;
+        if (d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) white++;
+      }
+    }
+    if (!opaque) return { dark: 0, white: 0, opaqueFrac: 0 };
+    return { dark: dark / opaque, white: white / opaque, opaqueFrac: opaque / n };
+  }
+
+  /**
+   * Wait until the catch card exits lofi.town's initial white-flash frame (solid white silhouette
+   * with almost no dark artwork or typography ink) before taking a trophy screenshot.
+   * @param {{ w?: number, h?: number, d?: Uint8Array | Uint8ClampedArray, dark?: number, white?: number, opaqueFrac?: number } | null | undefined} input
+   * @param {{ minOpaque?: number, maxWhite?: number, minDark?: number }} [o]
+   */
+  function isCardSettled(input, o) {
+    const m = input && input.d ? cardInkMetrics(/** @type {any} */ (input)) : input;
+    if (!m || typeof m.opaqueFrac !== 'number') return false;
+    const cfg = o || {};
+    const minOpaque = cfg.minOpaque != null ? cfg.minOpaque : 0.15;
+    const maxWhite = cfg.maxWhite != null ? cfg.maxWhite : 0.65;
+    const minDark = cfg.minDark != null ? cfg.minDark : 0.02;
+    if (m.opaqueFrac < minOpaque) return false;
+    if ((m.white || 0) >= maxWhite && (m.dark || 0) < minDark) return false;
+    return true;
+  }
+
+  /**
+   * Expand a detected catch-card rect with asymmetrical headroom so oversized Legendary/Secret
+   * artwork (fins, wings, tails) is captured intact without exceeding canvas bounds.
+   * @param {Rect | null | undefined} box
+   * @param {number} cw
+   * @param {number} ch
+   */
+  function padCardBox(box, cw, ch) {
+    if (!box || !cw || !ch) return null;
+    const px = Math.round(box.w * 0.25);
+    const pt = Math.round(box.h * 0.32);
+    const pb = Math.round(box.h * 0.12);
+    const x = Math.max(0, Math.round(box.x - px));
+    const y = Math.max(0, Math.round(box.y - pt));
+    const right = Math.min(cw, Math.round(box.x + box.w + px));
+    const bottom = Math.min(ch, Math.round(box.y + box.h + pb));
+    const w = right - x;
+    const h = bottom - y;
+    return w > 0 && h > 0 ? { x, y, w, h } : null;
+  }
+
+  /**
    * Did the game accept that press?
    * st: { press, s, blinks, opts, graceMs } -> { verdict: 'none'|'pending'|'accepted'|'rejected' }
    * @param {Record<string, any> | null | undefined} st
@@ -604,6 +664,9 @@
     omegaBand,
     widthBand,
     cardShapeOk,
+    cardInkMetrics,
+    isCardSettled,
+    padCardBox,
     pressOutcome,
     castRecovery,
     perfRates,
