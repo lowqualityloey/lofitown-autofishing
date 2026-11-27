@@ -297,6 +297,18 @@ test('GET /session.js serves the reducer with no-store', async () => {
   } finally { server.close(); }
 });
 
+test('GET /autofish.js serves the assembled core with no-store', async () => {
+  const { server, port } = await boot();
+  try {
+    const res = await fetch('http://127.0.0.1:' + port + '/autofish.js');
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    const body = await res.text();
+    assert.equal(body, require('../build-userscript.js').assembleCore(null));
+    assert.ok(body.includes('window.__fish = F'));
+  } finally { server.close(); }
+});
+
 test('a missing static asset is a 404, not a 500', async () => {
   const { server, port } = await boot();
   try {

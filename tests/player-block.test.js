@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const CORE = fs.readFileSync(path.join(__dirname, '..', 'autofish.js'), 'utf8');
+const LOOP_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'loop.js'), 'utf8');
 const PANEL = fs.readFileSync(path.join(__dirname, '..', 'panel.js'), 'utf8');
 const SESSION_SRC = fs.readFileSync(path.join(__dirname, '..', 'session.js'), 'utf8');
 const { createState, reduce } = require('../session.js');
@@ -29,8 +30,8 @@ test('a boxed prompt must repeat at the same spot before it may tap', () => {
 
 test('an `anywhere` blob never taps and never moves the dial hint', () => {
   assert.match(CORE, /if \(!b \|\| b\.via === 'anywhere'\) return false;/);
-  const btn = CORE.indexOf('const b = F.findBubble();');
-  const branch = CORE.slice(btn, btn + 4200);
+  const btn = LOOP_SRC.indexOf('// 1. a bubble');
+  const branch = LOOP_SRC.slice(btn, btn + 4200);
   assert.match(branch, /var isBox = b\.via !== 'anywhere';/);
 });
 
@@ -39,15 +40,13 @@ test('three fruitless taps on one spot suppress it and raise playerBlocked', () 
   assert.match(CORE, /PLAYER_TAPS = 3/);
   assert.match(CORE, /q\.blockedUntil = t \+ PLAYER_BLOCK_MS;/);
   assert.match(CORE, /playerBlocked: !!\(F\.bubblePrev && F\.bubblePrev\.blockedUntil/);
-  assert.match(CORE, /F\.bubblePrev = null;.*a dial proves the prompt was real/s);
+  assert.match(LOOP_SRC, /F\.bubblePrev = null;.*a dial proves the prompt was real/s);
   assert.match(CORE, /sinceBubbleMs: F\.lastBubbleAt \? Math\.round\(now\(\) - F\.lastBubbleAt\) : null/);
 });
 
+const D = require('../src/diagnostics.js');
+
 test('doctor() names the nearby player instead of waiting for a no-catch', () => {
-  assert.match(CORE, /if \(st\.playerBlocked\) return o\('nearby-player', 'warn', 'a tap keeps landing where no dial follows/);
-  const open = CORE.indexOf('// <doctor-core>');
-  const close = CORE.indexOf('// </doctor-core>');
-  const D = new Function(CORE.slice(open + '// <doctor-core>'.length, close) + '\nreturn { doctor };')();
   const base = { running: true, paused: false, hidden: false, stalled: false, postRender: true,
     snapshot: { gl: 100, canvas2d: 0 }, readback: { canvas2d: 0 }, longtasks: { inLast10s: 0, maxMs: 10 },
     worstFrameMs: 50, needsSeat: false, sincePromptMs: 5000, sinceDialMs: 60000,

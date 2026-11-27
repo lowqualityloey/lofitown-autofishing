@@ -29,6 +29,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { assembleCore } = require('./build-userscript.js');
 
 const PORT = Number(process.env.FISHSERVE_PORT) || 8731;
 const CATCH_HEAD = ['time', 'species', 'rarity', 'quality', 'weight', 'value'];
@@ -191,6 +192,17 @@ function createServer() {
     }
 
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+
+    if (req.method === 'GET' && route === '/autofish.js') {
+      try {
+        const body = assembleCore(null);
+        res.writeHead(200, Object.assign({}, JS_HEAD, cors));
+        return res.end(body);
+      } catch (e) {
+        res.writeHead(500, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, cors));
+        return res.end('assembly error');
+      }
+    }
 
     const file = STATIC[route];
     if (req.method === 'GET' && file) {

@@ -10,6 +10,10 @@ const path = require('node:path');
 // and the allocation-free loops from creeping back in.
 
 const CORE = fs.readFileSync(path.join(__dirname, '..', 'autofish.js'), 'utf8');
+const VISION_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'vision.js'), 'utf8');
+const LOOP_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'loop.js'), 'utf8');
+const TIMING_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'timing.js'), 'utf8');
+const VISION = require('../src/vision.js');
 
 function fnBody(start) {
   const a = CORE.indexOf(start);
@@ -155,7 +159,7 @@ test('the rim helpers are built from tables and read channels by index', () => {
 // spent only on something that grab already saw.
 
 test('one quarter-scale grab per scan tick feeds every detector', () => {
-  const snap = slice('function snapshot()', '// <scan-core>');
+  const snap = slice('function snapshot()', 'let seenBuf');
   assert.match(snap, /scanTickMs\) \|\| 66/, 'the snapshot must throttle itself to one grab per tick');
   assert.match(CORE, /scanTickMs: 66/, 'the shared scan tick is missing from the defaults');
   assert.equal((CORE.match(/!downscale\(\)/g) || []).length, 1, 'a detector took its own copy of the layer again');
@@ -201,7 +205,7 @@ test('the card box follows the live canvas and only runs while a catch is pendin
     const fn = fnBody(start);
     assert.match(fn, /cardBox\(uiCanvas && uiCanvas\.width, uiCanvas && uiCanvas\.height\)/, start + ' must size from the live canvas');
   }
-  const step = CORE.slice(CORE.indexOf('const awaitingCard'), CORE.indexOf('const awaitingCard') + 400);
+  const step = LOOP_SRC.slice(LOOP_SRC.indexOf('const awaitingCard'), LOOP_SRC.indexOf('const awaitingCard') + 400);
   assert.match(step, /F\.pendingWin && t - \(F\.pendingWin\.closedAt \|\| t\) < 30000/, 'a stale win must not trigger a card scan');
   assert.match(step, /t - \(F\.lastCard \|\| 0\) > 1500 && awaitingCard/, 'the card scan needs a pending catch');
 });
@@ -221,9 +225,9 @@ test('a window resize re-resolves the UI surface instead of keeping a cached wor
 // retry. These guards keep the bounded recovery ladder (click -> keybind -> stand up) wired in.
 
 test('the bubble branch escalates instead of tapping the same blob forever', () => {
-  const btn = CORE.indexOf('const b = F.findBubble();');
+  const btn = LOOP_SRC.indexOf('// 1. a bubble');
   assert.ok(btn > 0, 'the bubble branch is missing');
-  const branch = slice('const b = F.findBubble();', '// 2. a locked dial');
+  const branch = LOOP_SRC.slice(btn, LOOP_SRC.indexOf('// 2. a locked dial', btn));
   assert.match(branch, /const rung = \(F\.bubbleMiss = \(F\.bubbleMiss \|\| 0\) \+ 1\);/);
   assert.match(branch, /castRecovery\(rung\)/);
   assert.match(branch, /var tapOk = !!\(rec\.tap && confirmed\);/);
@@ -236,12 +240,12 @@ test('the bubble branch escalates instead of tapping the same blob forever', () 
   // REEL! prompt sat on screen. The click is the one input that has ever started the minigame.
   // The confirmation gate only delays the first sighting; a repeated boxed prompt still taps.
   assert.match(branch, /bubbleConfirmed\(b, t\)/);
-  assert.doesNotMatch(CORE, /return \{ tap: false, space: true/);
+  assert.doesNotMatch(TIMING_SRC, /return \{ tap: false, space: true/);
 });
 
 test('the dial hint follows the prompt it can see, not only the prompt it clicked', () => {
-  const btn = CORE.indexOf('const b = F.findBubble();');
-  const branch = slice('const b = F.findBubble();', '// 2. a locked dial');
+  const btn = LOOP_SRC.indexOf('// 1. a bubble');
+  const branch = LOOP_SRC.slice(btn, LOOP_SRC.indexOf('// 2. a locked dial', btn));
   const hint = branch.indexOf('F.hint = { x: b.cx, y: b.cy + 53 };');
   const tap = branch.indexOf('if (tapOk) tap(b.cx, b.cy);');
   assert.ok(hint > 0, 'the bubble branch must set the dial hint');
@@ -265,28 +269,28 @@ test('a dial that locked before is tried first, so a drifted hint cannot hide it
   const search = fn.indexOf('const mask = rimMask(r)');
   assert.ok(remembered > 0, 'lockDial must try the last known dial geometry');
   assert.ok(search > remembered, 'the remembered circle has to be tried before the search');
-  assert.match(CORE, /F\.lastGeo = \{ cx: g\.cx, cy: g\.cy, R: g\.R \};/);
+  assert.match(LOOP_SRC, /F\.lastGeo = \{ cx: g\.cx, cy: g\.cy, R: g\.R \};/);
 });
 
 test('a prompt that went away starts the recovery ladder over', () => {
   assert.match(CORE, /castRungResetMs: \d+/);
-  assert.match(CORE, /F\.bubbleMiss = 0;\n?\s*F\.lastBubble = b;/);
+  assert.match(LOOP_SRC, /F\.bubbleMiss = 0;\n?\s*F\.lastBubble = b;/);
 });
 
 test('a locked dial resets the recovery ladder, so the next cast starts at rung one', () => {
-  const m = CORE.match(/F\.bubbleMiss = 0; F\.stallRetry = 0;[^\n]*the ladder worked[^\n]*/);
+  const m = LOOP_SRC.match(/F\.bubbleMiss = 0; F\.stallRetry = 0;[^\n]*the ladder worked[^\n]*/);
   assert.ok(m, 'the dial lock must reset bubbleMiss and stallRetry');
-  const lock = CORE.indexOf("L('dial locked'");
+  const lock = LOOP_SRC.indexOf("L('dial locked'");
   assert.ok(lock > m.index, 'the reset has to happen when the lock succeeds');
   assert.ok(lock - m.index < 900, 'the reset belongs next to the lock');
 });
 
 test('the cast retry sends only the keybind - there is no bubble to click', () => {
   // The ladder used to be called here and its answer dropped, so the test certified a no-op.
-  const from = CORE.indexOf('F.opts.castRetryMs &&');
-  const at = CORE.indexOf("L('cast retry'");
+  const from = LOOP_SRC.indexOf('F.opts.castRetryMs &&');
+  const at = LOOP_SRC.indexOf("L('cast retry'");
   assert.ok(from > 0 && at > from);
-  const around = CORE.slice(from, at + 60);
+  const around = LOOP_SRC.slice(from, at + 60);
   assert.match(around, /space\(F\.opts\.spaceTarget\)/);
   assert.doesNotMatch(around, /castRecovery\(/, 'the stall path has no bubble to click');
   assert.doesNotMatch(around, /tap\(/, 'the stall path has no coordinates to tap');
@@ -334,10 +338,10 @@ test('a seat hold only probes casts once a minute, and clearing it does not fire
   // line out is the measured deadlock that guard fixed. But a hold that never retries deadlocks
   // too when a line is already out (60 minutes, 2026-11-20), so the hold now probes once a minute
   // with the game's own keybind: ignored when there is nothing to cast, and a reel if there is.
-  assert.ok(CORE.includes('const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs'), 'the seat hold has its own retry interval');
-  assert.ok(CORE.includes('seatProbe) && F.opts.castRetryMs'), 'the seat probe gates a retry');
+  assert.ok(LOOP_SRC.includes('const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs'), 'the seat hold has its own retry interval');
+  assert.ok(LOOP_SRC.includes('seatProbe) && F.opts.castRetryMs'), 'the seat probe gates a retry');
   assert.match(CORE, /seatHoldRetryMs: \d+/);
-  assert.match(CORE, /L\('cast retry', \{ consumed, tries, seatHold: !!F\.castHold \}\)/);
+  assert.match(LOOP_SRC, /L\('cast retry', \{ consumed, tries, seatHold: !!F\.castHold \}\)/);
   const api = CORE.slice(CORE.indexOf('F.holdCasts = function'), CORE.indexOf('F.resetStats = function'));
   assert.match(api, /F\.castHold = !!on/);
   assert.match(api, /F\.castHoldAt = F\.castHold \? now\(\) : 0/, 'the probe waits a full interval after the hold is applied');
@@ -363,11 +367,11 @@ test('no movement key is ever synthesised - sitting is what makes a cast possibl
 
 test('a missing cast prompt is named, not clicked at forever', () => {
   assert.match(CORE, /seatWatchdogMs: \d+/);
-  assert.match(CORE, /L\('needs a seat'/);
-  assert.match(CORE, /F\.needsSeat = true;/);
+  assert.match(LOOP_SRC, /L\('needs a seat'/);
+  assert.match(LOOP_SRC, /F\.needsSeat = true;/);
   // the flag has to clear again once a prompt or a dial proves the character is seated
-  assert.match(CORE, /F\.needsSeat = false;[^\n]*the character is seated/);
-  assert.match(CORE, /F\.needsSeat = false;[^\n]*the cast took/);
+  assert.match(LOOP_SRC, /F\.needsSeat = false;[^\n]*the character is seated/);
+  assert.match(LOOP_SRC, /F\.needsSeat = false;[^\n]*the cast took/);
   // ...and a parsed catch is proof too: without this the flag outlives the fish it interrupted
   assert.match(CORE, /F\.needsSeat = false;[^\n]*a parsed catch: the character is seated/);
   const status = CORE.slice(CORE.indexOf('F.status = function'), CORE.indexOf('F.status = function') + 1600);
@@ -376,8 +380,8 @@ test('a missing cast prompt is named, not clicked at forever', () => {
 
 test('the ladder counts cast attempts, not frames', () => {
   // Counting frames ran the rung to 4567 in one second and left the bot walking instead of clicking.
-  const btn = CORE.indexOf('const b = F.findBubble();');
-  const branch = CORE.slice(btn, btn + 2400);
+  const btn = LOOP_SRC.indexOf('// 1. a bubble');
+  const branch = LOOP_SRC.slice(btn, btn + 2400);
   const gate = branch.indexOf('if (t - F.lastPress > F.opts.bubbleDebounceMs) {');
   assert.ok(gate > 0, 'the debounce gate is missing');
   const rung = branch.indexOf('const rung = (F.bubbleMiss = (F.bubbleMiss || 0) + 1);');
@@ -387,12 +391,7 @@ test('the ladder counts cast attempts, not frames', () => {
 // The whole-surface scan runs ~3x/s over ~108k downscaled pixels. `spx()` built a 4-element array
 // per pixel and the flood fill built another per visited pixel - the same allocation pattern that
 // dropped the page to 27.6 fps in bubbleInBox, reintroduced in the one loop nobody rewrote.
-const SCAN_OPEN = '// <scan-core>';
-const SCAN_CLOSE = '// </scan-core>';
-const scanA = CORE.indexOf(SCAN_OPEN);
-const scanB = CORE.indexOf(SCAN_CLOSE);
-if (scanA < 0 || scanB < 0) throw new Error('scan-core sentinels are missing from autofish.js');
-const SCAN = new Function(CORE.slice(scanA + SCAN_OPEN.length, scanB) + '\nreturn { floodComponents };')();
+const SCAN = VISION;
 
 test('floodComponents finds 4-connected blobs and honours minPx', () => {
   const w = 8, h = 6;
@@ -408,11 +407,12 @@ test('floodComponents finds 4-connected blobs and honours minPx', () => {
 });
 
 test('the connected-component pass allocates no per-pixel arrays', () => {
-  const fn = CORE.slice(CORE.indexOf('function floodComponents'), scanB);
+  const fnStart = VISION_SRC.indexOf('function floodComponents');
+  const fn = VISION_SRC.slice(fnStart, VISION_SRC.indexOf('\n  }', fnStart) + 4);
   assert.ok(!/spx\(/.test(fn), 'spx() allocates an array per pixel');
   assert.ok(!/const near = \[/.test(fn), 'the neighbour array is back');
   assert.match(fn, /near4\[0\]/, 'the scratch neighbour array is missing');
-  assert.ok(CORE.indexOf('function spx(') < 0, 'spx() must be gone, not merely unused');
+  assert.ok(CORE.indexOf('function spx(') < 0 && VISION_SRC.indexOf('function spx(') < 0, 'spx() must be gone, not merely unused');
   const blobs = CORE.slice(CORE.indexOf('function blobs('), CORE.indexOf('function blobs(') + 400);
   assert.match(blobs, /floodComponents\(sw, sh, sdata, match, minPx, seenBuf\)/, 'blobs must pass the shared snapshot and scratch');
 });
@@ -420,12 +420,7 @@ test('the connected-component pass allocates no per-pixel arrays', () => {
 // The prompt box was measured on a 1620x1031 surface. As a fixed rectangle it only fits that size:
 // at 1100x700 the bubble centre lands at (550, 243), left of the old x=690, so the cheap boxed scan
 // saw nothing and every prompt paid a whole-surface pass instead.
-const BOX_OPEN = '// <prompt-box>';
-const BOX_CLOSE = '// </prompt-box>';
-const boxA = CORE.indexOf(BOX_OPEN);
-const boxB = CORE.indexOf(BOX_CLOSE);
-if (boxA < 0 || boxB < 0) throw new Error('prompt-box sentinels are missing from autofish.js');
-const BOX = new Function(CORE.slice(boxA + BOX_OPEN.length, boxB) + '\nreturn { promptBox, BUBBLE_BOX_REF };')();
+const BOX = VISION;
 
 test('the prompt box at the measured size is exactly the measured rectangle', () => {
   assert.deepEqual(BOX.promptBox(1620, 1031), { x: 690, y: 215, w: 360, h: 210 });
@@ -491,12 +486,7 @@ test('the perf probe reports frame gaps and per-detector cost', () => {
 // heap climbed ~12 MB/s, and major collections froze the page for ~250 ms roughly once a second.
 // readPixels writes into memory the bot owns, so a steady session allocates nothing; the 2D copy
 // stays only for a surface with no WebGL context. These guards keep that shape.
-const READ_OPEN = '// <readback-core>';
-const READ_CLOSE = '// </readback-core>';
-const readA = CORE.indexOf(READ_OPEN);
-const readB = CORE.indexOf(READ_CLOSE);
-if (readA < 0 || readB < 0) throw new Error('readback-core sentinels are missing from autofish.js');
-const READ = new Function(CORE.slice(readA + READ_OPEN.length, readB) + '\nreturn { flipRows, glRowY };')();
+const READ = VISION;
 
 test('flipRows reverses readPixels rows in place', () => {
   const w = 3, h = 4;
@@ -537,7 +527,8 @@ test('a WebGL read is flipped top-down and a failure falls back to the 2D path',
   assert.match(fn, /glRowY\(bh, y, h\)/, 'the read must use the framebuffer-bottom row');
   assert.match(fn, /flipRows\(d, w, h, glRow\)/, 'the rows must be reversed for the top-down detectors');
   assert.match(fn, /if \(!ok\) return null;/, 'a failed read must let the 2D path answer');
-  const flip = slice('function flipRows(', 'function glRowY(');
+  const flipStart = VISION_SRC.indexOf('function flipRows(');
+  const flip = VISION_SRC.slice(flipStart, VISION_SRC.indexOf('function glRowY('));
   assert.ok(!/new (Uint8Array|Array)\(/.test(flip), 'the row flip must not allocate');
   const read = slice('function readUI(', 'const PX =');
   assert.match(read, /const gl = webglFor\(uiCanvas\)/, 'readUI must ask the surface for a context');

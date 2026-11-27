@@ -441,9 +441,53 @@ interface Rect {
     [key: string]: any;
   };
 
+  interface LoopIo {
+    isVisible(): boolean;
+    now(): number;
+    stop(): void;
+    findCatch(): any;
+    findBubble(): any;
+    sample(geo: GeoLock): any;
+    lockDial(hx: number, hy: number, span?: number): GeoLock | null;
+    dialAnywhere(t: number): GeoLock | null;
+    recordCatch(card: any): string;
+    captureTextCursor(): void;
+    tap(x: number, y: number): boolean;
+    space(target?: any): boolean;
+    clearPendingWin(): void;
+    startAttempt(t: number): any;
+    resolveAttempt(verdict: string, t: number, why?: string | null): any;
+    sameDial(a: any, b: any): boolean;
+    saveDialMemory(g: GeoLock): boolean;
+    tryEscapeProfile(t: number): void;
+    log(msg: string, extra?: Record<string, any>): void;
+    noteBubbleTap?(t: number): void;
+    bubbleConfirmed?(b: any, t: number): boolean;
+    clearResultMissing?(why: string): void;
+    markResultMissing?(t: number, why: string): void;
+    markShapeHit?(t: number): void;
+    setTimeout?(fn: () => void, ms: number): any;
+    clearTimeout?(id: any): void;
+  }
+
+  interface AutoFishLoopApi {
+    DIAL_COUNTER: Record<DialVerdict, string>;
+    refreshLossDiagnostic(attempt: any, b: any, t: number, prev: any, cardPending: boolean): any;
+    cancelPend(F: FishCore, io?: Partial<LoopIo>): void;
+    doPress(F: FishCore, s: any, how: string, t: number, io?: Partial<LoopIo>): void;
+    closeDial(F: FishCore, t: number, ring?: any, io?: Partial<LoopIo>): void;
+    stepFrame(F: FishCore, t: number, io?: Partial<LoopIo>): void;
+    [key: string]: any;
+  }
+
   interface Window {
     AutoFishLayout?: AutoFishLayoutApi;
     AutoFishSession?: AutoFishSessionApi;
+    AutoFishTiming?: Record<string, any>;
+    AutoFishVision?: Record<string, any>;
+    AutoFishLedger?: Record<string, any>;
+    AutoFishDiagnostics?: Record<string, any>;
+    AutoFishLoop?: AutoFishLoopApi;
     __fish?: FishApi | FishCore | null;
     __panel?: PanelApi | null;
     __overnight?: OvernightApi | null;

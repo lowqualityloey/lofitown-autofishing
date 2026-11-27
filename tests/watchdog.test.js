@@ -10,6 +10,7 @@ const path = require('node:path');
 // Nothing inside a dead loop can notice that, so a one-second interval watches the tick clock.
 
 const CORE = fs.readFileSync(path.join(__dirname, '..', 'autofish.js'), 'utf8');
+const LOOP_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'loop.js'), 'utf8');
 const PANEL = fs.readFileSync(path.join(__dirname, '..', 'panel.js'), 'utf8');
 const SESSION = fs.readFileSync(path.join(__dirname, '..', 'session.js'), 'utf8');
 
@@ -22,7 +23,10 @@ function slice(from, to) {
 }
 
 test('the loop records every tick, so a silent stall can be told from a slow one', () => {
-  const step = slice('function step() {', 'if (document.visibilityState');
+  const a = LOOP_SRC.indexOf('function stepFrame(');
+  const b = LOOP_SRC.indexOf('if (!isVisible())', a);
+  assert.ok(a >= 0 && b > a, 'stepFrame() header is missing');
+  const step = LOOP_SRC.slice(a, b);
   assert.match(step, /F\.lastTickAt = t;/, 'step() must stamp the tick clock');
 });
 

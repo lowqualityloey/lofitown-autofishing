@@ -22,22 +22,7 @@ const GAP_MS = 10 * 60 * 1000;
 // next afternoon still reads last night instead of whatever is newest in the directory.
 const NIGHT_MS = 12 * 60 * 60 * 1000;
 
-const SRC = fs.readFileSync(path.join(ROOT, 'autofish.js'), 'utf8');
-
-/** The function's own text, by brace matching. wilson and runSummary contain no braces in strings. */
-function extract(name) {
-  const at = SRC.indexOf('function ' + name + '(');
-  if (at < 0) throw new Error('autofish.js has no function ' + name);
-  let depth = 0;
-  for (let i = SRC.indexOf('{', at); i < SRC.length; i++) {
-    if (SRC[i] === '{') depth++;
-    else if (SRC[i] === '}') { depth--; if (depth === 0) return SRC.slice(at, i + 1); }
-  }
-  throw new Error('unbalanced function ' + name);
-}
-const { wilson, runSummary } = new Function(
-  extract('wilson') + '\n' + extract('runSummary') + '\nreturn { wilson, runSummary };'
-)();
+const { wilson, runSummary } = require('../src/diagnostics.js');
 
 const clock = (t) => {
   const d = new Date(t);

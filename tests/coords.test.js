@@ -11,12 +11,7 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 
 const SRC = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
-const OPEN = '// <coords>';
-const CLOSE = '// </coords>';
-const a = SRC.indexOf(OPEN);
-const b = SRC.indexOf(CLOSE);
-if (a < 0 || b < 0) throw new Error('coords sentinels are missing from autofish.js');
-const T = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { cssPoint };')();
+const T = require('../src/vision.js');
 
 test('cssPoint is the identity when the canvas matches its CSS box', () => {
   assert.deepEqual(

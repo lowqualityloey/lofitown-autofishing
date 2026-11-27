@@ -8,14 +8,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
+const D = require('../src/diagnostics.js');
 
 const SRC = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
-const OPEN = '// <doctor-core>';
-const CLOSE = '// </doctor-core>';
-const a = SRC.indexOf(OPEN);
-const b = SRC.indexOf(CLOSE);
-if (a < 0 || b < 0) throw new Error('doctor-core sentinels are missing from autofish.js');
-const D = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { doctor };')();
 
 /** The live 3.9.12 numbers, read from the owner's tab on 2026-11-02. */
 const healthy = {
@@ -88,10 +83,11 @@ test('rejected presses are only a finding on a real sample', () => {
 });
 
 test('the bot exposes the verdict and the counters it reads', () => {
+  const LOOP_SRC = readFileSync(join(__dirname, '..', 'src', 'loop.js'), 'utf8');
   assert.match(SRC, /F\.doctor = function/);
   assert.match(SRC, /new PerformanceObserver/);
   assert.match(SRC, /longtasks: longTaskReport\(\)/);
   assert.match(SRC, /holdPassesMax/);
-  assert.match(SRC, /F\.geo\._travel/);
+  assert.match(LOOP_SRC, /F\.geo\._travel/);
   assert.match(SRC, /watchLongTasks\(\);/);
 });

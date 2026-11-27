@@ -17,709 +17,23 @@ if (window.__autofishInstalled) return;
 window.__autofishInstalled = true;
 
 // @ts-check
-/**
- * lofi.town autofish v3 — continuous cast -> reel -> dial loop.
- *
- * Inject this whole file in the page, then:
- *   __fish.start()                    run (Space presses the dial)
- *   __fish.start({ press: false })    observe only, never press the dial
- *   __fish.start({ pressWith: 'pointer' })  press the dial with a pointer click instead
- *   __fish.status() / __fish.report() / __fish.stop()
- *
- * WHY THIS IS SHAPED THE WAY IT IS (everything below was measured live, see AUTOFISH.md):
- *
- *  - The game used to draw the world and the UI on two canvases. It has since merged both into the
- *    Pixi/WebGL renderer canvas: the old "UI layer" canvas is completely empty, and the prompt and
- *    the dial are painted into the renderer. Which canvas holds pixels is discovered at runtime
- *    (surfaces()/adoptSurface()), never assumed.
- *  - A WebGL buffer is cleared before each render, so a sample taken from requestAnimationFrame
- *    reads blank even when the screen is full. Detection therefore runs from a wrapper around the
- *    renderer's `render()`, immediately after the game has drawn (installPostRender()). rAF keeps
- *    the frame clock and the stall watchdog, and samples only when no Pixi renderer is reachable.
- *  - Scene-graph hit areas are unreliable — every node reports eventMode 'passive' with an
- *    empty _events map — yet synthetic pointer events dispatched on the canvas do reach the
- *    game. So the bubbles are located in pixels, not in the scene graph.
- *  - CAST! and REEL! are the same white bubble in the same place with different text, so
- *    the loop does not need to tell them apart: press any bubble that appears.
- *
- * Measured geometry at a 1620x1031 viewport (dpr 1):
- *   bubble     white 108x50, centred (810, 358)
- *   dial       centred (813, 407), outer radius ~91
- *   rim        light grey, saturation <= 22, luminance 158..246, alpha > 60
- *   pin        orange rgb(229,118,83), fixed at 0 deg = 12 oclock
- *   disc       base rgb(142,138,111) / wedge rgb(182,188,132), wedge 45-65 degrees
- *   rotation   ~125-140 deg/s
- *
- * Timing: the press is dispatched by a timer aimed at the moment the pin crosses the wedge,
- * not by the frame that happens to see it - at 746 deg/s the whole +/-6 deg window is 16 ms,
- * i.e. exactly one frame. Spin rate is a least-squares fit over the last ~200 ms of distinct
- * frames (unwrapped, no deadband, no 600 deg/s clamp). The acceptance window is the measured
- * arc minus a margin unless opts.trigger === 'angle'. Presses go through the pointer path,
- * the one proven to reach the game; 'space' stays available for A/B tests.
+/* src/diagnostics.js — pure bot health verdict, run summary statistics, and result-missing latch.
+ * UMD: browser global AutoFishDiagnostics, CommonJS require('./src/diagnostics.js').
  */
-(() => {
-  if (window.__fish && window.__fish.stop) { try { window.__fish.stop(); } catch (e) {} }
+/**
+ * @param {any} root
+ * @param {() => Record<string, any>} factory
+ */
+(function (root, factory) {
+  var api = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.AutoFishDiagnostics = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
 
   /**
-   * build-userscript.js replaces 'dev' with package.json's version, so the header, __fish.version
-   * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
-   * the honest answer: that copy has no build step to stamp it.
-   * @type {FishCore}
-   */
-  const F = { version: "3.9.64" };
-  const now = () => performance.now();
-
-  /* ---- performance probe -------------------------------------------------
-   * Zen/Gecko pays far more for a canvas readback than Chromium does, and the only honest way to
-   * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
-   * average cost of each detector, so a change can be justified by numbers rather than a guess.
-   */
-  /** @type {FishPerf} */
-  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0, ltN: 0, ltMax: 0, ltRing: [], lockMemo: 0, lockMemoN: 0, lockMemoSkipped: 0, lockMemoCold: 0, lockGrab: 0, lockMask: 0, lockScan: 0, lockRefine: 0 };
-  /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
-   * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
-   * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
-   * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
-   * time names itself instead of being inferred. */
-  /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
-   *  inside a reel (the dial persists across presses) at a third of the old read count. */
-  /**
-   * Long tasks, counted from outside the loop.
-   *
-   * The bot can see its own detector cost but not a stall it did not cause - and a 250 ms block
-   * inside render() looks exactly like a 250 ms block from anywhere else. PerformanceObserver is
-   * the cheapest honest witness: no readback, no timer, no allocation per entry beyond the ring.
-   * 3.9.11's once-a-second stall was invisible for a day because nothing counted this.
-   */
-  /** @type {PerformanceObserver | null} */
-  let ltObs = null;
-  function watchLongTasks() {
-    if (ltObs || typeof PerformanceObserver === 'undefined') return;
-    try {
-      ltObs = new PerformanceObserver(function (list) {
-        const at = now();
-        const entries = list.getEntries();
-        for (const e of entries) {
-          perf.ltN++;
-          if (e.duration > perf.ltMax) perf.ltMax = e.duration;
-          perf.ltRing.push({ t: at, ms: e.duration });
-          if (perf.ltRing.length > 24) perf.ltRing.shift();
-        }
-      });
-      ltObs.observe({ entryTypes: ['longtask'] });
-    } catch (e) { ltObs = null; }
-  }
-
-  const MEMO_EVERY_MS = 500;
-  /** The remembered circle can only help while a dial is actually on screen: it caches the last
-   *  circle, and between dials there is nothing at that spot to verify. So an attempt also needs a
-   *  dial to have been locked inside this window - a readback that can only fail is pure cost. */
-  const MEMO_RECENT_MS = 2000;
-  function resetPerf() {
-    perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
-    perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
-    perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
-    perf.card = 0; perf.cardN = 0;
-    perf.readN = 0; perf.readGL = 0; perf.read2d = 0; perf.readMB = 0; perf.allocMB = 0;
-    perf.snapGL = 0; perf.snap2d = 0;
-    perf.ltN = 0; perf.ltMax = 0; perf.ltRing.length = 0;
-    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
-  }
-
-  /* ---- timing core -----------------------------------------------------
-   * Pure functions, no DOM and no state. tests/timing.test.js extracts this block by its
-   * sentinels and runs it under node, so the maths is tested once and shipped once.
-   */
-  // <timing-core>
-  /** Fold an angle into (-180, 180]. */
-  function wrap180(a) {
-    a = (a + 180) % 360;
-    if (a < 0) a += 360;
-    return a - 180;
-  }
-
-  /**
-   * Least-squares spin rate over the last few DISTINCT frames.
-   *
-   * pts: [{ t: ms, mid: deg }] oldest -> newest. The mids are unwrapped in order so a wedge
-   * crossing 0 deg does not read as a 360 deg jump. Frames older than maxAgeMs are dropped, a
-   * single outlier is removed and the fit re-run. Returns null when the frames cannot define
-   * a rate at all (fewer than minN survive, or they all share one timestamp).
-   *
-   * Why a fit: a one-frame delta behind a 0.5 deg deadband never updated at slow spin, kept a
-   * stale fast value, and had to be clamped at 600 deg/s - exactly the speeds this game uses.
-   */
-  function fitOmega(pts, opts) {
-    const o = opts || {};
-    const maxAge = o.maxAgeMs != null ? o.maxAgeMs : 200;
-    const minN = o.minN != null ? o.minN : 2;
-    const minSpan = o.minSpanMs != null ? o.minSpanMs : 8;
-    const limit = o.limit != null ? o.limit : 1500;
-    if (!pts || pts.length < minN) return null;
-    const last = pts[pts.length - 1];
-    const nowMs = o.now != null ? o.now : last.t;
-    const live = [];
-    for (const p of pts) {
-      if (p && isFinite(p.mid) && isFinite(p.t) && nowMs - p.t <= maxAge) live.push(p);
-    }
-    if (live.length < minN) return null;
-    if (live[live.length - 1].t - live[0].t < minSpan) return null;
-
-    const slope = (rows) => {
-      let st = 0, sm = 0;
-      for (const r of rows) { st += r.t; sm += r.m; }
-      const mt = st / rows.length, mm = sm / rows.length;
-      let num = 0, den = 0;
-      for (const r of rows) { const d = r.t - mt; num += d * (r.m - mm); den += d * d; }
-      return den > 0 ? (num / den) * 1000 : null;      // deg per ms -> deg per s
-    };
-    const unroll = (rows) => {
-      const out = [{ t: rows[0].t, m: rows[0].mid }];
-      for (let i = 1; i < rows.length; i++) {
-        out.push({ t: rows[i].t, m: out[i - 1].m + wrap180(rows[i].mid - rows[i - 1].mid) });
-      }
-      return out;
-    };
-    const rmsOf = (rows, omega) => {
-      const t0 = rows[0].t, m0 = rows[0].m;
-      let s = 0;
-      for (const r of rows) { const e = r.m - (m0 + omega / 1000 * (r.t - t0)); s += e * e; }
-      return Math.sqrt(s / rows.length);
-    };
-
-    let rows = unroll(live);
-    let omega = slope(rows);
-    if (omega == null) return null;
-    let dropped = 0, rms = rmsOf(rows, omega);
-    if (rows.length >= 3) {
-      const t0 = rows[0].t, m0 = rows[0].m;
-      let worst = 1, worstE = 0;
-      for (let i = 1; i < rows.length; i++) {
-        const e = Math.abs(rows[i].m - (m0 + omega / 1000 * (rows[i].t - t0)));
-        if (e > worstE) { worstE = e; worst = i; }
-      }
-      const kept = rows.slice(0, worst).concat(rows.slice(worst + 1));
-      const w2 = slope(kept);
-      if (w2 != null) {
-        // Drop the point when it is an outlier against the rest AND removing it makes the fit
-        // materially better. A real rotation cannot improve that much, a mis-tracked arc can.
-        const rms2 = rmsOf(kept, w2);
-        const r = kept.map((q) => q.m - (kept[0].m + w2 / 1000 * (q.t - kept[0].t)));
-        const scale = Math.max(1, Math.sqrt(r.reduce((s, v) => s + v * v, 0) / r.length));
-        if (worstE > Math.max(5, 3 * scale) || rms2 < 0.6 * rms) {
-          rows = kept; omega = w2; rms = rms2; dropped = 1;
-        }
-      }
-    }
-    const clamped = Math.abs(omega) > limit;
-    if (clamped) omega = omega > 0 ? limit : -limit;
-    return {
-      omega, rms, dropped, clamped,
-      n: rows.length,
-      span: rows[rows.length - 1].t - rows[0].t,
-    };
-  }
-
-  /**
-   * Is a spin-rate estimate mature enough to trust for a FIRST press?
-   *
-   * The first press is the one with the least evidence: fitOmega accepts two frames 8 ms apart, so
-   * an early fit can be a noisy angle track rather than a rotation. A wide slow dial forgives that;
-   * a narrow (<60 deg) or fast (>=300 deg/s) dial does not - the same error is most of its window.
-   * This gate waits for more points over a longer span with a tight residual before the first press.
-   */
-  function fitStable(fit, o) {
-    const cfg = o || {};
-    if (!fit || !isFinite(fit.omega)) return false;
-    if (fit.clamped) return false;
-    const minN = cfg.firstPressMinN != null ? cfg.firstPressMinN : 6;
-    const minSpan = cfg.firstPressMinSpanMs != null ? cfg.firstPressMinSpanMs : 150;
-    const maxRms = cfg.firstPressMaxRms != null ? cfg.firstPressMaxRms : 2;
-    const rms = fit.rms == null ? Infinity : fit.rms;
-    return (fit.n || 0) >= minN && (fit.span || 0) >= minSpan && rms <= maxRms;
-  }
-
-  /**
-   * The tracker fits the midpoint's rate, d(mid)/dt. The planner's delta is (pin - mid), so the
-   * rate it needs is the negation. Converting once here is what stops a live dial from being
-   * scheduled a full turn late: on 2026-11-03 a 40 deg Legendary dial logged 69 consecutive
-   * 'wait' frames and never pressed.
-   */
-  function deltaOmega(midOmega) {
-    if (midOmega == null || !isFinite(midOmega)) return null;
-    return midOmega === 0 ? 0 : -midOmega;
-  }
-
-  /**
-   * Does the first press on this dial need the stable-fit hold?
-   *
-   * The default is deliberately conservative: a narrow or fast dial has the least evidence at
-   * lock time and the most to lose from a noisy fit. `fastFirstPress` is the opt-in escape hatch
-   * for a player who would rather tap the first pass: it bypasses the hold without changing the
-   * crossing planner or any later press. That trade is explicit and off by default.
-   */
-  function firstPressGate(width, omega, o) {
-    const cfg = o || {};
-    if (cfg.fastFirstPress) return false;
-    return Number(width) < (cfg.firstPressMaxWidthDeg || 60) ||
-      Math.abs(Number(omega) || 0) >= (cfg.firstPressFastOmega || 300);
-  }
-
-  /**
-   * How long the first press may wait for a mature spin fit, in ms.
-   *
-   * The fixed 2500 ms ceiling is several rotations on a fast dial: at 700 deg/s a 45 deg arc is
-   * under the pin for 64 ms, so "wait up to 2.5 s" means the bot visibly skips three or four
-   * passes of a fish the player is watching. Measured live 2026-11-02: firstPressHeld on 9 of 18
-   * dials and firstPressForced twice, on a session that was otherwise 51/51 presses accepted.
-   * The budget is therefore a fraction of ONE pass, still bounded by the old ceiling for the slow
-   * dials where a long, accurate fit is worth having.
-   */
-  function firstPressBudget(width, omega, o) {
-    const cfg = o || {};
-    const capMs = cfg.firstPressMaxWaitMs != null ? cfg.firstPressMaxWaitMs : 2500;
-    const frac = cfg.firstPressMaxTransitFrac != null ? cfg.firstPressMaxTransitFrac : 0.4;
-    const w = Number(width);
-    if (!(w > 0)) return capMs;
-    const om = Math.abs(Number(omega));
-    if (!(om > 0)) {
-      // No rate at all. A wide dial never enters the first-press gate, so keep the old ceiling
-      // there; a narrow dial must not stare at a spinning wedge for 2.5 s (live 2026-11-03: a
-      // 35 deg Legendary dial held 2,619 ms with zero presses). Assume the fast-dial floor and
-      // hold for only a fraction of one pass.
-      if (w >= (cfg.firstPressMaxWidthDeg || 60)) return capMs;
-      const assumed = cfg.firstPressAssumeOmega || 300;
-      return Math.min(capMs, (w / assumed) * 1000 * frac);
-    }
-    return Math.min(capMs, (w / om) * 1000 * frac);
-  }
-
-  /**
-   * Can the first-press hold possibly mature before its budget runs out?
-   *
-   * The gate only clears once the fit has firstPressMinSpanMs (150 ms) of history. A budget
-   * shorter than that can never reach it: the hold would expire and press on the same two-point
-   * fit it had at the lock, having only delayed the press. Measured live 2026-11-18: 37 dials
-   * held and 37 forced - every hold was wasted - so a budget that cannot fit the fit is skipped.
-   */
-  function firstPressCanMature(budgetMs, o) {
-    const need = o && o.firstPressMinSpanMs != null ? o.firstPressMinSpanMs : 150;
-    return budgetMs >= need;
-  }
-
-  /**
-   * Record the dial's single force event. `firstPressForced` counts all forced first presses;
-   * `firstPressHeldForced` is the subset the first-press gate had held first. A held dial that
-   * matures never reaches this marker and stays counted by `firstPressHeld` alone.
-   */
-  function markFirstPressForced(stats, geo) {
-    if (!stats || !geo || geo._firstForced) return false;
-    geo._firstForced = true;
-    stats.firstPressForced = (stats.firstPressForced || 0) + 1;
-    if (geo._firstHeld) stats.firstPressHeldForced = (stats.firstPressHeldForced || 0) + 1;
-    return true;
-  }
-
-  /**
-   * Read-only snapshot of a cast-prompt loss. Deliberately does not call bubbleConfirmed():
-   * that helper updates F.bubblePrev, and logging must not change what the next tap sees.
-   * `promptChannel` is the detector channel (box/anywhere), not the CAST!/REEL! text.
-   */
-  function lossDiagnostics(b, t, prev, cardPending) {
-    if (!b) return { promptChannel: null, glyph: null, confirmed: false, x: null, y: null, w: null, h: null, catchCardPending: !!cardPending };
-    const p = prev || null;
-    // Same 12 px / 2 s window as bubbleConfirmed().
-    const same = !!p && Math.abs(p.x - b.cx) <= 12 && Math.abs(p.y - b.cy) <= 12 && (t - p.at) <= 2000;
-    const confirmed = b.via !== "anywhere" && b.glyph !== false && same &&
-      !(p.blockedUntil && t < p.blockedUntil) && (p.n || 0) + 1 >= 2;
-    return {
-      promptChannel: b.via === "anywhere" ? "anywhere" : "box",
-      glyph: b.glyph === true,
-      confirmed: !!confirmed,
-      x: b.cx != null ? b.cx : null,
-      y: b.cy != null ? b.cy : null,
-      w: b.w != null ? b.w : null,
-      h: b.h != null ? b.h : null,
-      catchCardPending: !!cardPending,
-    };
-  }
-
-  /**
-   * How long to wait before the next whole-surface dial recovery pass, in ms.
-   *
-   * Measured live 2026-11-02 (3.9.10): one recovery pass is a ~257k-test annulus sweep costing
-   * 250-300 ms, and it ran every 900 ms whenever nothing was locked - i.e. every second while the
-   * character simply waited for a bite. Pausing the core made the stalls disappear entirely
-   * (143.8 fps, 0 long tasks), which is how it was attributed. A wrong hint is a per-CAST problem,
-   * not a per-second one: the cadence doubles after each fruitless pass and a cast resets it.
-   */
-  function dialFallbackWait(fail, o) {
-    const cfg = o || {};
-    const base = cfg.dialFallbackThrottleMs != null ? cfg.dialFallbackThrottleMs : 900;
-    const cap = cfg.dialFallbackMaxMs != null ? cfg.dialFallbackMaxMs : 6000;
-    const n = Math.max(0, Math.min(8, Number(fail) || 0));
-    return Math.min(cap, base * Math.pow(2, n));
-  }
-
-  /**
-   * Is this zero-press dial a fading ring rather than a fish?
-   *
-   * A real unpressed dial stays up for about 15.9 s. The narrow ghosts measured live 2026-11-03
-   * lasted only ~2.7 s and shrank from 40 to 30 deg. The old test only caught a ring that barely
-   * moved, but these drift ~35 deg while fading, so they were counted as skipped fish and
-   * re-locked. A short, narrow, shrinking dial is a ghost; a long-lived one is not.
-   */
-  function dialGhost(st, o) {
-    const s = st || {};
-    const cfg = o || {};
-    if ((Number(s.presses) || 0) > 0) return false;
-    const travel = Math.abs(Number(s.travel) || 0);
-    if (travel < (cfg.ghostTravelDeg != null ? cfg.ghostTravelDeg : 15)) return true;
-    const held = Number(s.heldMs);
-    const width = Number(s.width);
-    const shrink = Number(s.widthShrink);
-    const maxHeld = cfg.ghostMaxMs != null ? cfg.ghostMaxMs : 5000;
-    const maxWidth = cfg.ghostMaxWidthDeg != null ? cfg.ghostMaxWidthDeg : 60;
-    const minShrink = cfg.ghostMinShrinkDeg != null ? cfg.ghostMinShrinkDeg : 5;
-    return held >= 0 && held < maxHeld && width > 0 && width < maxWidth && shrink >= minShrink;
-  }
-
-  /**
-   * Is this close a stalled ring rather than a press miss or a fade?
-   *
-   * A stuck waiting-for-result ring stays up for 10-13 s after a press the game never settled, and
-   * closeDial used to score it as a miss (press older than hitMs) or a ghost (no spin measured,
-   * travel < 15). Opt-in stallDialMs names that ring instead. Narrow only: a genuinely missed wide
-   * dial reaches its 15.9 s timeout in the same shape. 0 (the default) keeps the old verdicts.
-   */
-  function dialStalled(st, o) {
-    const s = st || {};
-    const cfg = o || {};
-    const stallMs = Number(cfg.stallDialMs) || 0;
-    if (!(stallMs > 0)) return false;
-    const width = Number(s.width) || 0;
-    if (!(width > 0 && width < (cfg.ghostMaxWidthDeg || 60))) return false;   // narrow only
-    const held = Number(s.heldMs);
-    if (!(held >= stallMs)) return false;
-    const presses = Number(s.presses) || 0;
-    if (presses === 0) return !!s.ghost;          // only a fade-shaped ring can be rescued from 'ghost'
-    const since = s.sincePress;
-    return since != null && since > (cfg.hitMs || 1500);
-  }
-
-  /**
-   * A narrow ring blinks: the rim sampler loses a thin wedge for a few frames while the pin
-   * keeps turning underneath, and the bad-sample branch would call that a ghost and lose the
-   * fish (live: two 40 deg dials, spin 50-140 deg/s, zero presses, both fish gone - the 85%).
-   * A fade - the thing the ghost rule is for - sits still, so a FRESH non-zero spin estimate
-   * tells them apart. The witness is already on the lock: the sampler freezes geo._om/_mt at
-   * the last valid frame, so no new state is kept and staleness expires the hold on its own.
-   * A solved dial never reaches here (it has presses). _om is the midpoint rate; the planner
-   * uses its negation, and only the magnitude matters here.
-   */
-  function spinAlive(geo, t) {
-    if (!geo || !(geo.width > 0 && geo.width < 60)) return false;   // narrow: the gate's own band
-    const om = geo._om;
-    if (om == null || !isFinite(om) || Math.abs(om) <= 20) return false;   // still or unmeasured
-    return (t - (geo._mt || 0)) < 1000;   // blind frames are ms-scale; then the ghost rule decides
-  }
-
-  /**
-   * Is a lock candidate the same fading circle we just ghosted? A short cooldown stops the memo
-   * and the next scan from re-locking the same ring; a real triangle at the same circle widens the
-   * arc (live: 30-40 deg ghost, 70 deg real dial), so a width jump is allowed through.
-   */
-  function ghostBlocked(g, width, at, ghost, o) {
-    if (!g || !ghost || !(at < ghost.until)) return false;
-    const cfg = o || {};
-    const maxPx = cfg.ghostCirclePx != null ? cfg.ghostCirclePx : 10;
-    const maxR = cfg.ghostRadiusPx != null ? cfg.ghostRadiusPx : 8;
-    const maxDw = cfg.ghostWidthDeg != null ? cfg.ghostWidthDeg : 12;
-    const dx = Math.abs(Number(g.cx) - Number(ghost.cx));
-    const dy = Math.abs(Number(g.cy) - Number(ghost.cy));
-    const dr = Math.abs(Number(g.R) - Number(ghost.R));
-    const dw = Math.abs((Number(width) || 0) - (Number(ghost.width) || 0));
-    return dx <= maxPx && dy <= maxPx && dr <= maxR && dw <= maxDw;
-  }
-
-  /**
-   * Decide what this frame should do about the dial.
-   *
-   * st: { t, delta, width, omega, armed, pendingAt }
-   *     delta  signed degrees from the wedge midpoint to the pin (0 = aligned)
-   *     armed  no press has been sent for this rotation yet
-   * o:  { trigger, midDeg, marginDeg, leadMs, biasMs, horizonMs, replanMs, minOmega }
-   *
-   * Returns { press, armAt, at, cancel, pred, win, reason }.
-   *   press  send the press now (only ever <= leadMs before the crossing)
-   *   armAt  absolute time to dispatch the press (null = no timer wanted)
-   *   cancel drop an already-armed timer (false = keep it as it is)
-   *   pred   where the pin will be when the game judges a press dispatched NOW
-   *   win    the acceptance half-width in degrees
-   *
-   * The schedule aims at the CROSSING (pin on the midpoint) - that is the widest error tolerance
-   * in both directions. Containment widens the window used to decide that a late press is still
-   * inside the drawn arc, and takes an already-open window ('inside-now') once the pin is past the
-   * midpoint instead of waiting almost a full rotation for the next crossing. Trigger 'angle'
-   * keeps the pure midpoint rule.
-   */
-  function planPress(st, o) {
-    const cfg = o || {};
-    const lead = (cfg.leadMs || 0) / 1000;
-    const bias = (cfg.biasMs || 0) / 1000;
-    const minOmega = cfg.minOmega != null ? cfg.minOmega : 8;          // deg/s
-    const horizon = cfg.horizonMs != null ? cfg.horizonMs : 40;
-    const replan = cfg.replanMs != null ? cfg.replanMs : 8;
-    const midDeg = cfg.midDeg != null ? cfg.midDeg : 6;
-    const margin = cfg.marginDeg != null ? cfg.marginDeg : 4;
-    const half = (st.width || 0) / 2;
-    const win = cfg.trigger === 'angle' || !half ? midDeg : Math.max(midDeg, half - margin);
-    const delta = st.delta == null ? wrap180(0 - (st.mid || 0)) : st.delta;
-    const omega = isFinite(st.omega) ? st.omega : null;
-    const pred = omega == null ? delta : wrap180(delta + omega * lead);
-    /** @type {{ delta: number, pred: number, win: number, press: boolean, armAt: number | null, at: number | null, cancel: boolean, reason: string }} */
-    const out = { delta, pred, win, press: false, armAt: null, at: null, cancel: false, reason: '' };
-
-    if (omega == null || Math.abs(omega) < minOmega) {
-      out.reason = 'static';
-      out.cancel = true;
-      out.press = !!st.armed && Math.abs(pred) <= win;
-      return out;
-    }
-
-    const degPerMs = omega / 1000;
-    const period = 360 / Math.abs(degPerMs);
-    let toJudge = -delta / degPerMs;                       // ms until midpoint reaches the pin
-    toJudge = ((toJudge % period) + period) % period;      // next occurrence, >= 0
-    const dispatchAt = st.t + toJudge - (lead + bias) * 1000;
-    const wait = dispatchAt - st.t;
-
-    if (!st.armed) {
-      out.reason = 'disarmed';
-      out.cancel = true;
-      return out;
-    }
-    // Contain means the pin may be pressed anywhere inside the arc, but the schedule above aims at
-    // the MIDPOINT crossing because that is where the tolerance is widest. When that crossing is far
-    // away and the pin is ALREADY inside, take the open window now.
-    //
-    // This used to require delta * omega > 0, i.e. only take it when the arc was rotating away from
-    // the pin. On a narrow dial that is the difference between pressing and spinning in place: the
-    // window is a handful of degrees, the scheduled crossing is most of a rotation out, and the pass
-    // through the arc happens on the other sign - so nothing ever fired. Measured live 2026-11-02:
-    // a 30 deg dial produced 279 consecutive 'wait' frames, 0 presses, then 'dial gone'.
-    // Containment does not care which side the arc is passing on: inside is inside.
-    const insideNowMs = cfg.insideNowMs != null ? cfg.insideNowMs : 60;
-    if (cfg.trigger !== 'angle' && st.armed && toJudge > insideNowMs &&
-        Math.abs(delta) <= win && Math.abs(pred) <= win) {
-      out.reason = 'inside-now';
-      out.cancel = true;
-      out.press = true;
-      return out;
-    }
-    if (wait <= 0) {
-      // Too late to schedule the crossing: press only if the pin is still inside the window
-      // at judgement time. Containment turns what would be a dropped dial into a likely hit.
-      const inside = Math.abs(pred) <= win;
-      out.reason = inside ? 'now-inside' : 'now-outside';
-      out.cancel = true;
-      out.press = inside;
-      return out;
-    }
-    if (wait <= horizon) {
-      const keep = st.pendingAt != null && Math.abs(st.pendingAt - dispatchAt) <= replan;
-      out.reason = 'schedule';
-      out.at = dispatchAt;
-      out.cancel = !keep;
-      out.armAt = keep ? null : dispatchAt;
-      return out;
-    }
-    out.reason = 'wait';
-    out.cancel = true;
-    return out;
-  }
-
-  /** Next probe offset (ms) from a bias-sweep config; 0 when the sweep is off. */
-  function sweepBias(cfg, i) {
-    if (!cfg) return 0;
-    let list = cfg.biases;
-    if (!list || !list.length) {
-      const min = cfg.min != null ? cfg.min : -60;
-      const max = cfg.max != null ? cfg.max : 60;
-      const step = cfg.step || 15;
-      list = [];
-      for (let b = min; b <= max + 1e-9; b += step) list.push(Math.round(b));
-    }
-    return list[((i % list.length) + list.length) % list.length];
-  }
-  // A press makes the game spawn a fresh triangle in the same widget, with a new random
-  // rotation and thickness. Pressing "again" while the SAME triangle is still under the pin is
-  // a misclick: the game subtracts the last gain. So a second press on one dial lock is only
-  // allowed once the measurement shows a new triangle.
-  function newTriangle(press, s, blinks, o) {
-    if (!press) return true;                       // first press of the lock
-    const opts = o || {};
-    if ((blinks || 0) >= (opts.blinkFrames || 2)) return true;   // the ring blinked out: new spawn
-    if (press.width != null && s.width != null &&
-        Math.abs(Number(s.width) - Number(press.width)) >= (opts.widthJumpDeg || 3)) return true;
-    if (press.delta != null && s.delta != null && s.t != null && press.t != null) {
-      const dt = Math.max(0, (s.t - press.t) / 1000);
-      const predicted = Number(press.delta) + (s.omega || 0) * dt;
-      if (Math.abs(wrap180(Number(s.delta) - predicted)) > (opts.jumpDeg || 25)) return true;
-    }
-    return false;
-  }
-  /**
-   * May this frame re-arm the press gate?
-   *
-   * A proven new triangle is the only licence to press again: an unchanged triangle must never
-   * re-arm, or the next frame would double-press it (the game subtracts the last gain). The cap
-   * still guards against a runaway if the game stops accepting input.
-   */
-  function rearmReady(proven, presses, max) {
-    return !!proven && presses < (max || 12);
-  }
-  /**
-   * Speed band a press is scored in. The verified win rate is only meaningful per band: a dial at
-   * 120 deg/s has ~300 ms of tolerance and one at 700 deg/s has ~70 ms, so averaging them hides
-   * exactly the case this file is trying to fix.
-   */
-  function omegaBand(omega) {
-    const a = Math.abs(omega || 0);
-    if (a < 150) return 'slow';
-    if (a < 300) return 'mid';
-    if (a < 500) return 'fast';
-    return 'blur';
-  }
-  /**
-   * Dial-width bands. Speed is not the only difficulty axis: a rare fish can paint a narrow arc
-   * whose acceptance window is small even at a moderate spin. Attempts are scored in these bands
-   * separately so "narrow dials are lost" is visible instead of averaged into a healthy total.
-   * Widths are degrees of the drawn arc; live dials measured 30-200 deg.
-   */
-  function widthBand(width) {
-    const w = Number(width);
-    if (!isFinite(w) || w <= 0) return 'unknown';
-    if (w < 60) return 'narrow';
-    if (w < 100) return 'mid';
-    if (w < 140) return 'wide';
-    return 'full';
-  }
-  /**
-   * Is this solid panel the catch card, or a piece of reel UI that looks like one?
-   *
-   * Measured in the live game on 2026-10-27: a real catch card was 296-336 px wide and 430-440
-   * tall with a dark-ink share of 0.12-0.23 (cream paper, a few lines of text). The panel that
-   * followed every press was 204x272 with an ink share of 0.47-0.59 - a dark reel-UI box. Size
-   * alone was not enough (204 > the old 180 px floor), so ink is the separator and width is the
-   * backstop. Pure on purpose: the thresholds are the reason the win counter lied.
-   */
-  function cardShapeOk(m, o) {
-    const cfg = o || {};
-    const minW = cfg.minW != null ? cfg.minW : 260;
-    const maxInk = cfg.maxInk != null ? cfg.maxInk : 0.3;
-    if (!m) return { card: false, why: 'none' };
-    if (!(m.w >= minW)) return { card: false, why: 'narrow' };
-    if (!(m.ink < maxInk)) return { card: false, why: 'inky' };
-    return { card: true, why: 'ok' };
-  }
-  /**
-   * What to do on the N-th fruitless attempt to make a cast happen (N counts from 1).
-   *
-   * A white bubble is not always the CAST button: the caught-indicator and other HUD sprites share
-   * the shape, and tapping one changes nothing. Measured live on 2026-10-28: the bot found a blob,
-   * tapped it every ~0.9 s for 60+ s, and never cast, because the bubble branch returns before the
-   * cast retry. So a rung ladder: the first tap is the normal path, then also the game's own fishing
-   * keybind.
-   *
-   * Never walk. Fishing in this game is SEAT-BASED: the cast prompt is emitted only by the sit-down
-   * path (character.sit -> isRaycastHittingWater(seat.fishingReach ?? 50) -> signal showCastButton)
-   * and by the post-fish / post-fail result. A standing character has no prompt at all, so walking
-   * cannot create one - and the walk itself stands the character up (200 ms of held movement) and,
-   * measured live, walked it behind a building where it was neither visible nor fishable. The seat
-   * watchdog in step() names that condition instead of flailing.
-   *
-   * Never stop clicking either. The ladder used to drop the click from rung 3 and press only the
-   * keybind, and the rung was only ever reset by a successful dial lock - so two failed taps locked
-   * the bot into keybind-only forever. Measured live 2026-10-29: 140 cast retries over 20 minutes,
-   * rungs 14-36 every one `tap:false`, while a REEL! prompt sat on screen the whole time, and the
-   * panel then paused the session with "nothing to bite: sit on a chair by the water" at a character
-   * that was sitting on one. A prompt is a button: press it every time, and add the keybind on top
-   * once a click has not taken.
-   */
-  /**
-   * Did the game accept that press?
-   *
-   * A good press does not close the dial - the game spawns a fresh triangle in the same widget - so
-   * "the dial ended soon after" only ever scores the finishing press. The observable present on
-   * every press is that spawn: `newTriangle` already detects it (a thickness jump, a delta jump
-   * beyond the predicted rotation, or the ring blinking out). No spawn inside the grace means the
-   * game did not act on the press.
-   *
-   * st: { press, s, blinks, opts, graceMs } -> { verdict: 'none'|'pending'|'accepted'|'rejected' }
-   */
-  function pressOutcome(st) {
-    const w = st || {};
-    if (!w.press) return { verdict: 'none' };
-    const o = w.opts || {};
-    const grace = w.graceMs != null ? w.graceMs : (o.pressGraceMs != null ? o.pressGraceMs : 250);
-    if (!w.s) return { verdict: 'pending' };
-    if (newTriangle(w.press, w.s, w.blinks, o)) return { verdict: 'accepted' };
-    if (isFinite(w.press.t) && isFinite(w.s.t) && w.s.t - w.press.t >= grace) return { verdict: 'rejected' };
-    return { verdict: 'pending' };
-  }
-  function castRecovery(n) {
-    const i = Math.floor(n) || 0;
-    if (i <= 1) return { tap: true, space: false, walk: false };   // the normal path: click the bubble
-    return { tap: true, space: true, walk: false };                // click and the keybind together
-  }
-
-  /**
-   * Cumulative counters -> rates, so the perf probe says WHERE the frame time goes (ms/s and share
-   * of wall clock), not just how long one call took. Pure, so the arithmetic is tested.
-   * `share` is the fraction of wall time spent on the main thread; nested calls overlap
-   * (findBubble includes its snapshot), so read it as attribution, not a partition.
-   */
-  function perfRates(calls, totals, uptimeMs) {
-    const secs = uptimeMs > 0 ? uptimeMs / 1000 : 0;
-    const out = {};
-    for (const key of Object.keys(totals)) {
-      const ms = totals[key] || 0;
-      const n = calls[key] || 0;
-      const msPerSec = secs ? ms / secs : null;
-      out[key] = {
-        callsPerSec: secs ? n / secs : null,
-        msPerCall: n ? ms / n : null,
-        msPerSec,
-        share: msPerSec == null ? null : msPerSec / 1000,
-      };
-    }
-    return out;
-  }
-  // </timing-core>
-
-  /**
-   * Apply the latest prompt sighting to an attempt without touching its loss decision. A pending
-   * loss keeps pendingLoss and every decision field; only lossDiag is replaced.
-   */
-  function refreshLossDiagnostic(attempt, b, t, prev, cardPending) {
-    if (!attempt) return null;
-    return (attempt.lossDiag = lossDiagnostics(b, t, prev, cardPending));
-  }
-
-  /* ---- doctor ----------------------------------------------------------
-   * One verdict about why fishing is or is not happening, from state the bot already collects:
-   * no DOM, no timers, no reads. tests/doctor.test.js feeds it the states this project has actually
-   * been in, so the classes that each cost a live debugging session are named instead of inferred.
-   */
-  // <doctor-core>
-  /**
-   * s: { running, paused, hidden, stalled, lastTickAgoMs, postRender,
-   *      snapshot: { gl, canvas2d }, readback: { canvas2d, allocMBPerSec },
-   *      longtasks: { inLast10s, maxMs }, worstFrameMs,
-   *      needsSeat, resultMissing, sincePromptMs, sinceDialMs,
-   *      accepted, rejected, acceptRate, dials, held, forced, holdPassesMax }
-   * -> { verdict, severity: 'ok'|'warn'|'high', action, evidence }
+   * Diagnose why fishing is or is not happening from a status snapshot.
+   * @param {Record<string, any>} [s]
    */
   function doctor(s) {
     const st = s || {};
@@ -788,17 +102,13 @@ window.__autofishInstalled = true;
       'no prompt and no dial for 45 s: run __fish.calibrate() and compare the colours',
       { sincePromptMs: st.sincePromptMs, sinceDialMs: st.sinceDialMs });
   }
-  // </doctor-core>
 
-  /* ---- run statistics --------------------------------------------------
-   * The numbers a long session has to produce: a catch rate with an interval, the press acceptance,
-   * and the per-band split. Pure, so tests can check them against intervals this repo has already
-   * published instead of trusting the arithmetic that quotes them.
-   */
-  // <stats-core>
   /**
    * Wilson score interval for k successes out of n. Returns null for an empty sample rather than a
    * NaN that would make the exported JSON invalid.
+   * @param {number} k
+   * @param {number} n
+   * @param {number} [z]
    */
   function wilson(k, n, z) {
     const kk = Number(k), nn = Number(n);
@@ -814,12 +124,13 @@ window.__autofishInstalled = true;
   /**
    * One summary of a run's attempts. The attempt is the denominator: a press is not a fish, so the
    * rate is caught / attempts and the press numbers are reported beside it, never mixed in.
-   * attempts: [{ verdict, band, widthBand, presses, pressAccepted, pressRejected, dials,
-   *              avgWidth, ms, startAt }]
+   * @param {any[]} attempts
+   * @param {Record<string, any>} [o]
    */
   function runSummary(attempts, o) {
     const list = Array.isArray(attempts) ? attempts : [];
     const cfg = o || {};
+    /** @type {Record<string, any>} */
     const widths = {}, bands = {};
     let n = 0, caught = 0, lost = 0, presses = 0, accepted = 0, rejected = 0, dials = 0, ms = 0;
     let widthSum = 0, widthN = 0, firstAt = null, lastAt = null;
@@ -849,11 +160,7 @@ window.__autofishInstalled = true;
     const pressN = accepted + rejected;
     return {
       attempts: n, caught, lost,
-      // How many dials arrived with the press gate shut. Above zero after the arming fix means the
-      // gate is being closed mid-dial and never reopened, which is a different bug.
       locksDisarmed: cfg.locksDisarmed != null ? cfg.locksDisarmed : null,
-      // Session counters are page-global, like locksDisarmed. null means an older export did
-      // not carry them; zero is a real observed count.
       firstPressHeld: cfg.firstPressHeld != null ? cfg.firstPressHeld : null,
       firstPressForced: cfg.firstPressForced != null ? cfg.firstPressForced : null,
       firstPressHeldForced: cfg.firstPressHeldForced != null ? cfg.firstPressHeldForced : null,
@@ -875,19 +182,8 @@ window.__autofishInstalled = true;
   }
 
   /**
-   * What the presses actually did, from the probe log: how often the model predicted a press inside
-   * the window, how wrong the prediction turned out to be in degrees, and how many presses were
-   * never measured (accepted by assumption rather than observed).
-   */
-  /**
    * How well (delta, omega) predicts the next frame's delta, in degrees and in milliseconds.
-   *
-   * This is the quantity that decides a marginal narrow press, and it must be measured WITHOUT
-   * pressing: a press makes the game spawn a new triangle, so the frame after one jumps for a
-   * reason that is not model error. The first version of this measured exactly that post-press
-   * frame and reported 77 deg of "error" on a 40 deg window - an artifact of the spawn.
-   *
-   * ms is the number that matters: a +/-18.5 deg window at 300 deg/s is only 62 ms wide.
+   * @param {any[]} log
    */
   function predictionSummary(log) {
     const rows = Array.isArray(log) ? log.filter(Boolean) : [];
@@ -913,7 +209,10 @@ window.__autofishInstalled = true;
     };
   }
 
-  /** Press acceptance, and how much of it was observed rather than assumed. */
+  /**
+   * Press acceptance, and how much of it was observed rather than assumed.
+   * @param {any[]} log
+   */
   function pressAcceptSummary(log) {
     const rows = Array.isArray(log) ? log.filter(Boolean) : [];
     const judged = rows.filter((r) => r.inside != null);
@@ -934,10 +233,8 @@ window.__autofishInstalled = true;
   }
 
   /**
-   * Press verdicts by their evidence. `observed` saw the game spawn a new triangle; `assumed`
-   * inferred acceptance from the next press arriving; `timing` inferred it from the dial closing
-   * soon after. Only the observed row is a measurement - the others are why the headline used to
-   * read 697 of 697 accepted.
+   * Press verdicts by their evidence (`observed`, `assumed`, `timing`).
+   * @param {Record<string, any> | null | undefined} t
    */
   function pressVerdictReport(t) {
     const src = t || {};
@@ -949,30 +246,86 @@ window.__autofishInstalled = true;
     return { observed: one(src.observed), assumed: one(src.assumed), timing: one(src.timing) };
   }
 
-  // </stats-core>
-
-  /* ---- coordinate frame ------------------------------------------------
-   * Everything the detectors see is in the UI canvas's backing-store pixels. Everything the DOM
-   * does - elementFromPoint, PointerEvent, the panel's exclusion rect - is in CSS pixels. Those
-   * are the same only while the canvas is 1:1 with its CSS box, which is true at the dpr the game
-   * was measured at and is not something to keep assuming silently.
+  /**
+   * Pure check for the client's stuck `waiting-for-result` state.
+   * @param {Record<string, any> | null | undefined} f
+   * @param {number} t
    */
-  // <coords>
-  function cssPoint(x, y, frame) {
-    if (!frame) return { x: x, y: y };
-    const kx = frame.cw ? frame.w / frame.cw : 1;
-    const ky = frame.ch ? frame.h / frame.ch : 1;
-    return { x: frame.left + x * kx, y: frame.top + y * ky };
+  function resultMissingDue(f, t) {
+    const p = f && f.pendingWin;
+    const a = f && f.attempt;
+    if (!f || f.resultMissing || f.geo || !p || !a) return false;
+    if (p.verdict !== 'hit' || p.shapeSeen || p.landed || p.closedAt == null) return false;
+    if (!(a.presses > 0 && a.dialHits > 0)) return false;
+    const threshold = (f.opts && f.opts.resultMissingMs) || 8000;
+    return t - p.closedAt > threshold;
   }
-  // </coords>
 
-  /* ---- dial memory ------------------------------------------------------
-   * The reel widget sits in one place for a whole session, so its circle is worth remembering: a
-   * fresh start has no prompt to learn it from, and the old seed was a literal point measured at
-   * one viewport. It is stored with the canvas size it was measured at, because the widget's place
-   * in the UI layer scales with the canvas, not with the window's CSS size.
+  /**
+   * Bound controller around `F` + logger `L` for clearing/latching missing results.
+   * @param {Record<string, any>} F
+   * @param {(msg: string, extra?: Record<string, any>) => void} L
    */
-  // <dial-memory>
+  function createResultMissing(F, L) {
+    return {
+      /** @param {number} t */
+      due: function (t) { return resultMissingDue(F, t); },
+      /** @param {string | null} [why] */
+      clear: function (why) {
+        if (!F.resultMissing) return false;
+        F.resultMissing = false;
+        F.resultMissingAt = 0;
+        F.resultMissingAttempt = null;
+        L('result missing cleared', { why: why || null });
+        return true;
+      },
+      /** @param {number} t @param {string | null} [why] */
+      mark: function (t, why) {
+        if (F.resultMissing) return false;
+        F.resultMissing = true;
+        F.resultMissingAt = t;
+        const a = F.attempt;
+        F.resultMissingAttempt = a ? { n: a.n, presses: a.presses, dials: a.dials, dialHits: a.dialHits } : null;
+        if (F.stats) F.stats.resultMissing = (F.stats.resultMissing || 0) + 1;
+        L('result missing', {
+          why: why || null,
+          attempt: a ? a.n : null,
+          presses: a ? a.presses : 0,
+          dialHits: a ? a.dialHits : 0,
+          sinceDialCloseMs: F.pendingWin && F.pendingWin.closedAt != null ? Math.round(t - F.pendingWin.closedAt) : null,
+        });
+        return true;
+      },
+    };
+  }
+
+  return {
+    doctor,
+    wilson,
+    runSummary,
+    predictionSummary,
+    pressAcceptSummary,
+    pressVerdictReport,
+    resultMissingDue,
+    createResultMissing,
+  };
+});
+
+// @ts-check
+/* src/ledger.js — species catalogue, localStorage catch ledger, and dial memory persistence.
+ * UMD: browser global AutoFishLedger, CommonJS require('./src/ledger.js').
+ */
+/**
+ * @param {any} root
+ * @param {() => Record<string, any>} factory
+ */
+(function (root, factory) {
+  var api = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.AutoFishLedger = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
   const DIAL_KEY = 'autofish:dial:v1';
   const DIAL_R_MIN = 60, DIAL_R_MAX = 140;
 
@@ -981,8 +334,7 @@ window.__autofishInstalled = true;
 
   /**
    * Validate a stored circle against the canvas it will be used on. Same canvas -> unchanged; a
-   * proportionally bigger/smaller canvas -> scaled; anything else -> null, because a circle from a
-   * different aspect is a different camera, not a resize.
+   * proportionally bigger/smaller canvas -> scaled; anything else -> null.
    */
   function dialGeoFit(stored, cw, ch) {
     if (!stored || !finitePositive(cw) || !finitePositive(ch)) return null;
@@ -1000,44 +352,42 @@ window.__autofishInstalled = true;
     return out;
   }
 
-  function loadDialMemory() {
-    /** @type {string | null} */
-    let raw = null;
-    try { raw = window.localStorage.getItem(DIAL_KEY); } catch (e) { return null; }
-    if (!raw) return null;
-    try {
-      const p = JSON.parse(raw);
-      if (!p || p.v !== 1) return null;
-      return { cx: p.cx, cy: p.cy, R: p.R, cw: p.cw, ch: p.ch };
-    } catch (e) { return null; }
-  }
-
-  function saveDialMemory(g) {
-    if (!g || !uiCanvas || !uiCanvas.width) return false;
-    try {
-      window.localStorage.setItem(DIAL_KEY, JSON.stringify({
-        v: 1, cx: Math.round(g.cx), cy: Math.round(g.cy), R: Math.round(g.R),
-        cw: uiCanvas.width, ch: uiCanvas.height,
-      }));
-      return true;
-    } catch (e) { return false; }
-  }
-
   function sameDial(a, b) {
     return !!a && !!b && Math.abs(a.cx - b.cx) <= 2 && Math.abs(a.cy - b.cy) <= 2 && Math.abs(a.R - b.R) <= 2;
   }
-  // </dial-memory>
 
-  /* ---- catch log --------------------------------------------------------
-   * A durable, server-free record of every parsed catch. The data helpers in the block below are
-   * pure (no DOM, no storage), so tests/catchlog.test.js pulls them out under node; the browser
-   * storage calls sit underneath.
-   *
-   * Why a catalogue: the catch card prints a rarity word only for non-common fish, so commons
-   * arrive blank. The game ships its own fish table (name, tier, weight range, gold), extracted
-   * by scripts/gen-catalogue.js - a lookup, never a pixel guess.
+  /**
+   * Bind dial memory helpers to an injected `window`-like object and canvas getter.
+   * @param {any} win
+   * @param {() => ({ width?: number, height?: number } | null)} getCanvas
    */
-  // <catch-log>
+  function createDialMemory(win, getCanvas) {
+    return {
+      loadDialMemory: function () {
+        /** @type {string | null} */
+        let raw = null;
+        try { raw = win.localStorage.getItem(DIAL_KEY); } catch (e) { return null; }
+        if (!raw) return null;
+        try {
+          const p = JSON.parse(raw);
+          if (!p || p.v !== 1) return null;
+          return { cx: p.cx, cy: p.cy, R: p.R, cw: p.cw, ch: p.ch };
+        } catch (e) { return null; }
+      },
+      saveDialMemory: function (g) {
+        const uiCanvas = getCanvas ? getCanvas() : null;
+        if (!g || !uiCanvas || !uiCanvas.width) return false;
+        try {
+          win.localStorage.setItem(DIAL_KEY, JSON.stringify({
+            v: 1, cx: Math.round(g.cx), cy: Math.round(g.cy), R: Math.round(g.R),
+            cw: uiCanvas.width, ch: uiCanvas.height,
+          }));
+          return true;
+        } catch (e) { return false; }
+      },
+    };
+  }
+
   // <species-catalogue>
 const SPECIES = [
   ["Anchovy","Common",0.1,0.3,5], ["Arctic Cod","Common",0.1,1,7], ["Bartlett's Anthias","Common",0.1,1,7], ["Bass","Common",1,8,8],
@@ -1104,28 +454,17 @@ const SPECIES = [
   const TIER_ORDER = ['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Secret', 'Halloween', 'Christmas'];
   const LOG_KEY = 'autofish:log:v1';
   const LOG_PREFIX = LOG_KEY + ':';
-  // One catch history per profile. The ledger used to be keyed by origin alone, so two accounts in
-  // the same browser silently shared a strip. 'default' keeps the pre-profile key working.
-  let logProfile = 'default';
-  function logKey() { return LOG_PREFIX + logProfile; }
   const TIER_BY_LOWER = {};
   for (const tier of TIER_ORDER) TIER_BY_LOWER[tier.toLowerCase()] = tier;
   const SPECIES_BY_NAME = {};
   for (const row of SPECIES) SPECIES_BY_NAME[String(row[0]).toLowerCase()] = row;
 
-  // Display names the game prints that are not names in its own fish table. Both are hard-coded
-  // in the bundle: 'Pharooh Cuddlefish' prints as 'Pharaoh Cuttlefish', and a special 'Pink Canny'
-  // prints as 'Golden Canny' rather than 'Golden Pink Canny'. Each alias names the catalogue row
-  // whose tier and weights apply, the species the card's name really means, and the variant its
-  // prefix reports. Kept out of SPECIES so the embedded table stays the bundle's 232 rows.
   const DISPLAY_ALIASES = [
     { name: 'Pharaoh Cuttlefish', base: 'Pharaoh Cuttlefish', row: 'Pharooh Cuddlefish', variant: '' },
     { name: 'Golden Canny', base: 'Pink Canny', row: 'Pink Canny', variant: 'Golden' },
   ];
   const DISPLAY_ALIASES_BY_LOWER = {};
   for (const alias of DISPLAY_ALIASES) DISPLAY_ALIASES_BY_LOWER[alias.name.toLowerCase()] = alias;
-  // Every name the worklist can explain: the catalogue rows plus the display renames. Built once,
-  // because log() may be called every panel tick and this list never changes.
   /** @type {string[]} */
   const KNOWN_NAMES = SPECIES.map((row) => String(row[0])).concat(DISPLAY_ALIASES.map((alias) => alias.name));
 
@@ -1138,10 +477,6 @@ const SPECIES = [
     return TIER_BY_LOWER[tidyName(s).toLowerCase()] || '';
   }
 
-  /**
-   * Card weight -> kilograms. The card prints '13.7 kg' or '350 g' (also t / lb); a blank or
-   * unparseable weight stays null so it never poisons the best-weight comparison.
-   */
   function parseWeightKg(text) {
     const m = /([0-9]+(?:\.[0-9]+)?)\s*(kg|g|t|lb)\b/i.exec(String(text == null ? '' : text));
     if (!m) return null;
@@ -1154,10 +489,6 @@ const SPECIES = [
     return n;
   }
 
-  /**
-   * Split a display name into variant and base species. The game renders a shiny catch as
-   * 'Shiny <name>' and a special fish as 'Golden <name>', so the prefix is data, not a species.
-   */
   function splitVariant(name) {
     const full = tidyName(name);
     const m = /^(Shiny|Golden)\s+(.+)$/i.exec(full);
@@ -1165,16 +496,11 @@ const SPECIES = [
     return { variant: '', base: full };
   }
 
-  /** {name, base, variant, shiny, golden, rarity, minWeight, maxWeight, baseGold, known} */
   function speciesInfo(name) {
     const full = tidyName(name);
     const lower = full.toLowerCase();
-    // Some catalogue names start with Shiny/Golden themselves (Golden Shiner, Golden Goldfish).
-    // An exact catalogue hit wins; only an unmatched name is treated as a variant or alias.
     const exact = SPECIES_BY_NAME[lower] || null;
     let parts = exact ? { variant: '', base: full } : splitVariant(full);
-    // A display rename can be the whole name ('Pharaoh Cuttlefish') or the base under a prefix
-    // ('Shiny Pharaoh Cuttlefish'); its row supplies the tier and weights the card never prints.
     const alias = exact ? null
       : DISPLAY_ALIASES_BY_LOWER[lower] || DISPLAY_ALIASES_BY_LOWER[parts.base.toLowerCase()] || null;
     if (alias) parts = { variant: parts.variant || alias.variant, base: alias.base };
@@ -1194,10 +520,6 @@ const SPECIES = [
     };
   }
 
-  /**
-   * One parsed catch -> the record the ledger, the CSV and the panel read. Rarity is the card's
-   * own word when it printed one; otherwise it is the catalogue's tier and 'derived' says so.
-   */
   function describeCatch(rec) {
     const r = rec || {};
     const info = speciesInfo(r.species);
@@ -1218,7 +540,6 @@ const SPECIES = [
     };
   }
 
-  /** Local calendar day, so 'today' matches the player's clock rather than UTC. */
   function logDay(ms) {
     const d = new Date(ms == null ? Date.now() : ms);
     const p = (n) => String(n).padStart(2, '0');
@@ -1232,7 +553,6 @@ const SPECIES = [
     return { v: 1, createdAt: at, updatedAt: at, total: 0, shiny: 0, golden: 0, species: {}, rarity, unknown: {}, days: {}, last: null };
   }
 
-  /** Append one described catch in place and return the same ledger. */
   function addToLog(log, e, t) {
     const at = t == null ? Date.now() : t;
     const book = log && log.v === 1 ? log : emptyLog(at);
@@ -1250,8 +570,6 @@ const SPECIES = [
       s.bestAt = at;
     }
     book.rarity[e.rarity] = (book.rarity[e.rarity] || 0) + 1;
-    // Unknown means the card printed no tier and the catalogue does not know the species. Keep the
-    // names so the gap is a worklist instead of an invisible pile of catches.
     if (e.rarity === 'Unknown') {
       if (!book.unknown) book.unknown = {};
       book.unknown[name] = (book.unknown[name] || 0) + 1;
@@ -1262,7 +580,6 @@ const SPECIES = [
     const day = book.days[key] || (book.days[key] = { n: 0, rarity: {}, shiny: 0, golden: 0 });
     day.n += 1;
     day.rarity[e.rarity] = (day.rarity[e.rarity] || 0) + 1;
-    // Variants are per-day too: "how many shinies today" must not mean "all time".
     if (e.shiny) day.shiny = (day.shiny || 0) + 1;
     if (e.golden) day.golden = (day.golden || 0) + 1;
     book.last = {
@@ -1273,7 +590,6 @@ const SPECIES = [
     return book;
   }
 
-  /** Keep the newest maxDays day buckets so the ledger cannot grow forever. */
   function trimLog(log, maxDays) {
     const keep = maxDays == null ? 60 : maxDays;
     const days = Object.keys(log.days || {}).sort();
@@ -1284,7 +600,6 @@ const SPECIES = [
     return log;
   }
 
-  /** What the panel and __fish.log() show: totals, tiers, today, best, last. */
   function logSummary(log, t) {
     const book = log && log.v === 1 ? log : emptyLog(t);
     const byRarity = TIER_ORDER.map((tier) => ({ rarity: tier, n: book.rarity[tier] || 0 }));
@@ -1321,23 +636,8 @@ const SPECIES = [
     };
   }
 
-  // Card text that can land in the species slot without being a species: inventory/reward items
-  // (Town Keys unlock regions) and quality words printed on the card. Kept explicit and small -
-  // anything new is not guessed at, it surfaces as 'open' so a real gap stays visible.
   const NON_SPECIES_TEXT = ['town key', 'volcanic rod', 'decent', 'exquisite'];
 
-  /**
-   * The unknown worklist, derived from the ledger at read time. `unknown` is a cumulative count of
-   * catches the build could not name: when the catalogue later learns a name, the old count stays,
-   * so the raw map overstates today's gaps. This classifies every name against the current
-   * catalogue and never writes to the record:
-   *   resolved  - the catalogue knows the name now (a Shiny/Golden variant of one counts)
-   *   fragment  - a piece of a catalogue or display name, which is how a two-line card used to land
-   *   nonFish   - item or quality text that is not a species
-   *   open      - nothing explains it; this is the real worklist
-   * `counts` sums the catches behind each kind and `total` every unknown catch. Entries carry the
-   * ledger's last-seen stamp and, for a fragment, the known names it could be part of.
-   */
   function unknownWorklist(book, t) {
     const log = book && book.v === 1 ? book : emptyLog(t);
     const unknown = log.unknown || {};
@@ -1392,7 +692,6 @@ const SPECIES = [
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
 
-  /** One row per species, newest counts first - the thing you paste into a spreadsheet. */
   function logCsv(log) {
     const book = log && log.v === 1 ? log : emptyLog();
     const head = ['species', 'rarity', 'derived', 'shiny', 'count', 'best_kg', 'first_seen', 'last_seen'];
@@ -1404,49 +703,1807 @@ const SPECIES = [
         new Date(r.s.first).toISOString(), new Date(r.s.last).toISOString()]);
     return [head].concat(rows).map((r) => r.map(csvCell).join(',')).join('\n') + '\n';
   }
-  /* ---- catch ledger storage --------------------------------------------
-   * localStorage is the whole persistence story of the one-file userscript: a few kilobytes, one
-   * write per catch, never able to break the loop. A blocked or full store just means no history.
+
+  /**
+   * Bind profile-scoped catch ledger persistence to an injected `window`-like object.
+   * @param {any} win
    */
-  /** @type {any} */
-  let ledger = null;
-  function loadLedger() {
-    if (ledger) return ledger;
-    /** @type {string | null} */
-    let raw = null;
-    try { raw = window.localStorage.getItem(logKey()); } catch (e) { raw = null; }
-    if (!raw && logProfile === 'default') {
-      // The pre-profile ledger (autofish:log:v1) belongs to whoever used this browser first.
-      // Move it to the default profile once, so an upgrade never looks like lost history.
-      try { raw = window.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
-      if (raw) { try { window.localStorage.setItem(logKey(), raw); } catch (e) {} }
-    }
-    if (!raw) return (ledger = emptyLog());
-    try {
-      const parsed = JSON.parse(raw);
-      ledger = parsed && parsed.v === 1 && parsed.species && parsed.rarity ? parsed : emptyLog();
-    } catch (e) { ledger = emptyLog(); }
-    return ledger;
-  }
-  function saveLedger(book) {
-    ledger = book;
-    try { window.localStorage.setItem(logKey(), JSON.stringify(book)); return true; } catch (e) { return false; }
-  }
-  /** Every profile that has a ledger in this browser, newest naming first. */
-  function logProfiles() {
-    const out = [];
-    try {
-      const st = window.localStorage;
-      for (let i = 0; i < (st.length || 0); i++) {
-        const k = st.key(i);
-        if (k && k.indexOf(LOG_PREFIX) === 0) out.push(k.slice(LOG_PREFIX.length));
+  function createLedger(win) {
+    let profile = 'default';
+    /** @type {any} */
+    let ledger = null;
+    function logKey() { return LOG_PREFIX + profile; }
+    function loadLedger() {
+      if (ledger) return ledger;
+      /** @type {string | null} */
+      let raw = null;
+      try { raw = win.localStorage.getItem(logKey()); } catch (e) { raw = null; }
+      if (!raw && profile === 'default') {
+        try { raw = win.localStorage.getItem(LOG_KEY); } catch (e) { raw = null; }
+        if (raw) { try { win.localStorage.setItem(logKey(), raw); } catch (e) {} }
       }
-    } catch (e) { /* a blocked store simply has no discoverable profiles */ }
-    if (out.indexOf('default') < 0) out.unshift('default');
-    return out.sort();
+      if (!raw) return (ledger = emptyLog());
+      try {
+        const parsed = JSON.parse(raw);
+        ledger = parsed && parsed.v === 1 && parsed.species && parsed.rarity ? parsed : emptyLog();
+      } catch (e) { ledger = emptyLog(); }
+      return ledger;
+    }
+    function saveLedger(book) {
+      ledger = book;
+      try { win.localStorage.setItem(logKey(), JSON.stringify(book)); return true; } catch (e) { return false; }
+    }
+    function logProfiles() {
+      const out = [];
+      try {
+        const st = win.localStorage;
+        for (let i = 0; i < (st.length || 0); i++) {
+          const k = st.key(i);
+          if (k && k.indexOf(LOG_PREFIX) === 0) out.push(k.slice(LOG_PREFIX.length));
+        }
+      } catch (e) {}
+      if (out.indexOf('default') < 0) out.unshift('default');
+      return out.sort();
+    }
+    function setProfile(next) {
+      const changed = next !== profile;
+      profile = next;
+      if (changed) ledger = null;
+      return changed;
+    }
+    function getProfile() { return profile; }
+    return { logKey, loadLedger, saveLedger, logProfiles, setProfile, getProfile };
   }
 
-  // </catch-log>
+  return {
+    DIAL_KEY, DIAL_R_MIN, DIAL_R_MAX, dialGeoFit, sameDial, createDialMemory,
+    SPECIES, TIER_ORDER, LOG_KEY, LOG_PREFIX, TIER_BY_LOWER, SPECIES_BY_NAME,
+    tidyName, normTier, parseWeightKg, splitVariant, speciesInfo, describeCatch,
+    logDay, emptyLog, addToLog, trimLog, logSummary, unknownWorklist, csvCell, logCsv,
+    createLedger,
+  };
+});
+
+// @ts-check
+/* src/vision.js — coordinate mapping, GL row flip, prompt boxes, connected-component flood fill,
+ * prompt glyph classification, and catch-card text parsing.
+ * UMD: browser global AutoFishVision, CommonJS require('./src/vision.js').
+ */
+/**
+ * @param {any} root
+ * @param {() => Record<string, any>} factory
+ */
+(function (root, factory) {
+  var api = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.AutoFishVision = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  /**
+   * Convert UI canvas backing-store coordinates to CSS pixel coordinates.
+   * @param {number} x
+   * @param {number} y
+   * @param {{ left: number, top: number, w: number, h: number, cw?: number, ch?: number } | null | undefined} frame
+   */
+  function cssPoint(x, y, frame) {
+    if (!frame) return { x: x, y: y };
+    const kx = frame.cw ? frame.w / frame.cw : 1;
+    const ky = frame.ch ? frame.h / frame.ch : 1;
+    return { x: frame.left + x * kx, y: frame.top + y * ky };
+  }
+
+  /**
+   * readPixels hands back the framebuffer bottom-up, while every detector indexes a read
+   * top-down from the x/y it asked for. Reverse the rows in place; `row` is supplied by the
+   * caller so the flip does not allocate a buffer per read.
+   * @template {Uint8Array | Uint8ClampedArray} T
+   * @param {T} d
+   * @param {number} w
+   * @param {number} h
+   * @param {Uint8Array | Uint8ClampedArray} row
+   * @returns {T}
+   */
+  function flipRows(d, w, h, row) {
+    const stride = w * 4;
+    for (let top = 0, bot = h - 1; top < bot; top++, bot--) {
+      const a = top * stride, b = bot * stride;
+      row.set(d.subarray(a, a + stride));
+      d.set(d.subarray(b, b + stride), a);
+      d.set(row.subarray(0, stride), b);
+    }
+    return d;
+  }
+
+  /**
+   * GL's origin is bottom-left: the top-down row `y` starts at this framebuffer row.
+   * @param {number} bh
+   * @param {number} y
+   * @param {number} h
+   */
+  function glRowY(bh, y, h) { return bh - (y + h); }
+
+  /**
+   * The CAST!/REEL! box was measured on a 1620x1031 surface. Read as a fixed rectangle it only
+   * fits that size: the bubble floats above the play area and moves with the viewport, so in a
+   * smaller window the boxed scan misses and every prompt pays a whole-surface pass. The box is
+   * therefore a fraction of the LIVE surface, keeping the measured placement and aspect. The
+   * minimum size keeps room for the bubble itself (108x50 at the reference size), which does not
+   * shrink with the window, and every result is clamped inside the surface.
+   */
+  const BUBBLE_BOX_REF = { x: 690, y: 215, w: 360, h: 210, cw: 1620, ch: 1031 };
+  const BUBBLE_BOX_MIN_W = 260, BUBBLE_BOX_MIN_H = 150;
+
+  /**
+   * Compute the normalized prompt search box for a given canvas size.
+   * @param {number | null} [cw]
+   * @param {number | null} [ch]
+   */
+  function promptBox(cw, ch) {
+    const W = Math.max(1, Math.round(cw || BUBBLE_BOX_REF.cw));
+    const H = Math.max(1, Math.round(ch || BUBBLE_BOX_REF.ch));
+    const sx = W / BUBBLE_BOX_REF.cw, sy = H / BUBBLE_BOX_REF.ch;
+    const w = Math.min(W, Math.max(BUBBLE_BOX_MIN_W, Math.round(BUBBLE_BOX_REF.w * sx)));
+    const h = Math.min(H, Math.max(BUBBLE_BOX_MIN_H, Math.round(BUBBLE_BOX_REF.h * sy)));
+    const x = Math.max(0, Math.min(W - w, Math.round(BUBBLE_BOX_REF.x * sx)));
+    const y = Math.max(0, Math.min(H - h, Math.round(BUBBLE_BOX_REF.y * sy)));
+    return { x, y, w, h };
+  }
+
+  /**
+   * Off-center pier seats render their prompt at (cx, cy - 53) above the locked dial.
+   * @param {{ cx: number, cy: number, [k: string]: any } | null | undefined} geo
+   * @param {number | null} [cw]
+   * @param {number | null} [ch]
+   */
+  function seatPromptBox(geo, cw, ch) {
+    if (!geo || !isFinite(geo.cx) || !isFinite(geo.cy)) return null;
+    const W = Math.max(1, Math.round(cw || BUBBLE_BOX_REF.cw));
+    const H = Math.max(1, Math.round(ch || BUBBLE_BOX_REF.ch));
+    const w = Math.min(W, BUBBLE_BOX_MIN_W);
+    const h = Math.min(H, BUBBLE_BOX_MIN_H);
+    const x = Math.max(0, Math.min(W - w, Math.round(geo.cx - w / 2)));
+    const y = Math.max(0, Math.min(H - h, Math.round((geo.cy - 53) - h / 2)));
+    return { x, y, w, h };
+  }
+
+  const near4 = new Int32Array(4);
+
+  /**
+   * 4-connected components over an RGBA buffer: bbox and pixel count per blob.
+   *
+   * Pure on purpose (buffer + scratch in, components out) so the flood fill can be tested on a
+   * hand-built image. `seen` is supplied because the caller reuses one scratch buffer: this runs
+   * on every shared scan tick, and a fresh 108 KB Uint8Array per call is pure garbage pressure.
+   * @param {number} w
+   * @param {number} h
+   * @param {Uint8Array | Uint8ClampedArray} d
+   * @param {(d: Uint8Array | Uint8ClampedArray, idx: number) => boolean} match
+   * @param {number} minPx
+   * @param {Uint8Array} seen
+   */
+  function floodComponents(w, h, d, match, minPx, seen) {
+    const total = w * h;
+    seen.fill(0);
+    /** @type {Array<{ x0: number, y0: number, x1: number, y1: number, count: number }>} */
+    const out = [];
+    for (let p0 = 0; p0 < total; p0++) {
+      if (seen[p0] || !match(d, p0 * 4)) continue;
+      const stack = [p0];
+      seen[p0] = 1;
+      let x0 = w, y0 = h, x1 = 0, y1 = 0, count = 0;
+      while (stack.length) {
+        const p = stack.pop();
+        if (p === undefined) continue;
+        const x = p % w, y = (p / w) | 0;
+        count++;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+        near4[0] = x > 0 ? p - 1 : -1;
+        near4[1] = x < w - 1 ? p + 1 : -1;
+        near4[2] = y > 0 ? p - w : -1;
+        near4[3] = y < h - 1 ? p + w : -1;
+        for (let k = 0; k < 4; k++) {
+          const q = near4[k];
+          if (q < 0 || seen[q] || !match(d, q * 4)) continue;
+          seen[q] = 1;
+          stack.push(q);
+        }
+      }
+      if (count >= minPx) out.push({ x0, y0, x1, y1, count });
+    }
+    return out;
+  }
+
+  /*
+   * Prompt glyphs, read off the buffer bubbleInBox already holds - no second readback.
+   * Measured live against real captures (3.9.33 calibration): the prompt's 3-line text is
+   * SOFT (translucent grey, alpha 40-120: 17% of the inset, ~0 opaque-dark cells), while a
+   * name tag's text is OPAQUE dark (26.5% at alpha>120, lum<100). The old tall-run model was
+   * built for opaque caps that do not exist, so the gate is inverted: a boxed blob may tap
+   * unless it carries opaque-dark text. The inset ignores the bubble's own outline.
+   * Measured margins: prompt 0.002, blank pre-text frames 0.004, tag 0.265 - the 0.05 line
+   * stands 10x off both sides. Fail direction is unchanged (a refused prompt still fishes
+   * on the Space rung; a tapped tag opens a profile and stalls the run).
+   */
+  var GLYPH_OPAQUE_MAX = 0.05; // opaque-dark share above this is tag text, never prompt text
+
+  /**
+   * Classify whether a boxed white bubble holds prompt glyphs or an opaque player name tag.
+   * @param {Uint8Array | Uint8ClampedArray} d
+   * @param {number} w
+   * @param {number} s
+   * @param {number} e
+   * @param {number} y0
+   * @param {number} y1
+   */
+  function glyphMetrics(d, w, s, e, y0, y1) {
+    var m = { ok: false, dark: 0, soft: 0 };
+    var x0 = s + 2, x1 = e - 2, t0 = y0 + 2, t1 = y1 - 2;
+    if (x1 <= x0 || t1 <= t0) return m;
+    var area = (x1 - x0) * (t1 - t0), dark = 0, soft = 0;
+    var stride = (w - (x1 - x0)) * 4;   // consumed inset plus the untouched right margin
+    for (var y = t0, i = (t0 * w + x0) * 4; y < t1; y++, i += stride) {
+      for (var xx = x0; xx < x1; xx++, i += 4) {
+        var l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        if (d[i + 3] > 120 && l < 100) dark++;
+        else if (d[i + 3] > 40 && l < 160) soft++;
+      }
+    }
+    m.dark = dark / area;
+    m.soft = soft / area;
+    m.ok = m.dark <= GLYPH_OPAQUE_MAX;
+    return m;
+  }
+
+  const WEIGHT = /^\d+(?:\.\d+)?\s?(?:kg|g|t|lb)$/i;
+  const MONEY = /^\$\s?\d[\d,]*(?:\.\d+)?$/;
+  // Species names are not ASCII: the game prints `Moʻo` (U+02BB) and uses `?` in legendary
+  // names such as `A Penguin?` and `Mermaid?`. Requiring letters/marks (rather than A-Z) and the
+  // punctuation the card actually draws keeps those names from being consumed as the rarity word.
+  const WORD = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}'’ʻ&?!.:()\- ]*$/u;
+
+  /**
+   * Card strings drawn after `since`, minus the bubbles and the digit-at-a-time date.
+   * @param {Array<{ t: number, s: unknown } | null | undefined>} buf
+   * @param {number} since
+   */
+  function textSince(buf, since) {
+    /** @type {string[]} */
+    const raw = [];
+    for (const e of buf) {
+      if (!e || e.t <= since) continue;
+      const s = String(e.s).trim();
+      // Only the exact bubble labels are not card text. Dropping every string containing `!`
+      // silently discarded any future species name with punctuation.
+      if (!s || /^(cast|reel|bite)!?$/i.test(s)) continue;
+      // The date is drawn one digit at a time. Keep a one-letter species word (`A`), but drop
+      // bare digits and punctuation fragments.
+      if (s.length < 2 && !/^\$/.test(s) && !/^\p{L}$/u.test(s)) continue;
+      raw.push(s);
+    }
+    return raw;
+  }
+
+  /**
+   * Read one card's strings. Card order is species, [rarity], weight, quality, value, then the
+   * catch date drawn digit by digit. Rarity is printed only on non-common fish, so the slot is
+   * resolved by position around the weight instead of by a list of tier names.
+   *
+   * `isKnown(name)` is the catalogue lookup. A long name is drawn in pieces when the card wraps it
+   * (`Yellowstripe` + `Goatfish`, `Rocks with` + `Mussels`), so the leading pieces are joined and
+   * the longest joined name the catalogue knows wins. Without a lookup the old single-word read is
+   * kept, which is what the pure tests use.
+   * @param {string[]} raw
+   * @param {((s: string) => boolean) | null} [isTier]
+   * @param {((s: string) => boolean) | null} [isKnown]
+   */
+  function parseCard(raw, isTier, isKnown) {
+    if (!raw.length) return { why: 'empty' };                  // nothing drawn since the cursor: already logged
+    const wI = raw.findIndex((s) => WEIGHT.test(s));
+    const vI = raw.findIndex((s) => MONEY.test(s));
+    if (vI < 0) return { why: 'noprice' };                     // every card prints its price
+    const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? raw[wI] : '', value: raw[vI], raw };
+    /** @type {Array<[number, string]>} */
+    const words = [];
+    for (let i = 0; i < vI; i++) {
+      // A weight or price can also satisfy the broad word pattern; they are values, not names.
+      if (WEIGHT.test(raw[i]) || MONEY.test(raw[i])) continue;
+      if (WORD.test(raw[i])) words.push([i, raw[i]]);
+    }
+    if (!words.length) return { why: 'nowords' };
+    let used = 1;
+    rec.species = words[0][1];
+    if (typeof isKnown === 'function') {
+      const pre = words.filter(([i]) => wI < 0 || i < wI);
+      for (let n = pre.length; n > 1; n--) {
+        const name = pre.slice(0, n).map(([, s]) => s).join(' ');
+        if (isKnown(name)) { rec.species = name; used = n; break; }
+      }
+    }
+    // The slot before the weight holds the rarity on a non-common fish and the quality on a common
+    // one: 'Whale Shark | Epic | 26.6t | Impressive' versus 'Lobster | Impressive | 3.36kg'. The
+    // tier list is the only thing that separates them, so the caller supplies it; without one the
+    // word is treated as quality, which is what the common layout needs.
+    const tier = typeof isTier === 'function' ? isTier : () => false;
+    for (let k = used; k < words.length; k++) {
+      const [i, s] = words[k];
+      if (wI >= 0 && i > wI) { if (!rec.quality) rec.quality = s; }
+      else if (tier(s)) { if (!rec.rarity) rec.rarity = s; }
+      else if (!rec.quality) rec.quality = s;
+    }
+    return { why: 'ok', rec };
+  }
+
+  return {
+    cssPoint,
+    flipRows,
+    glRowY,
+    BUBBLE_BOX_REF,
+    BUBBLE_BOX_MIN_W,
+    BUBBLE_BOX_MIN_H,
+    promptBox,
+    seatPromptBox,
+    floodComponents,
+    GLYPH_OPAQUE_MAX,
+    glyphMetrics,
+    WEIGHT,
+    MONEY,
+    WORD,
+    textSince,
+    parseCard,
+  };
+});
+
+// @ts-check
+/* src/timing.js — pure dial spin regression, press planning, ghost/stall gates, and recovery math.
+ * UMD: browser global AutoFishTiming, CommonJS require('./src/timing.js').
+ */
+/**
+ * @param {any} root
+ * @param {() => Record<string, any>} factory
+ */
+(function (root, factory) {
+  var api = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.AutoFishTiming = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  /**
+   * Fold an angle into (-180, 180].
+   * @param {number} a
+   */
+  function wrap180(a) {
+    a = (a + 180) % 360;
+    if (a < 0) a += 360;
+    return a - 180;
+  }
+
+  /**
+   * Least-squares spin rate over the last few DISTINCT frames.
+   *
+   * pts: [{ t: ms, mid: deg }] oldest -> newest. The mids are unwrapped in order so a wedge
+   * crossing 0 deg does not read as a 360 deg jump. Frames older than maxAgeMs are dropped, a
+   * single outlier is removed and the fit re-run. Returns null when the frames cannot define
+   * a rate at all (fewer than minN survive, or they all share one timestamp).
+   *
+   * Why a fit: a one-frame delta behind a 0.5 deg deadband never updated at slow spin, kept a
+   * stale fast value, and had to be clamped at 600 deg/s - exactly the speeds this game uses.
+   * @param {Array<{ t: number, mid: number } | null | undefined> | null | undefined} pts
+   * @param {Record<string, any>} [opts]
+   */
+  function fitOmega(pts, opts) {
+    const o = opts || {};
+    const maxAge = o.maxAgeMs != null ? o.maxAgeMs : 200;
+    const minN = o.minN != null ? o.minN : 2;
+    const minSpan = o.minSpanMs != null ? o.minSpanMs : 8;
+    const limit = o.limit != null ? o.limit : 1500;
+    if (!pts || pts.length < minN) return null;
+    const last = pts[pts.length - 1];
+    if (!last) return null;
+    const nowMs = o.now != null ? o.now : last.t;
+    /** @type {Array<{ t: number, mid: number }>} */
+    const live = [];
+    for (const p of pts) {
+      if (p && isFinite(p.mid) && isFinite(p.t) && nowMs - p.t <= maxAge) live.push(p);
+    }
+    if (live.length < minN) return null;
+    if (live[live.length - 1].t - live[0].t < minSpan) return null;
+
+    /** @param {Array<{ t: number, m: number }>} rows */
+    const slope = (rows) => {
+      let st = 0, sm = 0;
+      for (const r of rows) { st += r.t; sm += r.m; }
+      const mt = st / rows.length, mm = sm / rows.length;
+      let num = 0, den = 0;
+      for (const r of rows) { const d = r.t - mt; num += d * (r.m - mm); den += d * d; }
+      return den > 0 ? (num / den) * 1000 : null;      // deg per ms -> deg per s
+    };
+    /** @param {Array<{ t: number, mid: number }>} rows */
+    const unroll = (rows) => {
+      const out = [{ t: rows[0].t, m: rows[0].mid }];
+      for (let i = 1; i < rows.length; i++) {
+        out.push({ t: rows[i].t, m: out[i - 1].m + wrap180(rows[i].mid - rows[i - 1].mid) });
+      }
+      return out;
+    };
+    /**
+     * @param {Array<{ t: number, m: number }>} rows
+     * @param {number} omega
+     */
+    const rmsOf = (rows, omega) => {
+      const t0 = rows[0].t, m0 = rows[0].m;
+      let s = 0;
+      for (const r of rows) { const e = r.m - (m0 + omega / 1000 * (r.t - t0)); s += e * e; }
+      return Math.sqrt(s / rows.length);
+    };
+
+    let rows = unroll(live);
+    let omega = slope(rows);
+    if (omega == null) return null;
+    let dropped = 0, rms = rmsOf(rows, omega);
+    if (rows.length >= 3) {
+      const t0 = rows[0].t, m0 = rows[0].m;
+      let worst = 1, worstE = 0;
+      for (let i = 1; i < rows.length; i++) {
+        const e = Math.abs(rows[i].m - (m0 + omega / 1000 * (rows[i].t - t0)));
+        if (e > worstE) { worstE = e; worst = i; }
+      }
+      const kept = rows.slice(0, worst).concat(rows.slice(worst + 1));
+      const w2 = slope(kept);
+      if (w2 != null) {
+        // Drop the point when it is an outlier against the rest AND removing it makes the fit
+        // materially better. A real rotation cannot improve that much, a mis-tracked arc can.
+        const rms2 = rmsOf(kept, w2);
+        const r = kept.map((q) => q.m - (kept[0].m + w2 / 1000 * (q.t - kept[0].t)));
+        const scale = Math.max(1, Math.sqrt(r.reduce((s, v) => s + v * v, 0) / r.length));
+        if (worstE > Math.max(5, 3 * scale) || rms2 < 0.6 * rms) {
+          rows = kept; omega = w2; rms = rms2; dropped = 1;
+        }
+      }
+    }
+    const clamped = Math.abs(omega) > limit;
+    if (clamped) omega = omega > 0 ? limit : -limit;
+    return {
+      omega, rms, dropped, clamped,
+      n: rows.length,
+      span: rows[rows.length - 1].t - rows[0].t,
+    };
+  }
+
+  /**
+   * Is a spin-rate estimate mature enough to trust for a FIRST press?
+   *
+   * The first press is the one with the least evidence: fitOmega accepts two frames 8 ms apart, so
+   * an early fit can be a noisy angle track rather than a rotation. A wide slow dial forgives that;
+   * a narrow (<60 deg) or fast (>=300 deg/s) dial does not - the same error is most of its window.
+   * This gate waits for more points over a longer span with a tight residual before the first press.
+   * @param {{ omega?: number | null, clamped?: boolean, rms?: number | null, n?: number, span?: number } | null | undefined} fit
+   * @param {Record<string, any>} [o]
+   */
+  function fitStable(fit, o) {
+    const cfg = o || {};
+    if (!fit || fit.omega == null || !isFinite(fit.omega)) return false;
+    if (fit.clamped) return false;
+    const minN = cfg.firstPressMinN != null ? cfg.firstPressMinN : 6;
+    const minSpan = cfg.firstPressMinSpanMs != null ? cfg.firstPressMinSpanMs : 150;
+    const maxRms = cfg.firstPressMaxRms != null ? cfg.firstPressMaxRms : 2;
+    const rms = fit.rms == null ? Infinity : fit.rms;
+    return (fit.n || 0) >= minN && (fit.span || 0) >= minSpan && rms <= maxRms;
+  }
+
+  /**
+   * The tracker fits the midpoint's rate, d(mid)/dt. The planner's delta is (pin - mid), so the
+   * rate it needs is the negation. Converting once here is what stops a live dial from being
+   * scheduled a full turn late: on 2026-11-03 a 40 deg Legendary dial logged 69 consecutive
+   * 'wait' frames and never pressed.
+   * @param {number | null | undefined} midOmega
+   */
+  function deltaOmega(midOmega) {
+    if (midOmega == null || !isFinite(midOmega)) return null;
+    return midOmega === 0 ? 0 : -midOmega;
+  }
+
+  /**
+   * Does the first press on this dial need the stable-fit hold?
+   *
+   * The default is deliberately conservative: a narrow or fast dial has the least evidence at
+   * lock time and the most to lose from a noisy fit. `fastFirstPress` is the opt-in escape hatch
+   * for a player who would rather tap the first pass: it bypasses the hold without changing the
+   * crossing planner or any later press. That trade is explicit and off by default.
+   * @param {number | null | undefined} width
+   * @param {number | null | undefined} omega
+   * @param {Record<string, any>} [o]
+   */
+  function firstPressGate(width, omega, o) {
+    const cfg = o || {};
+    if (cfg.fastFirstPress) return false;
+    return Number(width) < (cfg.firstPressMaxWidthDeg || 60) ||
+      Math.abs(Number(omega) || 0) >= (cfg.firstPressFastOmega || 300);
+  }
+
+  /**
+   * How long the first press may wait for a mature spin fit, in ms.
+   *
+   * The fixed 2500 ms ceiling is several rotations on a fast dial: at 700 deg/s a 45 deg arc is
+   * under the pin for 64 ms, so "wait up to 2.5 s" means the bot visibly skips three or four
+   * passes of a fish the player is watching. Measured live 2026-11-02: firstPressHeld on 9 of 18
+   * dials and firstPressForced twice, on a session that was otherwise 51/51 presses accepted.
+   * The budget is therefore a fraction of ONE pass, still bounded by the old ceiling for the slow
+   * dials where a long, accurate fit is worth having.
+   * @param {number | null | undefined} width
+   * @param {number | null | undefined} omega
+   * @param {Record<string, any>} [o]
+   */
+  function firstPressBudget(width, omega, o) {
+    const cfg = o || {};
+    const capMs = cfg.firstPressMaxWaitMs != null ? cfg.firstPressMaxWaitMs : 2500;
+    const frac = cfg.firstPressMaxTransitFrac != null ? cfg.firstPressMaxTransitFrac : 0.4;
+    const w = Number(width);
+    if (!(w > 0)) return capMs;
+    const om = Math.abs(Number(omega));
+    if (!(om > 0)) {
+      // No rate at all. A wide dial never enters the first-press gate, so keep the old ceiling
+      // there; a narrow dial must not stare at a spinning wedge for 2.5 s (live 2026-11-03: a
+      // 35 deg Legendary dial held 2,619 ms with zero presses). Assume the fast-dial floor and
+      // hold for only a fraction of one pass.
+      if (w >= (cfg.firstPressMaxWidthDeg || 60)) return capMs;
+      const assumed = cfg.firstPressAssumeOmega || 300;
+      return Math.min(capMs, (w / assumed) * 1000 * frac);
+    }
+    return Math.min(capMs, (w / om) * 1000 * frac);
+  }
+
+  /**
+   * Can the first-press hold possibly mature before its budget runs out?
+   *
+   * The gate only clears once the fit has firstPressMinSpanMs (150 ms) of history. A budget
+   * shorter than that can never reach it: the hold would expire and press on the same two-point
+   * fit it had at the lock, having only delayed the press. Measured live 2026-11-18: 37 dials
+   * held and 37 forced - every hold was wasted - so a budget that cannot fit the fit is skipped.
+   * @param {number} budgetMs
+   * @param {Record<string, any>} [o]
+   */
+  function firstPressCanMature(budgetMs, o) {
+    const need = o && o.firstPressMinSpanMs != null ? o.firstPressMinSpanMs : 150;
+    return budgetMs >= need;
+  }
+
+  /**
+   * Record the dial's single force event. `firstPressForced` counts all forced first presses;
+   * `firstPressHeldForced` is the subset the first-press gate had held first. A held dial that
+   * matures never reaches this marker and stays counted by `firstPressHeld` alone.
+   * @param {Record<string, any> | null | undefined} stats
+   * @param {Record<string, any> | null | undefined} geo
+   */
+  function markFirstPressForced(stats, geo) {
+    if (!stats || !geo || geo._firstForced) return false;
+    geo._firstForced = true;
+    stats.firstPressForced = (stats.firstPressForced || 0) + 1;
+    if (geo._firstHeld) stats.firstPressHeldForced = (stats.firstPressHeldForced || 0) + 1;
+    return true;
+  }
+
+  /**
+   * Read-only snapshot of a cast-prompt loss. Deliberately does not call bubbleConfirmed():
+   * that helper updates F.bubblePrev, and logging must not change what the next tap sees.
+   * `promptChannel` is the detector channel (box/anywhere), not the CAST!/REEL! text.
+   * @param {Record<string, any> | null | undefined} b
+   * @param {number} t
+   * @param {Record<string, any> | null | undefined} [prev]
+   * @param {boolean} [cardPending]
+   */
+  function lossDiagnostics(b, t, prev, cardPending) {
+    if (!b) return { promptChannel: null, glyph: null, confirmed: false, x: null, y: null, w: null, h: null, catchCardPending: !!cardPending };
+    const p = prev || null;
+    // Same 12 px / 2 s window as bubbleConfirmed().
+    const same = !!p && Math.abs(p.x - b.cx) <= 12 && Math.abs(p.y - b.cy) <= 12 && (t - p.at) <= 2000;
+    const confirmed = b.via !== "anywhere" && b.glyph !== false && same &&
+      !(p.blockedUntil && t < p.blockedUntil) && (p.n || 0) + 1 >= 2;
+    return {
+      promptChannel: b.via === "anywhere" ? "anywhere" : "box",
+      glyph: b.glyph === true,
+      confirmed: !!confirmed,
+      x: b.cx != null ? b.cx : null,
+      y: b.cy != null ? b.cy : null,
+      w: b.w != null ? b.w : null,
+      h: b.h != null ? b.h : null,
+      catchCardPending: !!cardPending,
+    };
+  }
+
+  /**
+   * How long to wait before the next whole-surface dial recovery pass, in ms.
+   *
+   * Measured live 2026-11-02 (3.9.10): one recovery pass is a ~257k-test annulus sweep costing
+   * 250-300 ms, and it ran every 900 ms whenever nothing was locked - i.e. every second while the
+   * character simply waited for a bite. Pausing the core made the stalls disappear entirely
+   * (143.8 fps, 0 long tasks), which is how it was attributed. A wrong hint is a per-CAST problem,
+   * not a per-second one: the cadence doubles after each fruitless pass and a cast resets it.
+   * @param {number} fail
+   * @param {Record<string, any>} [o]
+   */
+  function dialFallbackWait(fail, o) {
+    const cfg = o || {};
+    const base = cfg.dialFallbackThrottleMs != null ? cfg.dialFallbackThrottleMs : 900;
+    const cap = cfg.dialFallbackMaxMs != null ? cfg.dialFallbackMaxMs : 6000;
+    const n = Math.max(0, Math.min(8, Number(fail) || 0));
+    return Math.min(cap, base * Math.pow(2, n));
+  }
+
+  /**
+   * Is this zero-press dial a fading ring rather than a fish?
+   *
+   * A real unpressed dial stays up for about 15.9 s. The narrow ghosts measured live 2026-11-03
+   * lasted only ~2.7 s and shrank from 40 to 30 deg. The old test only caught a ring that barely
+   * moved, but these drift ~35 deg while fading, so they were counted as skipped fish and
+   * re-locked. A short, narrow, shrinking dial is a ghost; a long-lived one is not.
+   * @param {Record<string, any> | null | undefined} st
+   * @param {Record<string, any>} [o]
+   */
+  function dialGhost(st, o) {
+    const s = st || {};
+    const cfg = o || {};
+    if ((Number(s.presses) || 0) > 0) return false;
+    const travel = Math.abs(Number(s.travel) || 0);
+    if (travel < (cfg.ghostTravelDeg != null ? cfg.ghostTravelDeg : 15)) return true;
+    const held = Number(s.heldMs);
+    const width = Number(s.width);
+    const shrink = Number(s.widthShrink);
+    const maxHeld = cfg.ghostMaxMs != null ? cfg.ghostMaxMs : 5000;
+    const maxWidth = cfg.ghostMaxWidthDeg != null ? cfg.ghostMaxWidthDeg : 60;
+    const minShrink = cfg.ghostMinShrinkDeg != null ? cfg.ghostMinShrinkDeg : 5;
+    return held >= 0 && held < maxHeld && width > 0 && width < maxWidth && shrink >= minShrink;
+  }
+
+  /**
+   * Is this close a stalled ring rather than a press miss or a fade?
+   *
+   * A stuck waiting-for-result ring stays up for 10-13 s after a press the game never settled, and
+   * closeDial used to score it as a miss (press older than hitMs) or a ghost (no spin measured,
+   * travel < 15). Opt-in stallDialMs names that ring instead. Narrow only: a genuinely missed wide
+   * dial reaches its 15.9 s timeout in the same shape. 0 (the default) keeps the old verdicts.
+   * @param {Record<string, any> | null | undefined} st
+   * @param {Record<string, any>} [o]
+   */
+  function dialStalled(st, o) {
+    const s = st || {};
+    const cfg = o || {};
+    const stallMs = Number(cfg.stallDialMs) || 0;
+    if (!(stallMs > 0)) return false;
+    const width = Number(s.width) || 0;
+    if (!(width > 0 && width < (cfg.ghostMaxWidthDeg || 60))) return false;   // narrow only
+    const held = Number(s.heldMs);
+    if (!(held >= stallMs)) return false;
+    const presses = Number(s.presses) || 0;
+    if (presses === 0) return !!s.ghost;          // only a fade-shaped ring can be rescued from 'ghost'
+    const since = s.sincePress;
+    return since != null && since > (cfg.hitMs || 1500);
+  }
+
+  /**
+   * A narrow ring blinks: the rim sampler loses a thin wedge for a few frames while the pin
+   * keeps turning underneath, and the bad-sample branch would call that a ghost and lose the
+   * fish (live: two 40 deg dials, spin 50-140 deg/s, zero presses, both fish gone - the 85%).
+   * A fade - the thing the ghost rule is for - sits still, so a FRESH non-zero spin estimate
+   * tells them apart. The witness is already on the lock: the sampler freezes geo._om/_mt at
+   * the last valid frame, so no new state is kept and staleness expires the hold on its own.
+   * A solved dial never reaches here (it has presses). _om is the midpoint rate; the planner
+   * uses its negation, and only the magnitude matters here.
+   * @param {Record<string, any> | null | undefined} geo
+   * @param {number} t
+   */
+  function spinAlive(geo, t) {
+    if (!geo || !(geo.width > 0 && geo.width < 60)) return false;   // narrow: the gate's own band
+    const om = geo._om;
+    if (om == null || !isFinite(om) || Math.abs(om) <= 20) return false;   // still or unmeasured
+    return (t - (geo._mt || 0)) < 1000;   // blind frames are ms-scale; then the ghost rule decides
+  }
+
+  /**
+   * Is a lock candidate the same fading circle we just ghosted? A short cooldown stops the memo
+   * and the next scan from re-locking the same ring; a real triangle at the same circle widens the
+   * arc (live: 30-40 deg ghost, 70 deg real dial), so a width jump is allowed through.
+   * @param {Record<string, any> | null | undefined} g
+   * @param {number | null | undefined} width
+   * @param {number} at
+   * @param {Record<string, any> | null | undefined} ghost
+   * @param {Record<string, any>} [o]
+   */
+  function ghostBlocked(g, width, at, ghost, o) {
+    if (!g || !ghost || !(at < ghost.until)) return false;
+    const cfg = o || {};
+    const maxPx = cfg.ghostCirclePx != null ? cfg.ghostCirclePx : 10;
+    const maxR = cfg.ghostRadiusPx != null ? cfg.ghostRadiusPx : 8;
+    const maxDw = cfg.ghostWidthDeg != null ? cfg.ghostWidthDeg : 12;
+    const dx = Math.abs(Number(g.cx) - Number(ghost.cx));
+    const dy = Math.abs(Number(g.cy) - Number(ghost.cy));
+    const dr = Math.abs(Number(g.R) - Number(ghost.R));
+    const dw = Math.abs((Number(width) || 0) - (Number(ghost.width) || 0));
+    return dx <= maxPx && dy <= maxPx && dr <= maxR && dw <= maxDw;
+  }
+
+  /**
+   * Decide what this frame should do about the dial.
+   *
+   * st: { t, delta, width, omega, armed, pendingAt }
+   *     delta  signed degrees from the wedge midpoint to the pin (0 = aligned)
+   *     armed  no press has been sent for this rotation yet
+   * o:  { trigger, midDeg, marginDeg, leadMs, biasMs, horizonMs, replanMs, minOmega }
+   *
+   * Returns { press, armAt, at, cancel, pred, win, reason }.
+   * @param {Record<string, any>} st
+   * @param {Record<string, any>} [o]
+   */
+  function planPress(st, o) {
+    const cfg = o || {};
+    const lead = (cfg.leadMs || 0) / 1000;
+    const bias = (cfg.biasMs || 0) / 1000;
+    const minOmega = cfg.minOmega != null ? cfg.minOmega : 8;          // deg/s
+    const horizon = cfg.horizonMs != null ? cfg.horizonMs : 40;
+    const replan = cfg.replanMs != null ? cfg.replanMs : 8;
+    const midDeg = cfg.midDeg != null ? cfg.midDeg : 6;
+    const margin = cfg.marginDeg != null ? cfg.marginDeg : 4;
+    const half = (st.width || 0) / 2;
+    const win = cfg.trigger === 'angle' || !half ? midDeg : Math.max(midDeg, half - margin);
+    const delta = st.delta == null ? wrap180(0 - (st.mid || 0)) : st.delta;
+    const omega = isFinite(st.omega) ? st.omega : null;
+    const pred = omega == null ? delta : wrap180(delta + omega * lead);
+    /** @type {{ delta: number, pred: number, win: number, press: boolean, armAt: number | null, at: number | null, cancel: boolean, reason: string }} */
+    const out = { delta, pred, win, press: false, armAt: null, at: null, cancel: false, reason: '' };
+
+    if (omega == null || Math.abs(omega) < minOmega) {
+      out.reason = 'static';
+      out.cancel = true;
+      out.press = !!st.armed && Math.abs(pred) <= win;
+      return out;
+    }
+
+    const degPerMs = omega / 1000;
+    const period = 360 / Math.abs(degPerMs);
+    let toJudge = -delta / degPerMs;                       // ms until midpoint reaches the pin
+    toJudge = ((toJudge % period) + period) % period;      // next occurrence, >= 0
+    const dispatchAt = st.t + toJudge - (lead + bias) * 1000;
+    const wait = dispatchAt - st.t;
+
+    if (!st.armed) {
+      out.reason = 'disarmed';
+      out.cancel = true;
+      return out;
+    }
+    const insideNowMs = cfg.insideNowMs != null ? cfg.insideNowMs : 60;
+    if (cfg.trigger !== 'angle' && st.armed && toJudge > insideNowMs &&
+        Math.abs(delta) <= win && Math.abs(pred) <= win) {
+      out.reason = 'inside-now';
+      out.cancel = true;
+      out.press = true;
+      return out;
+    }
+    if (wait <= 0) {
+      const inside = Math.abs(pred) <= win;
+      out.reason = inside ? 'now-inside' : 'now-outside';
+      out.cancel = true;
+      out.press = inside;
+      return out;
+    }
+    if (wait <= horizon) {
+      const keep = st.pendingAt != null && Math.abs(st.pendingAt - dispatchAt) <= replan;
+      out.reason = 'schedule';
+      out.at = dispatchAt;
+      out.cancel = !keep;
+      out.armAt = keep ? null : dispatchAt;
+      return out;
+    }
+    out.reason = 'wait';
+    out.cancel = true;
+    return out;
+  }
+
+  /**
+   * Next probe offset (ms) from a bias-sweep config; 0 when the sweep is off.
+   * @param {Record<string, any> | null | undefined} cfg
+   * @param {number} i
+   */
+  function sweepBias(cfg, i) {
+    if (!cfg) return 0;
+    let list = cfg.biases;
+    if (!list || !list.length) {
+      const min = cfg.min != null ? cfg.min : -60;
+      const max = cfg.max != null ? cfg.max : 60;
+      const step = cfg.step || 15;
+      list = [];
+      for (let b = min; b <= max + 1e-9; b += step) list.push(Math.round(b));
+    }
+    return list[((i % list.length) + list.length) % list.length];
+  }
+
+  /**
+   * Detect whether a newly measured wedge indicates a freshly spawned triangle after a press.
+   * @param {Record<string, any> | null | undefined} press
+   * @param {Record<string, any>} s
+   * @param {number | null | undefined} [blinks]
+   * @param {Record<string, any>} [o]
+   */
+  function newTriangle(press, s, blinks, o) {
+    if (!press) return true;                       // first press of the lock
+    const opts = o || {};
+    if ((blinks || 0) >= (opts.blinkFrames || 2)) return true;   // the ring blinked out: new spawn
+    if (press.width != null && s.width != null &&
+        Math.abs(Number(s.width) - Number(press.width)) >= (opts.widthJumpDeg || 3)) return true;
+    if (press.delta != null && s.delta != null && s.t != null && press.t != null) {
+      const dt = Math.max(0, (s.t - press.t) / 1000);
+      const predicted = Number(press.delta) + (s.omega || 0) * dt;
+      if (Math.abs(wrap180(Number(s.delta) - predicted)) > (opts.jumpDeg || 25)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * May this frame re-arm the press gate?
+   * @param {unknown} proven
+   * @param {number} presses
+   * @param {number} [max]
+   */
+  function rearmReady(proven, presses, max) {
+    return !!proven && presses < (max || 12);
+  }
+
+  /**
+   * Speed band a press is scored in.
+   * @param {number | null | undefined} omega
+   */
+  function omegaBand(omega) {
+    const a = Math.abs(omega || 0);
+    if (a < 150) return 'slow';
+    if (a < 300) return 'mid';
+    if (a < 500) return 'fast';
+    return 'blur';
+  }
+
+  /**
+   * Dial-width bands.
+   * @param {number | null | undefined} width
+   */
+  function widthBand(width) {
+    const w = Number(width);
+    if (!isFinite(w) || w <= 0) return 'unknown';
+    if (w < 60) return 'narrow';
+    if (w < 100) return 'mid';
+    if (w < 140) return 'wide';
+    return 'full';
+  }
+
+  /**
+   * Is this solid panel the catch card, or a piece of reel UI that looks like one?
+   * @param {{ w: number, ink: number } | null | undefined} m
+   * @param {Record<string, any>} [o]
+   */
+  function cardShapeOk(m, o) {
+    const cfg = o || {};
+    const minW = cfg.minW != null ? cfg.minW : 260;
+    const maxInk = cfg.maxInk != null ? cfg.maxInk : 0.3;
+    if (!m) return { card: false, why: 'none' };
+    if (!(m.w >= minW)) return { card: false, why: 'narrow' };
+    if (!(m.ink < maxInk)) return { card: false, why: 'inky' };
+    return { card: true, why: 'ok' };
+  }
+
+  /**
+   * Did the game accept that press?
+   * st: { press, s, blinks, opts, graceMs } -> { verdict: 'none'|'pending'|'accepted'|'rejected' }
+   * @param {Record<string, any> | null | undefined} st
+   */
+  function pressOutcome(st) {
+    const w = st || {};
+    if (!w.press) return { verdict: 'none' };
+    const o = w.opts || {};
+    const grace = w.graceMs != null ? w.graceMs : (o.pressGraceMs != null ? o.pressGraceMs : 250);
+    if (!w.s) return { verdict: 'pending' };
+    if (newTriangle(w.press, w.s, w.blinks, o)) return { verdict: 'accepted' };
+    if (isFinite(w.press.t) && isFinite(w.s.t) && w.s.t - w.press.t >= grace) return { verdict: 'rejected' };
+    return { verdict: 'pending' };
+  }
+
+  /**
+   * What to do on the N-th fruitless attempt to make a cast happen (N counts from 1).
+   * @param {number} n
+   */
+  function castRecovery(n) {
+    const i = Math.floor(n) || 0;
+    if (i <= 1) return { tap: true, space: false, walk: false };   // the normal path: click the bubble
+    return { tap: true, space: true, walk: false };                // click and the keybind together
+  }
+
+  /**
+   * Cumulative counters -> rates, so the perf probe reports ms/s and frame share.
+   * @param {Record<string, number>} calls
+   * @param {Record<string, number>} totals
+   * @param {number} uptimeMs
+   */
+  function perfRates(calls, totals, uptimeMs) {
+    const secs = uptimeMs > 0 ? uptimeMs / 1000 : 0;
+    /** @type {Record<string, any>} */
+    const out = {};
+    for (const key of Object.keys(totals)) {
+      const ms = totals[key] || 0;
+      const n = calls[key] || 0;
+      const msPerSec = secs ? ms / secs : null;
+      out[key] = {
+        callsPerSec: secs ? n / secs : null,
+        msPerCall: n ? ms / n : null,
+        msPerSec,
+        share: msPerSec == null ? null : msPerSec / 1000,
+      };
+    }
+    return out;
+  }
+
+  return {
+    wrap180,
+    fitOmega,
+    fitStable,
+    deltaOmega,
+    firstPressGate,
+    firstPressBudget,
+    firstPressCanMature,
+    markFirstPressForced,
+    lossDiagnostics,
+    dialFallbackWait,
+    dialGhost,
+    dialStalled,
+    spinAlive,
+    ghostBlocked,
+    planPress,
+    sweepBias,
+    newTriangle,
+    rearmReady,
+    omegaBand,
+    widthBand,
+    cardShapeOk,
+    pressOutcome,
+    castRecovery,
+    perfRates,
+  };
+});
+
+// @ts-check
+/* src/loop.js — headless per-frame loop driver and dial/press state transitions.
+ * UMD: browser global AutoFishLoop, CommonJS require('./src/loop.js').
+ */
+/**
+ * @param {any} root
+ * @param {(timing: Record<string, any>, diag: Record<string, any>) => Record<string, any>} factory
+ */
+(function (root, factory) {
+  var isNode = typeof module !== 'undefined' && module.exports;
+  var timing = isNode ? require('./timing.js') : root.AutoFishTiming;
+  var diag = isNode ? require('./diagnostics.js') : root.AutoFishDiagnostics;
+  var api = factory(timing, diag);
+  if (isNode) module.exports = api;
+  else root.AutoFishLoop = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (Timing, Diag) {
+  'use strict';
+
+  const {
+    wrap180, planPress, sweepBias, newTriangle, rearmReady, pressOutcome, castRecovery,
+    fitStable, firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced,
+    dialGhost, dialStalled, spinAlive, lossDiagnostics,
+  } = Timing;
+  const { resultMissingDue } = Diag;
+
+  /* One list, not a five-deep ternary: a new verdict has to name its counter here. */
+  /** @satisfies {Record<DialVerdict, string>} */
+  const DIAL_COUNTER = {
+    hit: 'hits', miss: 'misses', ghost: 'ghosts', skipped: 'skipped', stalled: 'stalled', 'no-press': 'noPress',
+  };
+
+  /**
+   * Apply the latest prompt sighting to an attempt without touching its loss decision. A pending
+   * loss keeps pendingLoss and every decision field; only lossDiag is replaced.
+   * @param {Record<string, any> | null | undefined} attempt
+   * @param {Record<string, any> | null | undefined} b
+   * @param {number} t
+   * @param {Record<string, any> | null | undefined} prev
+   * @param {boolean} cardPending
+   */
+  function refreshLossDiagnostic(attempt, b, t, prev, cardPending) {
+    if (!attempt) return null;
+    return (attempt.lossDiag = lossDiagnostics(b, t, prev, cardPending));
+  }
+
+  /**
+   * Drop a pending scheduled press (dial gone, pause, stop, re-plan).
+   * @param {FishCore} F
+   * @param {Partial<LoopIo>} [io]
+   */
+  function cancelPend(F, io) {
+    if (F.pend) {
+      const clearTimer = (io && io.clearTimeout) || function (/** @type {any} */ id) { clearTimeout(id); };
+      clearTimer(F.pend.id);
+      F.pend = null;
+    }
+  }
+
+  /**
+   * @param {FishCore} F
+   * @param {Record<string, any>} rec
+   */
+  function pushPressProbe(F, rec) {
+    if (!F.pressLog) F.pressLog = [];
+    F.pressLog.push(rec);
+    while (F.pressLog.length > 300) F.pressLog.shift();
+  }
+
+  /**
+   * One press's verdict, counted once. `accepted` means the game spawned a new triangle, which is
+   * the only observable a good press leaves before the fish is landed.
+   * @param {FishCore} F
+   * @param {string} verdict
+   * @param {number | null | undefined} biasMs
+   * @param {string} source
+   * @param {number} t
+   */
+  function recordPressVerdict(F, verdict, biasMs, source, t) {
+    if (verdict !== 'accepted' && verdict !== 'rejected') return;
+    if (F.pressWait) F.pressWait.verdict = verdict;
+    const src = source === 'observed' || source === 'timing' ? source : 'assumed';
+    if (!F.stats.pressVerdicts) {
+      F.stats.pressVerdicts = {
+        observed: { accepted: 0, rejected: 0 },
+        assumed: { accepted: 0, rejected: 0 },
+        timing: { accepted: 0, rejected: 0 },
+      };
+    }
+    F.stats.pressVerdicts[src][verdict]++;
+    F.stats[verdict === 'accepted' ? 'pressAccepted' : 'pressRejected']++;
+    F.dialRejected = verdict === 'rejected' ? (F.dialRejected || 0) + 1 : 0;
+    if (verdict === 'accepted') F.acceptedAt = t;
+    if (F.attempt) {
+      if (verdict === 'accepted') F.attempt.pressAccepted = (F.attempt.pressAccepted || 0) + 1;
+      else F.attempt.pressRejected = (F.attempt.pressRejected || 0) + 1;
+    }
+    const key = biasMs == null ? 0 : biasMs;
+    if (!F.sweep) F.sweep = {};
+    const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, accepted: 0, rejected: 0 });
+    cell.presses++;
+    cell[verdict]++;
+  }
+
+  /**
+   * Resolve the pending press from the sample stream: no new triangle inside the grace = rejected.
+   * @param {FishCore} F
+   * @param {Record<string, any>} s
+   * @param {number} blinks
+   * @param {number} t
+   * @param {Partial<LoopIo>} [io]
+   */
+  function settlePress(F, s, blinks, t, io) {
+    const w = F.pressWait;
+    if (!w || w.verdict) return;
+    const out = pressOutcome({ press: w.press, s, blinks, opts: F.opts });
+    if (out.verdict !== 'accepted' && out.verdict !== 'rejected') return;
+    recordPressVerdict(F, out.verdict, w.biasMs, 'observed', t);
+    const L = (io && io.log) || function () {};
+    L('press verdict', { verdict: out.verdict, biasMs: w.biasMs, width: Math.round((w.press && w.press.width) || 0) });
+    if (F.pressProbe && !F.pressProbe.via) {
+      F.pressProbe.via = 'settled';
+      F.pressProbe.verdict = out.verdict;
+      pushPressProbe(F, F.pressProbe);
+      F.pressProbe = null;
+    }
+  }
+
+  /**
+   * Start a press probe and retire the previous one the way doPress always assumed it.
+   * @param {FishCore} F
+   * @param {Record<string, any> | null | undefined} s
+   * @param {number} t
+   */
+  function probePressStart(F, s, t) {
+    const prev = F.pressProbe;
+    if (prev && !prev.via) {
+      prev.via = 'assumed';
+      prev.verdict = 'accepted';
+      pushPressProbe(F, prev);
+    }
+    const p = F.planNow || {};
+    F.pressProbe = {
+      at: t,
+      lead: F.opts.leadMs != null ? F.opts.leadMs : 25,
+      width: s && s.width != null ? Math.round(s.width) : null,
+      om: s && s.omega != null ? Math.round(s.omega) : null,
+      delta: s && s.delta != null ? +Number(s.delta).toFixed(1) : null,
+      pred: p.pred != null ? +Number(p.pred).toFixed(1) : null,
+      win: p.win != null ? +Number(p.win).toFixed(1) : null,
+      inside: (p.win != null && s && s.delta != null) ? Math.abs(Number(s.delta)) <= p.win : null,
+      via: null, verdict: null,
+      attempt: F.attempt ? F.attempt.n : null,
+      dial: F.pressesThisDial,
+    };
+  }
+
+  /**
+   * Dispatch one dial press and reset wedge rotation history for the incoming triangle spawn.
+   * @param {FishCore} F
+   * @param {Record<string, any> | null | undefined} s
+   * @param {string} how
+   * @param {number} t
+   * @param {Partial<LoopIo>} [io]
+   */
+  function doPress(F, s, how, t, io) {
+    if (!F.opts.press || !F.geo) return;
+    const L = (io && io.log) || function () {};
+    const space = (io && io.space) || function () { return false; };
+    const tap = (io && io.tap) || function () { return false; };
+    probePressStart(F, s, t);
+    const via = F.opts.pressWith === 'space' ? 'space' : 'pointer';
+    if (via === 'space') space(F.opts.spaceTarget);
+    else tap(F.geo.cx, F.geo.cy);
+    F.armed = false;
+    // The game answers a press by spawning a fresh triangle in the same widget, so the wedge
+    // jumps. Clear the rotation history AND old tracked midpoint so F.sample() accepts a >90 deg
+    // spawn on the very next frame instead of rejecting it as a tracking jump and dropping F.geo.
+    if (F.geo) {
+      if (F.geo._hist) F.geo._hist.length = 0;
+      F.geo._mid = null; F.geo._mt = null; F.geo._om = null; F.geo._fit = null;
+    }
+    F.pressStamp = s ? { delta: s.delta, width: s.width, t: s.t != null ? s.t : t } : null;
+    F.dialBlinks = 0;
+    // A second press is only possible after the re-arm gate saw a spawn, so an unresolved press
+    // here was accepted by the game even though no frame managed to settle it.
+    if (F.pressWait && !F.pressWait.verdict) recordPressVerdict(F, 'accepted', F.pressWait.biasMs, 'assumed', t);
+    F.lastPress = t;
+    F.pressWait = { press: F.pressStamp, at: F.lastPress, biasMs: (s && s.biasMs) || 0, verdict: null };
+    F.stats.presses++; F.pressesThisDial++;
+    if (F.attempt) {
+      F.attempt.presses++;
+      F.attempt.touched = F.lastPress;
+      F.attempt.pendingLoss = null;
+      const om = Math.abs((s && s.omega) || 0);
+      if (om > F.attempt.maxOmega) F.attempt.maxOmega = om;
+    }
+    F.dialLastPress = { t: F.lastPress, via, biasMs: (s && s.biasMs) || 0, omega: s && s.omega };
+    const pend = F.pend;
+    cancelPend(F, io);
+    L('PRESS', {
+      how, via,
+      delta: s ? Math.round(s.delta) : null,
+      pred: s && s.pred != null ? +s.pred.toFixed(1) : null,
+      mid: s && s.mid != null ? Math.round(s.mid) : null,
+      width: s && s.width != null ? Math.round(s.width) : null,
+      omega: s && s.omega != null ? Math.round(s.omega) : null,
+      fitRms: s && s.fit && s.fit.rms != null ? +s.fit.rms.toFixed(1) : null,
+      fitN: s && s.fit ? s.fit.n : null,
+      fitSpan: s && s.fit && s.fit.span != null ? Math.round(s.fit.span) : null,
+      lockMs: F.geoAt ? Math.round(F.lastPress - F.geoAt) : null,
+      biasMs: (s && s.biasMs) || 0,
+      dialPressN: F.pressesThisDial,
+      gate: F.pressesThisDial === 1 ? 'first' : 'new-triangle',
+      late: pend ? Math.round(t - pend.at) : null,
+    });
+  }
+
+  /**
+   * Arm a timer so the press lands BETWEEN animation frames, aimed at the computed crossing.
+   * @param {FishCore} F
+   * @param {number} at
+   * @param {GeoLock} geo
+   * @param {Record<string, any>} s
+   * @param {number} t
+   * @param {Partial<LoopIo>} [io]
+   */
+  function armPress(F, at, geo, s, t, io) {
+    cancelPend(F, io);
+    const delay = Math.max(0, at - t);
+    const setTimer = (io && io.setTimeout) || function (/** @type {() => void} */ fn, /** @type {number} */ ms) { return setTimeout(fn, ms); };
+    const id = setTimer(function () {
+      if (!F.pend || F.pend.id !== id) return;
+      F.pend = null;
+      if (!F.running || F.paused || F.geo !== geo) return;
+      const fireAt = io && io.now ? io.now() : at;
+      doPress(F, s, 'timer', fireAt, io);
+    }, delay);
+    F.pend = { id, at, geo };
+  }
+
+  /**
+   * End of a dial: classify verdict, settle unresolved press, update counters and pendingWin.
+   * @param {FishCore} F
+   * @param {number} t
+   * @param {number | null | undefined} ring
+   * @param {Partial<LoopIo>} [io]
+   */
+  function closeDial(F, t, ring, io) {
+    const L = (io && io.log) || function () {};
+    const presses = F.pressesThisDial;
+    const heldMs = Math.round(t - (F.geoAt || t));
+    const last = presses > 0 ? F.dialLastPress : null;
+    const sincePress = last ? Math.round(t - last.t) : null;
+    const width = Math.round((F.geo && F.geo.width) || 0);
+    const widths = (F.geoTrace || [])
+      .map((/** @type {any} */ r) => Number(r.w))
+      .filter((/** @type {number} */ w) => isFinite(w) && w > 0);
+    const widthShrink = widths.length > 1 ? Math.max(...widths) - Math.min(...widths) : 0;
+    const hitMs = F.opts.hitMs || 1500;
+    if (F.pressWait && !F.pressWait.verdict) {
+      recordPressVerdict(F, presses > 0 && sincePress != null && sincePress <= hitMs ? 'accepted' : 'rejected', F.pressWait.biasMs, 'timing', t);
+    }
+    F.pressWait = null;
+    const ghost = dialGhost({ presses, heldMs, width, widthShrink, travel: F.dialTravel }, F.opts);
+    const stalled = dialStalled({ presses, heldMs, sincePress, ghost, width }, F.opts);
+    const skipped = !ghost && presses === 0 && heldMs >= (F.opts.skipMs || 300);
+    /** @type {DialVerdict} */
+    const verdict = stalled ? 'stalled'
+      : ghost ? 'ghost'
+      : presses === 0 ? (skipped ? 'skipped' : 'no-press')
+      : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
+    F.stats.dialsClosed++;
+    F.stats[DIAL_COUNTER[verdict]]++;
+    if (ghost && !stalled && F.geo) {
+      F.ghostGeo = {
+        cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width,
+        until: t + (F.opts.ghostCooldownMs || 2000),
+      };
+      F.lastLockAt = 0;                       // the memo must not immediately re-lock it
+    }
+    if (F.attempt && verdict === 'hit') F.attempt.dialHits = (F.attempt.dialHits || 0) + 1;
+    if (F.attempt && verdict === 'miss') F.attempt.dialMisses = (F.attempt.dialMisses || 0) + 1;
+    if (skipped && F.attempt) F.attempt.skipped++;
+    /** @type {Record<string, any>} */
+    const rec = {
+      heldMs, presses, verdict, sincePress,
+      width,
+      omega: last && last.omega != null ? Math.round(last.omega) : null,
+      biasMs: last ? last.biasMs : null,
+      reasons: F.geoReasons || null,
+      arm: F.dialArm || null,
+      trace: F.geoReasons && !(verdict === 'hit') ? F.geoTrace.slice() : null,
+    };
+    if (F.attempt) {
+      if (!F.attempt.dialLog) F.attempt.dialLog = [];
+      if (F.geo && !F.geo._armed0 && presses === 0) F.stats.locksDisarmed = (F.stats.locksDisarmed || 0) + 1;
+      F.attempt.dialLog.push({
+        w: rec.width, om: rec.omega, p: presses, held: heldMs, armed0: !!(F.geo && F.geo._armed0), v: verdict,
+      });
+      if (F.attempt.dialLog.length > 12) F.attempt.dialLog.shift();
+    }
+    if (!F.outcomes) F.outcomes = [];
+    F.outcomes.push(rec);
+    while (F.outcomes.length > 400) F.outcomes.shift();
+    if (presses > 0) {
+      rec.closedAt = t;
+      rec.biasMs = last ? last.biasMs : null;
+      if (io && io.clearPendingWin) io.clearPendingWin();
+      else F.pendingWin = null;
+      F.pendingWin = rec;
+    }
+    L('dial gone', {
+      ring: ring == null ? null : +ring.toFixed(2),
+      presses, heldMs, verdict, sincePress, width: rec.width, omega: rec.omega,
+    });
+  }
+
+  /**
+   * Advance the bot state machine by one frame at timestamp `t`.
+   * @param {FishCore} F
+   * @param {number} t
+   * @param {Partial<LoopIo>} [io]
+   */
+  function stepFrame(F, t, io) {
+    const o = io || {};
+    const L = o.log || function () {};
+    const isVisible = o.isVisible || function () {
+      return typeof document === 'undefined' || document.visibilityState === 'visible';
+    };
+    const tap = o.tap || function () { return false; };
+    const space = o.space || function () { return false; };
+    const clearResultMissing = o.clearResultMissing || function () {};
+    const markResultMissing = o.markResultMissing || function () {};
+    const markShapeHit = o.markShapeHit || function (/** @type {number} */ at) {
+      F.stats.shapeHits = (F.stats.shapeHits || 0) + 1;
+      const rec = F.pendingWin;
+      if (!rec) return;
+      if (rec.cardMs == null && rec.closedAt != null) rec.cardMs = Math.round(at - rec.closedAt);
+      rec.shapeSeen = true;
+    };
+    const resolveAttempt = o.resolveAttempt || function () { return null; };
+    const startAttempt = o.startAttempt || function () { return null; };
+    const bubbleConfirmed = o.bubbleConfirmed || function () { return true; };
+    const noteBubbleTap = o.noteBubbleTap || function () {};
+    const sameDial = o.sameDial || function () { return false; };
+    const saveDialMemory = o.saveDialMemory || function () { return false; };
+
+    F.lastTickAt = t;                       // the watchdog's only fact: the loop got a frame
+    F.stats.frames++;
+    if (!isVisible()) { F.hidden = true; return; }
+    if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
+    if (F.paused) return;
+    if (t - F.startedAt > F.opts.maxMinutes * 60000) {
+      L('maxMinutes');
+      if (o.stop) o.stop();
+      else if (F.stop) F.stop();
+      return;
+    }
+    // 0a. an open player profile swallows inputs and hides prompts. Try Escape once in a
+    // while; the session pause (profile-open) holds the clock whether or not it lands.
+    if (o.tryEscapeProfile) o.tryEscapeProfile(t);
+    // A fish that has shown no dial and taken no press for a long time is over; the client's own
+    // timer is 15-40 s, so this only fires when the flow itself stalled (a missed re-cast).
+    if (F.attempt && F.attempt.pendingLoss && t - F.attempt.pendingLoss > (F.opts.lossGraceMs || 2500)) {
+      resolveAttempt('lost', t, 'cast prompt');
+    }
+    if (F.attempt && t - (F.attempt.touched || F.attempt.startedAt) > (F.opts.attemptIdleMs || 25000)) {
+      resolveAttempt('lost', t, 'idle');
+    }
+
+    // 0. a catch card blocks the next cast until it is tapped away. Its paper appears before its
+    // text is drawn, so the card is held open until the catch has been read - tapping on sight
+    // dismissed cards that had not printed their species yet, losing the record. Bounded, so a
+    // card that never prints text still clears.
+    const awaitingCard = !!(F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000);
+    if (!F.geo && t - (F.lastCard || 0) > 1500 && awaitingCard) {
+      const card = o.findCatch ? o.findCatch() : (F.findCatch ? F.findCatch() : null);
+      if (card) {
+        clearResultMissing('catch card');
+        markShapeHit(t);
+        F.lastCardRect = card.w && card.h
+          ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
+          : { x: card.cx - 183, y: card.cy - 203, w: 366, h: 406 };
+        const r = o.recordCatch ? o.recordCatch(card) : (F.recordCatch ? F.recordCatch(card) : 'empty');
+        if (r !== 'logged') {
+          if (F.cardWait == null) F.cardWait = t;
+          if (t - F.cardWait < 2500) { F.stats.cardWaits = (F.stats.cardWaits || 0) + 1; return; }
+          L('catch text missing', { frac: card.frac, why: F.parseWhy });
+          if (o.captureTextCursor) o.captureTextCursor();
+          else F.txtAt = o.now ? o.now() : t;
+          F.stats.textGaps = (F.stats.textGaps || 0) + 1;
+        }
+        tap(card.cx, card.cy);
+        F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0;
+        F.stats.cards = (F.stats.cards || 0) + 1;
+        L('catch card dismissed', { via: card.via, frac: card.frac, log: r });
+        return;
+      }
+    }
+
+    // 0b. A catch card that lands while the next dial is already locked used to be invisible:
+    // look for the card whenever a press is awaiting its verdict, and while it is up hold fire.
+    if (F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000 && t - (F.cardScan || 0) > 120) {
+      F.cardScan = t;
+      const c = o.findCatch ? o.findCatch() : (F.findCatch ? F.findCatch() : null);
+      if (c) {
+        clearResultMissing('catch card');
+        markShapeHit(t);
+        F.cardUntil = t + 2200;
+        F.lastCardRect = c.w && c.h
+          ? { x: c.cx - c.w / 2, y: c.cy - c.h / 2, w: c.w, h: c.h }
+          : { x: c.cx - 183, y: c.cy - 203, w: 366, h: 406 };
+        L('catch card over dial', { frac: c.frac, cx: c.cx, cy: c.cy, dial: !!F.geo });
+      }
+    }
+
+    // 1. a bubble is always the next thing to press (CAST! or REEL!, same shape)
+    const b = o.findBubble ? o.findBubble() : (F.findBubble ? F.findBubble() : null);
+    if (b) {
+      clearResultMissing('cast prompt');
+      if (F.lastBubbleAt && t - F.lastBubbleAt > (F.opts.castRungResetMs || 10000)) F.bubbleMiss = 0;
+      F.lastBubble = b; F.lastBubbleAt = t;
+      if (F.attempt) {
+        const diag = refreshLossDiagnostic(F.attempt, b, t, F.bubblePrev, awaitingCard);
+        if (!F.attempt.pendingLoss) {
+          if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
+            resolveAttempt('lost', t, 'cast prompt');
+          } else {
+            F.attempt.pendingLoss = t;
+            L('attempt loss pending', Object.assign({ n: F.attempt.n }, diag));
+          }
+        }
+      }
+      if (t - F.lastPress > F.opts.bubbleDebounceMs) {
+        const rung = (F.bubbleMiss = (F.bubbleMiss || 0) + 1);
+        F.lastRung = rung;
+        F.needsSeat = false;                                  // a prompt is up: the character is seated
+        const rec = castRecovery(rung);
+        var isBox = b.via !== 'anywhere';
+        if (isBox) {
+          F.hint = { x: b.cx, y: b.cy + 53 };
+          F.dialAnyFail = 0; F.dialAnyAt = 0;    // a cast is new evidence: recover promptly again
+        }
+        var confirmed = bubbleConfirmed(b, t);
+        var tapOk = !!(rec.tap && confirmed);
+        if (tapOk) tap(b.cx, b.cy);
+        if (tapOk) noteBubbleTap(t);
+        F.lastBubbleCause = { tap: tapOk, space: !!rec.space, glyph: b.glyph === true, at: t };
+        F.lastPress = t;
+        F.stats.bubbles++;
+        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: tapOk, space: rec.space, confirmed: confirmed, glyph: b.glyph === true, gdark: typeof b.gdark === 'number' ? b.gdark : null, gsoft: typeof b.gsoft === 'number' ? b.gsoft : null });
+        const fireSpace = () => { F.lastSpaceTry = t; space(F.opts.spaceTarget); };
+        if (rec.space) fireSpace();
+        else if (!tapOk && b.via === 'anywhere' && b.glyph === true) fireSpace();
+      }
+      return;
+    }
+
+    // 2. a locked dial: play it
+    if (F.geo) {
+      const s = o.sample ? o.sample(F.geo) : (F.sample ? F.sample(F.geo) : null);
+      if (!s || !s.valid || s.ring < 0.7) {
+        F.dialBlinks = (F.dialBlinks || 0) + 1;
+        if (++F.bad > 3) {
+          if (F.pressesThisDial > 0 && t - F.lastPress < (F.opts.relockGraceMs || 450)) return;
+          if (F.pressesThisDial === 0 && spinAlive(F.geo, t)) { F.stats.narrowHolds = (F.stats.narrowHolds || 0) + 1; return; }
+          cancelPend(F, o);
+          closeDial(F, t, s && s.ring, o);
+          F.geo = null; F.bad = 0; F.pressesThisDial = 0;
+        }
+        return;
+      }
+      F.bad = 0;
+      const pp = F.predProbe;
+      if (pp && s.t != null && s.delta != null) {
+        const dt = s.t - pp.t;
+        if (dt >= 2 && dt <= 40 && !(F.lastPress && F.lastPress > pp.t)) {
+          const predicted = wrap180(pp.delta + (pp.omega || 0) * dt / 1000);
+          const err = wrap180(Number(s.delta) - predicted);
+          if (!F.predLog) F.predLog = [];
+          F.predLog.push({ err: +err.toFixed(1), om: pp.omega != null ? Math.round(pp.omega) : null, w: Math.round(Number(s.width) || 0), dt: Math.round(dt) });
+          while (F.predLog.length > 400) F.predLog.shift();
+        }
+      }
+      F.predProbe = { t: s.t, delta: s.delta, omega: s.omega };
+      settlePress(F, s, F.dialBlinks, t, o);
+      if (s.mid != null) {
+        if (F.geo._pm != null) {
+          const dm = Math.abs(wrap180(Number(s.mid) - F.geo._pm));
+          if (dm < 180) F.geo._travel = (F.geo._travel || 0) + dm;
+        }
+        F.geo._pm = Number(s.mid);
+      }
+      if (!s.tracked) F.dialBlinks = (F.dialBlinks || 0) + 1;   // a blink after a press is how a new spawn shows
+      // Re-arm BEFORE planPress() so a newly proven triangle can press/schedule on this same frame.
+      const spawnProven = newTriangle(F.pressStamp, s, F.dialBlinks, F.opts) ||
+        (F.acceptedAt != null && t - F.acceptedAt <= (F.opts.rearmAcceptedMs || 600));
+      if (rearmReady(spawnProven, F.pressesThisDial, F.opts.maxPressPerDial || 12) &&
+          (F.dialRejected || 0) < (F.opts.maxRejectedPerDial || 5)) F.armed = true;
+      s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
+      if (F.geoReasons) F.geoReasons[F.planReason || 'none'] = (F.geoReasons[F.planReason || 'none'] || 0) + 1;
+      const plan = planPress({
+        t: s.t != null ? s.t : t,
+        delta: s.delta, width: s.width, omega: s.omega,
+        armed: F.armed && s.tracked && t - F.lastPress > (F.opts.pressGapMs || 120),
+        pendingAt: F.pend ? F.pend.at : null,
+      }, {
+        trigger: (F.armCfg && F.armCfg.trigger) || F.opts.trigger,
+        midDeg: F.armCfg && F.armCfg.midDeg != null ? F.armCfg.midDeg : F.opts.midDeg,
+        marginDeg: F.opts.marginDeg,
+        leadMs: F.opts.leadMs,
+        biasMs: s.biasMs,
+        horizonMs: F.opts.schedHorizonMs,
+        replanMs: F.opts.replanMs,
+      });
+      F.planReason = plan.reason;
+      F.planNow = { pred: plan.pred, win: plan.win };   // what the press probe compares against
+      if (s.omega != null && Math.abs(s.omega) > (F.dialMaxOmega || 0)) F.dialMaxOmega = Math.abs(s.omega);
+      if (s.delta != null) {
+        if (F.dialPrevDelta != null) F.dialTravel = (F.dialTravel || 0) + Math.abs(wrap180(Number(s.delta) - F.dialPrevDelta));
+        F.dialPrevDelta = Number(s.delta);
+      }
+      if (F.cardUntil && t < F.cardUntil) { cancelPend(F, o); return; }   // paper is on top of the dial
+      if (s.tracked) {
+        if (!F.geoTrace) F.geoTrace = [];
+        F.geoTrace.push({ t: Math.round(t - F.geoAt), d: +Number(s.delta).toFixed(1), w: Math.round(s.width || 0),
+          om: s.omega == null ? null : Math.round(s.omega), r: plan.reason });
+        if (F.geoTrace.length > 48) F.geoTrace.shift();
+      }
+      if (F.pressesThisDial === 0 && firstPressGate(s.width, s.omega, F.opts)) {
+        const stable = fitStable(s.fit, F.opts);
+        const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
+        if (!stable && firstPressCanMature(budget, F.opts)) {
+          const heldMs = t - (F.geoAt || t);
+          const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
+          if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
+          if (heldMs < budget) {
+            if (!F.geo._firstHeld) {
+              F.geo._firstHeld = true;
+              F.stats.firstPressHeld = (F.stats.firstPressHeld || 0) + 1;
+              L('first press held', {
+                width: Math.round(Number(s.width) || 0),
+                omega: s.omega == null ? null : Math.round(s.omega),
+                fitN: s.fit ? s.fit.n : 0,
+                fitSpan: s.fit ? Math.round(s.fit.span) : 0,
+                fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
+              });
+            }
+            F.planReason = 'first-fit';
+            cancelPend(F, o);
+            return;
+          }
+          if (markFirstPressForced(F.stats, F.geo)) {
+            L('first press forced', {
+              heldMs: Math.round(heldMs),
+              budget: Math.round(budget),
+              width: Math.round(Number(s.width) || 0),
+              omega: s.omega == null ? null : Math.round(s.omega),
+              fitN: s.fit ? s.fit.n : 0,
+              fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
+            });
+          }
+        }
+      }
+      if (plan.cancel) cancelPend(F, o);
+      if (plan.armAt != null) armPress(F, plan.armAt, F.geo, s, t, o);
+      if (plan.press) doPress(F, s, 'frame', t, o);
+      return;
+    }
+
+    // 3. nothing on screen: look for a dial now and then (cheap enough at ~4 Hz)
+    if (t - F.lastDialCheck > F.opts.dialCheckMs) {
+      F.lastDialCheck = t;
+      let g = o.lockDial ? o.lockDial(F.hint.x, F.hint.y) : (F.lockDial ? F.lockDial(F.hint.x, F.hint.y) : null);
+      if (!g && F.opts.dialFallbackMs && t - Math.max(F.geoAt || 0, F.startedAt) > F.opts.dialFallbackMs) {
+        g = o.dialAnywhere ? o.dialAnywhere(t) : null;
+      }
+      if (g) {
+        F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0; F.dialRejected = 0;
+        g._travel = 0; g._pm = null;
+        g._armed0 = !!F.armed;
+        F.armed = true;                            // arc travel for this lock
+        F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
+        var bc = F.lastBubbleCause, freshBc = bc && (t - bc.at) < (F.opts.castRungResetMs || 10000);
+        F.lastDialCause = { tap: !!(freshBc && bc.tap), space: !!(freshBc && bc.space), unknown: !freshBc, at: freshBc ? bc.at : 0, dialAt: t };
+        var dcCause = F.lastDialCause.unknown ? 'unknown' : (F.lastDialCause.tap && F.lastDialCause.space ? 'tap+space' : (F.lastDialCause.tap ? 'tap' : (F.lastDialCause.space ? 'space' : 'none')));
+        F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
+        F.bubblePrev = null;                                    // a dial proves the prompt was real: forget tap suspicion
+        F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
+        F.stats.dials++;
+        clearResultMissing('dial');
+        if (!F.attempt) startAttempt(t);
+        if (F.attempt) {
+          F.attempt.dials++;
+          F.attempt.touched = t;
+          F.attempt.pendingLoss = null;
+        }
+        F.needsSeat = false;                                    // a dial means the cast took
+        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt ? F.attempt.n : null, rung: F.lastRung || 0, cause: dcCause });
+        const dialW = Number(g.width) || 0;
+        if (F.attempt && dialW > 0) {
+          F.attempt.widthSum += dialW;
+          F.attempt.widthN += 1;
+          F.attempt.maxWidth = Math.max(F.attempt.maxWidth || 0, dialW);
+          F.attempt.minWidth = F.attempt.minWidth ? Math.min(F.attempt.minWidth, dialW) : dialW;
+        }
+        F.lastRung = 0;                                         // logged above: which rung did the casting
+        if (!sameDial(F.lastGeo, g)) saveDialMemory(g);       // survives the next reload
+        F.lastGeo = { cx: g.cx, cy: g.cy, R: g.R };              // the widget position for the next dial
+        F.hint = { x: g.cx, y: g.cy };                           // keep dial hint on off-center seats too
+      }
+    }
+
+    // 3b. A pressed dial that never produces a catch card or a cast prompt is the client's stuck
+    // `waiting-for-result` state, not a missed cast. Latch it before the retry block below so the
+    // normal retry and the once-a-minute seat probe both stop; a late card/prompt clears it above.
+    if (resultMissingDue(F, t)) {
+      markResultMissing(t, 'no catch card or cast prompt');
+    }
+
+    const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs &&
+      t - Math.max(F.castHoldAt || 0, F.lastCastTry || 0) > F.opts.seatHoldRetryMs);
+    if (!F.resultMissing && (!F.castHold || seatProbe) && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
+      F.lastCastTry = t;
+      F.stats.castRetries = (F.stats.castRetries || 0) + 1;
+      const tries = (F.stallRetry = (F.stallRetry || 0) + 1);
+      const consumed = !space(F.opts.spaceTarget);
+      L('cast retry', { consumed, tries, seatHold: !!F.castHold });
+    }
+
+    const seatWatch = F.opts.seatWatchdogMs;
+    if (seatWatch && !F.geo && !F.needsSeat && !F.resultMissing) {
+      const idle = t - Math.max(F.lastPress || 0, F.lastBubbleAt || 0, F.geoAt || 0, F.startedAt);
+      if (idle > seatWatch) {
+        F.needsSeat = true;
+        L('needs a seat', { idleMs: Math.round(idle), why: 'no cast prompt: sit on a waterside chair' });
+      }
+    }
+  }
+
+  return {
+    DIAL_COUNTER,
+    refreshLossDiagnostic,
+    cancelPend,
+    pushPressProbe,
+    recordPressVerdict,
+    settlePress,
+    probePressStart,
+    doPress,
+    armPress,
+    closeDial,
+    stepFrame,
+  };
+});
+
+// @ts-check
+/**
+ * lofi.town autofish v3 — continuous cast -> reel -> dial loop.
+ *
+ * Inject this whole file in the page, then:
+ *   __fish.start()                    run (Space presses the dial)
+ *   __fish.start({ press: false })    observe only, never press the dial
+ *   __fish.start({ pressWith: 'pointer' })  press the dial with a pointer click instead
+ *   __fish.status() / __fish.report() / __fish.stop()
+ *
+ * WHY THIS IS SHAPED THE WAY IT IS (everything below was measured live, see AUTOFISH.md):
+ *
+ *  - The game used to draw the world and the UI on two canvases. It has since merged both into the
+ *    Pixi/WebGL renderer canvas: the old "UI layer" canvas is completely empty, and the prompt and
+ *    the dial are painted into the renderer. Which canvas holds pixels is discovered at runtime
+ *    (surfaces()/adoptSurface()), never assumed.
+ *  - A WebGL buffer is cleared before each render, so a sample taken from requestAnimationFrame
+ *    reads blank even when the screen is full. Detection therefore runs from a wrapper around the
+ *    renderer's `render()`, immediately after the game has drawn (installPostRender()). rAF keeps
+ *    the frame clock and the stall watchdog, and samples only when no Pixi renderer is reachable.
+ *  - Scene-graph hit areas are unreliable — every node reports eventMode 'passive' with an
+ *    empty _events map — yet synthetic pointer events dispatched on the canvas do reach the
+ *    game. So the bubbles are located in pixels, not in the scene graph.
+ *  - CAST! and REEL! are the same white bubble in the same place with different text, so
+ *    the loop does not need to tell them apart: press any bubble that appears.
+ *
+ * Measured geometry at a 1620x1031 viewport (dpr 1):
+ *   bubble     white 108x50, centred (810, 358)
+ *   dial       centred (813, 407), outer radius ~91
+ *   rim        light grey, saturation <= 22, luminance 158..246, alpha > 60
+ *   pin        orange rgb(229,118,83), fixed at 0 deg = 12 oclock
+ *   disc       base rgb(142,138,111) / wedge rgb(182,188,132), wedge 45-65 degrees
+ *   rotation   ~125-140 deg/s
+ *
+ * Timing: the press is dispatched by a timer aimed at the moment the pin crosses the wedge,
+ * not by the frame that happens to see it - at 746 deg/s the whole +/-6 deg window is 16 ms,
+ * i.e. exactly one frame. Spin rate is a least-squares fit over the last ~200 ms of distinct
+ * frames (unwrapped, no deadband, no 600 deg/s clamp). The acceptance window is the measured
+ * arc minus a margin unless opts.trigger === 'angle'. Presses go through the pointer path,
+ * the one proven to reach the game; 'space' stays available for A/B tests.
+ */
+(() => {
+  if (window.__fish && window.__fish.stop) { try { window.__fish.stop(); } catch (e) {} }
+
+  /**
+   * build-userscript.js replaces 'dev' with package.json's version, so the header, __fish.version
+   * and the panel cannot disagree. Served unbundled (the bookmarklet path) it stays 'dev', which is
+   * the honest answer: that copy has no build step to stamp it.
+   * @type {FishCore}
+   */
+  const F = { version: "3.9.64" };
+  const now = () => performance.now();
+  const { doctor, wilson, runSummary, pressAcceptSummary, predictionSummary, pressVerdictReport, resultMissingDue, createResultMissing } = /** @type {any} */ (window.AutoFishDiagnostics);
+  const {
+    SPECIES, TIER_ORDER, LOG_KEY, LOG_PREFIX, tidyName, normTier, parseWeightKg, splitVariant,
+    speciesInfo, describeCatch, logDay, emptyLog, addToLog, trimLog, logSummary, unknownWorklist,
+    csvCell, logCsv, DIAL_KEY, DIAL_R_MIN, DIAL_R_MAX, dialGeoFit, sameDial, createDialMemory, createLedger,
+  } = /** @type {any} */ (window.AutoFishLedger);
+  const {
+    cssPoint, flipRows, glRowY, promptBox, seatPromptBox, floodComponents, glyphMetrics,
+    textSince, parseCard,
+  } = /** @type {any} */ (window.AutoFishVision);
+  const {
+    wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk,
+    newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressGate,
+    firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait,
+    dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics,
+  } = /** @type {any} */ (window.AutoFishTiming);
+  const {
+    cancelPend: loopCancelPend, stepFrame,
+  } = /** @type {any} */ (window.AutoFishLoop);
+  const { loadDialMemory, saveDialMemory } = createDialMemory(window, () => uiCanvas);
+  const ledgerStore = createLedger(window);
+  const { loadLedger, saveLedger, logProfiles, logKey } = ledgerStore;
+  let logProfile = 'default';
+  const _resultMissing = createResultMissing(F, function (msg, extra) { L(msg, extra); });
+  const clearResultMissing = _resultMissing.clear;
+  const markResultMissing = _resultMissing.mark;
+
+  /* ---- performance probe -------------------------------------------------
+   * Zen/Gecko pays far more for a canvas readback than Chromium does, and the only honest way to
+   * tune that is to measure it on the machine that hurts. __fish.perf() reports frame gaps and the
+   * average cost of each detector, so a change can be justified by numbers rather than a guess.
+   */
+  /** @type {FishPerf} */
+  const perf = { gaps: [], n: 0, last: 0, startedAt: 0, stoppedAt: 0, snap: 0, snapN: 0, bubble: 0, bubbleN: 0, lock: 0, lockN: 0, sample: 0, sampleN: 0, card: 0, cardN: 0, readN: 0, readGL: 0, read2d: 0, readMB: 0, allocMB: 0, snapGL: 0, snap2d: 0, ltN: 0, ltMax: 0, ltRing: [], lockMemo: 0, lockMemoN: 0, lockMemoSkipped: 0, lockMemoCold: 0, lockGrab: 0, lockMask: 0, lockScan: 0, lockRefine: 0 };
+  /* lockDial is one timer around five different kinds of work - a remembered circle, a GPU readback,
+   * a rim mask, a 4,950-circle scan and the 40-sample refinement - and the sum of the parts that had
+   * been measured separately (readback 7-9 ms, mask 0.38 ms, coarse scan 0.75 ms) did not reach the
+   * 35-44 ms a call the live probe reported. These five phases split the call itself so the missing
+   * time names itself instead of being inferred. */
+  /** How often the remembered circle may cost a readback. 500 ms still answers a stale hint well
+   *  inside a reel (the dial persists across presses) at a third of the old read count. */
+  /**
+   * Long tasks, counted from outside the loop.
+   *
+   * The bot can see its own detector cost but not a stall it did not cause - and a 250 ms block
+   * inside render() looks exactly like a 250 ms block from anywhere else. PerformanceObserver is
+   * the cheapest honest witness: no readback, no timer, no allocation per entry beyond the ring.
+   * 3.9.11's once-a-second stall was invisible for a day because nothing counted this.
+   */
+  /** @type {PerformanceObserver | null} */
+  let ltObs = null;
+  function watchLongTasks() {
+    if (ltObs || typeof PerformanceObserver === 'undefined') return;
+    try {
+      ltObs = new PerformanceObserver(function (list) {
+        const at = now();
+        const entries = list.getEntries();
+        for (const e of entries) {
+          perf.ltN++;
+          if (e.duration > perf.ltMax) perf.ltMax = e.duration;
+          perf.ltRing.push({ t: at, ms: e.duration });
+          if (perf.ltRing.length > 24) perf.ltRing.shift();
+        }
+      });
+      ltObs.observe({ entryTypes: ['longtask'] });
+    } catch (e) { ltObs = null; }
+  }
+
+  const MEMO_EVERY_MS = 500;
+  /** The remembered circle can only help while a dial is actually on screen: it caches the last
+   *  circle, and between dials there is nothing at that spot to verify. So an attempt also needs a
+   *  dial to have been locked inside this window - a readback that can only fail is pure cost. */
+  const MEMO_RECENT_MS = 2000;
+  function resetPerf() {
+    perf.gaps.length = 0; perf.n = 0; perf.last = 0; perf.startedAt = now(); perf.stoppedAt = 0;
+    perf.snap = 0; perf.snapN = 0; perf.bubble = 0; perf.bubbleN = 0;
+    perf.lock = 0; perf.lockN = 0; perf.sample = 0; perf.sampleN = 0;
+    perf.card = 0; perf.cardN = 0;
+    perf.readN = 0; perf.readGL = 0; perf.read2d = 0; perf.readMB = 0; perf.allocMB = 0;
+    perf.snapGL = 0; perf.snap2d = 0;
+    perf.ltN = 0; perf.ltMax = 0; perf.ltRing.length = 0;
+    perf.lockMemo = 0; perf.lockMemoN = 0; perf.lockMemoSkipped = 0; perf.lockMemoCold = 0; perf.lockGrab = 0; perf.lockMask = 0; perf.lockScan = 0; perf.lockRefine = 0;
+  }
+
+  /* ---- timing core -----------------------------------------------------
+   * Pure functions, no DOM and no state. tests/timing.test.js extracts this block by its
+   * sentinels and runs it under node, so the maths is tested once and shipped once.
+   */
+  /* Timing math lives in src/timing.js (AutoFishTiming). */
+
+  /* refreshLossDiagnostic lives in src/loop.js (AutoFishLoop). */
+
+  /* ---- doctor ----------------------------------------------------------
+   * One verdict about why fishing is or is not happening, from state the bot already collects:
+   * no DOM, no timers, no reads. tests/doctor.test.js feeds it the states this project has actually
+   * been in, so the classes that each cost a live debugging session are named instead of inferred.
+   */
+
+  /* ---- run statistics --------------------------------------------------
+   * The numbers a long session has to produce: a catch rate with an interval, the press acceptance,
+   * and the per-band split. Pure, so tests can check them against intervals this repo has already
+   * published instead of trusting the arithmetic that quotes them.
+   */
+
+  /* ---- coordinate frame ------------------------------------------------
+   * Everything the detectors see is in the UI canvas's backing-store pixels. Everything the DOM
+   * does - elementFromPoint, PointerEvent, the panel's exclusion rect - is in CSS pixels. Those
+   * are the same only while the canvas is 1:1 with its CSS box, which is true at the dpr the game
+   * was measured at and is not something to keep assuming silently.
+   */
+  /* cssPoint lives in src/vision.js (AutoFishVision). */
+
+  /* ---- dial memory ------------------------------------------------------
+   * The reel widget sits in one place for a whole session, so its circle is worth remembering: a
+   * fresh start has no prompt to learn it from, and the old seed was a literal point measured at
+   * one viewport. It is stored with the canvas size it was measured at, because the widget's place
+   * in the UI layer scales with the canvas, not with the window's CSS size.
+   */
+
+  /* ---- catch log --------------------------------------------------------
+   * A durable, server-free record of every parsed catch. The data helpers in the block below are
+   * pure (no DOM, no storage), so tests/catchlog.test.js pulls them out under node; the browser
+   * storage calls sit underneath.
+   *
+   * Why a catalogue: the catch card prints a rarity word only for non-common fish, so commons
+   * arrive blank. The game ships its own fish table (name, tier, weight range, gold), extracted
+   * by scripts/gen-catalogue.js - a lookup, never a pixel guess.
+   */
 
   /* ------------------------------------------------------------- log ----- */
   F.events = [];
@@ -1633,25 +2690,7 @@ const SPECIES = [
   }
 
   /* --------------------------------------------------------- readback ----- */
-  // <readback-core>
-  /**
-   * readPixels hands back the framebuffer bottom-up, while every detector indexes a read
-   * top-down from the x/y it asked for. Reverse the rows in place; `row` is supplied by the
-   * caller so the flip does not allocate a buffer per read.
-   */
-  function flipRows(d, w, h, row) {
-    const stride = w * 4;
-    for (let top = 0, bot = h - 1; top < bot; top++, bot--) {
-      const a = top * stride, b = bot * stride;
-      row.set(d.subarray(a, a + stride));
-      d.set(d.subarray(b, b + stride), a);
-      d.set(row.subarray(0, stride), b);
-    }
-    return d;
-  }
-  /** GL's origin is bottom-left: the top-down row `y` starts at this framebuffer row. */
-  function glRowY(bh, y, h) { return bh - (y + h); }
-  // </readback-core>
+  /* flipRows and glRowY live in src/vision.js (AutoFishVision). */
 
   /** @type {HTMLCanvasElement | null} */
   let glCanvasRef = null;
@@ -1795,39 +2834,7 @@ const SPECIES = [
                     && c[2] < 135 && c[0] - c[1] > 55;
 
   /* --------------------------------------------------------- bubbles ----- */
-  // <prompt-box>
-  /**
-   * The CAST!/REEL! box was measured on a 1620x1031 surface. Read as a fixed rectangle it only
-   * fits that size: the bubble floats above the play area and moves with the viewport, so in a
-   * smaller window the boxed scan misses and every prompt pays a whole-surface pass. The box is
-   * therefore a fraction of the LIVE surface, keeping the measured placement and aspect. The
-   * minimum size keeps room for the bubble itself (108x50 at the reference size), which does not
-   * shrink with the window, and every result is clamped inside the surface.
-   */
-  const BUBBLE_BOX_REF = { x: 690, y: 215, w: 360, h: 210, cw: 1620, ch: 1031 };
-  const BUBBLE_BOX_MIN_W = 260, BUBBLE_BOX_MIN_H = 150;
-  function promptBox(cw, ch) {
-    const W = Math.max(1, Math.round(cw || BUBBLE_BOX_REF.cw));
-    const H = Math.max(1, Math.round(ch || BUBBLE_BOX_REF.ch));
-    const sx = W / BUBBLE_BOX_REF.cw, sy = H / BUBBLE_BOX_REF.ch;
-    const w = Math.min(W, Math.max(BUBBLE_BOX_MIN_W, Math.round(BUBBLE_BOX_REF.w * sx)));
-    const h = Math.min(H, Math.max(BUBBLE_BOX_MIN_H, Math.round(BUBBLE_BOX_REF.h * sy)));
-    const x = Math.max(0, Math.min(W - w, Math.round(BUBBLE_BOX_REF.x * sx)));
-    const y = Math.max(0, Math.min(H - h, Math.round(BUBBLE_BOX_REF.y * sy)));
-    return { x, y, w, h };
-  }
-  // </prompt-box>
-  /** Off-center pier seats render their prompt at (cx, cy - 53) above the locked dial. */
-  function seatPromptBox(geo, cw, ch) {
-    if (!geo || !isFinite(geo.cx) || !isFinite(geo.cy)) return null;
-    const W = Math.max(1, Math.round(cw || BUBBLE_BOX_REF.cw));
-    const H = Math.max(1, Math.round(ch || BUBBLE_BOX_REF.ch));
-    const w = Math.min(W, BUBBLE_BOX_MIN_W);
-    const h = Math.min(H, BUBBLE_BOX_MIN_H);
-    const x = Math.max(0, Math.min(W - w, Math.round(geo.cx - w / 2)));
-    const y = Math.max(0, Math.min(H - h, Math.round((geo.cy - 53) - h / 2)));
-    return { x, y, w, h };
-  }
+  /* promptBox and seatPromptBox live in src/vision.js (AutoFishVision). */
   function bubbleInBox() {
     const scanRect = (r) => {
       if (!r) return null;
@@ -2083,50 +3090,7 @@ const SPECIES = [
    */
   const WHT_S = (d, i) => d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225;
 
-  // <scan-core>
-  const near4 = new Int32Array(4);
-
-  /**
-   * 4-connected components over an RGBA buffer: bbox and pixel count per blob.
-   *
-   * Pure on purpose (buffer + scratch in, components out) so the flood fill can be tested on a
-   * hand-built image. `seen` is supplied because the caller reuses one scratch buffer: this runs
-   * on every shared scan tick, and a fresh 108 KB Uint8Array per call is pure garbage pressure.
-   */
-  function floodComponents(w, h, d, match, minPx, seen) {
-    const total = w * h;
-    seen.fill(0);
-    const out = [];
-    for (let p0 = 0; p0 < total; p0++) {
-      if (seen[p0] || !match(d, p0 * 4)) continue;
-      const stack = [p0];
-      seen[p0] = 1;
-      let x0 = w, y0 = h, x1 = 0, y1 = 0, count = 0;
-      while (stack.length) {
-        const p = stack.pop();
-        if (p === undefined) continue;
-        const x = p % w, y = (p / w) | 0;
-        count++;
-        if (x < x0) x0 = x;
-        if (x > x1) x1 = x;
-        if (y < y0) y0 = y;
-        if (y > y1) y1 = y;
-        near4[0] = x > 0 ? p - 1 : -1;
-        near4[1] = x < w - 1 ? p + 1 : -1;
-        near4[2] = y > 0 ? p - w : -1;
-        near4[3] = y < h - 1 ? p + w : -1;
-        for (let k = 0; k < 4; k++) {
-          const q = near4[k];
-          if (q < 0 || seen[q] || !match(d, q * 4)) continue;
-          seen[q] = 1;
-          stack.push(q);
-        }
-      }
-      if (count >= minPx) out.push({ x0, y0, x1, y1, count });
-    }
-    return out;
-  }
-  // </scan-core>
+  /* floodComponents lives in src/vision.js (AutoFishVision). */
 
   /** @type {Uint8Array | null} */
   let seenBuf = null;
@@ -2193,38 +3157,7 @@ const SPECIES = [
    * The order is the point: the shared snapshot answers "is there anything there" for free, and
    * only a yes buys the full-resolution read that refines the centre.
    */
-  // <glyph-core>
-  /*
-   * Prompt glyphs, read off the buffer bubbleInBox already holds - no second readback.
-   * Measured live against real captures (3.9.33 calibration): the prompt's 3-line text is
-   * SOFT (translucent grey, alpha 40-120: 17% of the inset, ~0 opaque-dark cells), while a
-   * name tag's text is OPAQUE dark (26.5% at alpha>120, lum<100). The old tall-run model was
-   * built for opaque caps that do not exist, so the gate is inverted: a boxed blob may tap
-   * unless it carries opaque-dark text. The inset ignores the bubble's own outline.
-   * Measured margins: prompt 0.002, blank pre-text frames 0.004, tag 0.265 - the 0.05 line
-   * stands 10x off both sides. Fail direction is unchanged (a refused prompt still fishes
-   * on the Space rung; a tapped tag opens a profile and stalls the run).
-   */
-  var GLYPH_OPAQUE_MAX = 0.05; // opaque-dark share above this is tag text, never prompt text
-  function glyphMetrics(d, w, s, e, y0, y1) {
-    var m = { ok: false, dark: 0, soft: 0 };
-    var x0 = s + 2, x1 = e - 2, t0 = y0 + 2, t1 = y1 - 2;
-    if (x1 <= x0 || t1 <= t0) return m;
-    var area = (x1 - x0) * (t1 - t0), dark = 0, soft = 0;
-    var stride = (w - (x1 - x0)) * 4;   // consumed inset plus the untouched right margin
-    for (var y = t0, i = (t0 * w + x0) * 4; y < t1; y++, i += stride) {
-      for (var xx = x0; xx < x1; xx++, i += 4) {
-        var l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-        if (d[i + 3] > 120 && l < 100) dark++;
-        else if (d[i + 3] > 40 && l < 160) soft++;
-      }
-    }
-    m.dark = dark / area;
-    m.soft = soft / area;
-    m.ok = m.dark <= GLYPH_OPAQUE_MAX;
-    return m;
-  }
-  // </glyph-core>
+  /* glyphMetrics lives in src/vision.js (AutoFishVision). */
 
   /* ---- nearby-player guard -------------------------------------------------
    * A nearby player's name tag is the same white-with-dark-text shape one size
@@ -2499,77 +3432,7 @@ const SPECIES = [
     return buf;
   }
 
-  // <card-text>
-  const WEIGHT = /^\d+(?:\.\d+)?\s?(?:kg|g|t|lb)$/i;
-  const MONEY = /^\$\s?\d[\d,]*(?:\.\d+)?$/;
-  // Species names are not ASCII: the game prints `Moʻo` (U+02BB) and uses `?` in legendary
-  // names such as `A Penguin?` and `Mermaid?`. Requiring letters/marks (rather than A-Z) and the
-  // punctuation the card actually draws keeps those names from being consumed as the rarity word.
-  const WORD = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}'’ʻ&?!.:()\- ]*$/u;
-
-  /** Card strings drawn after `since`, minus the bubbles and the digit-at-a-time date. */
-  function textSince(buf, since) {
-    const raw = [];
-    for (const e of buf) {
-      if (!e || e.t <= since) continue;
-      const s = String(e.s).trim();
-      // Only the exact bubble labels are not card text. Dropping every string containing `!`
-      // silently discarded any future species name with punctuation.
-      if (!s || /^(cast|reel|bite)!?$/i.test(s)) continue;
-      // The date is drawn one digit at a time. Keep a one-letter species word (`A`), but drop
-      // bare digits and punctuation fragments.
-      if (s.length < 2 && !/^\$/.test(s) && !/^\p{L}$/u.test(s)) continue;
-      raw.push(s);
-    }
-    return raw;
-  }
-
-  /**
-   * Read one card's strings. Card order is species, [rarity], weight, quality, value, then the
-   * catch date drawn digit by digit. Rarity is printed only on non-common fish, so the slot is
-   * resolved by position around the weight instead of by a list of tier names.
-   *
-   * `isKnown(name)` is the catalogue lookup. A long name is drawn in pieces when the card wraps it
-   * (`Yellowstripe` + `Goatfish`, `Rocks with` + `Mussels`), so the leading pieces are joined and
-   * the longest joined name the catalogue knows wins. Without a lookup the old single-word read is
-   * kept, which is what the pure tests use.
-   */
-  function parseCard(raw, isTier, isKnown) {
-    if (!raw.length) return { why: 'empty' };                  // nothing drawn since the cursor: already logged
-    const wI = raw.findIndex((s) => WEIGHT.test(s));
-    const vI = raw.findIndex((s) => MONEY.test(s));
-    if (vI < 0) return { why: 'noprice' };                     // every card prints its price
-    const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? raw[wI] : '', value: raw[vI], raw };
-    const words = [];
-    for (let i = 0; i < vI; i++) {
-      // A weight or price can also satisfy the broad word pattern; they are values, not names.
-      if (WEIGHT.test(raw[i]) || MONEY.test(raw[i])) continue;
-      if (WORD.test(raw[i])) words.push([i, raw[i]]);
-    }
-    if (!words.length) return { why: 'nowords' };
-    let used = 1;
-    rec.species = words[0][1];
-    if (typeof isKnown === 'function') {
-      const pre = words.filter(([i]) => wI < 0 || i < wI);
-      for (let n = pre.length; n > 1; n--) {
-        const name = pre.slice(0, n).map(([, s]) => s).join(' ');
-        if (isKnown(name)) { rec.species = name; used = n; break; }
-      }
-    }
-    // The slot before the weight holds the rarity on a non-common fish and the quality on a common
-    // one: 'Whale Shark | Epic | 26.6t | Impressive' versus 'Lobster | Impressive | 3.36kg'. The
-    // tier list is the only thing that separates them, so the caller supplies it; without one the
-    // word is treated as quality, which is what the common layout needs.
-    const tier = typeof isTier === 'function' ? isTier : () => false;
-    for (let k = used; k < words.length; k++) {
-      const [i, s] = words[k];
-      if (wI >= 0 && i > wI) { if (!rec.quality) rec.quality = s; }
-      else if (tier(s)) { if (!rec.rarity) rec.rarity = s; }
-      else if (!rec.quality) rec.quality = s;
-    }
-    return { why: 'ok', rec };
-  }
-  // </card-text>
+  /* textSince and parseCard live in src/vision.js (AutoFishVision). */
 
   F.parseCatch = function () {
     const out = parseCard(textSince(hookText(), F.txtAt || 0), normTier, function (name) {
@@ -3097,250 +3960,9 @@ const SPECIES = [
   };
 
   /* ------------------------------------------------------- pressing ----- */
-  /** Drop a pending scheduled press (dial gone, pause, stop, re-plan). */
+  /* Dial/press state transitions and stepFrame live in src/loop.js (AutoFishLoop). */
   function cancelPend() {
-    if (F.pend) { clearTimeout(F.pend.id); F.pend = null; }
-  }
-
-  /**
-   * Arm a timer so the press lands BETWEEN animation frames, aimed at the computed crossing.
-   * The frame loop re-evaluates every 16 ms and cancels/re-aims this, so a wrong prediction
-   * never survives more than one frame.
-   */
-  function armPress(at, geo, s) {
-    cancelPend();
-    const delay = Math.max(0, at - now());
-    const id = setTimeout(() => {
-      if (!F.pend || F.pend.id !== id) return;
-      F.pend = null;
-      if (!F.running || F.paused || F.geo !== geo) return;
-      doPress(s, 'timer');
-    }, delay);
-    F.pend = { id, at, geo };
-  }
-
-  /**
-   * One press's verdict, counted once. `accepted` means the game spawned a new triangle, which is
-   * the only observable a good press leaves before the fish is landed. The sweep is keyed by the
-   * probe offset, so it now measures presses rather than dial closures.
-   */
-  function recordPressVerdict(verdict, biasMs, source) {
-    if (verdict !== 'accepted' && verdict !== 'rejected') return;
-    if (F.pressWait) F.pressWait.verdict = verdict;
-    // The counters below are kept for compatibility; the split is what can honestly be quoted.
-    const src = source === 'observed' || source === 'timing' ? source : 'assumed';
-    if (!F.stats.pressVerdicts) {
-      F.stats.pressVerdicts = {
-        observed: { accepted: 0, rejected: 0 },
-        assumed: { accepted: 0, rejected: 0 },
-        timing: { accepted: 0, rejected: 0 },
-      };
-    }
-    F.stats.pressVerdicts[src][verdict]++;
-    F.stats[verdict === 'accepted' ? 'pressAccepted' : 'pressRejected']++;
-    F.dialRejected = verdict === 'rejected' ? (F.dialRejected || 0) + 1 : 0;
-    // The game spawning a new triangle is the proof newTriangle() tries to read from geometry;
-    // when an accepted press cannot be seen that way on a narrow dial, this timestamp is what
-    // lets the next rotation be pressed instead of skipped.
-    if (verdict === 'accepted') F.acceptedAt = now();
-    // Per fish, so a narrow dial has a denominator. `accepted` is the game spawning a fresh
-    // triangle, i.e. the press landed inside the wedge; an unresolved press is neither.
-    if (F.attempt) {
-      if (verdict === 'accepted') F.attempt.pressAccepted = (F.attempt.pressAccepted || 0) + 1;
-      else F.attempt.pressRejected = (F.attempt.pressRejected || 0) + 1;
-    }
-    const key = biasMs == null ? 0 : biasMs;
-    const cell = F.sweep[key] || (F.sweep[key] = { biasMs: key, presses: 0, accepted: 0, rejected: 0 });
-    cell.presses++;
-    cell[verdict]++;
-  }
-
-  /** Resolve the pending press from the sample stream: no new triangle inside the grace = rejected. */
-  function settlePress(s, blinks) {
-    const w = F.pressWait;
-    if (!w || w.verdict) return;
-    const out = pressOutcome({ press: w.press, s, blinks, opts: F.opts });
-    if (out.verdict !== 'accepted' && out.verdict !== 'rejected') return;
-    recordPressVerdict(out.verdict, w.biasMs, 'observed');
-    L('press verdict', { verdict: out.verdict, biasMs: w.biasMs, width: Math.round((w.press && w.press.width) || 0) });
-    if (F.pressProbe && !F.pressProbe.via) {
-      F.pressProbe.via = 'settled';
-      F.pressProbe.verdict = out.verdict;
-      pushPressProbe(F.pressProbe);
-      F.pressProbe = null;
-    }
-  }
-
-  /** Start a press probe and retire the previous one the way doPress always assumed it. */
-  function probePressStart(s) {
-    const prev = F.pressProbe;
-    if (prev && !prev.via) {
-      prev.via = 'assumed';
-      prev.verdict = 'accepted';
-      pushPressProbe(prev);
-    }
-    const p = F.planNow || {};
-    F.pressProbe = {
-      at: now(),
-      lead: F.opts.leadMs != null ? F.opts.leadMs : 25,
-      width: s && s.width != null ? Math.round(s.width) : null,
-      om: s && s.omega != null ? Math.round(s.omega) : null,
-      delta: s && s.delta != null ? +Number(s.delta).toFixed(1) : null,
-      pred: p.pred != null ? +Number(p.pred).toFixed(1) : null,
-      win: p.win != null ? +Number(p.win).toFixed(1) : null,
-      inside: (p.win != null && s && s.delta != null) ? Math.abs(Number(s.delta)) <= p.win : null,
-      via: null, verdict: null,
-      attempt: F.attempt ? F.attempt.n : null,
-      dial: F.pressesThisDial,
-    };
-  }
-
-  function pushPressProbe(rec) {
-    F.pressLog.push(rec);
-    while (F.pressLog.length > 300) F.pressLog.shift();
-  }
-
-  function doPress(s, how) {
-    if (!F.opts.press || !F.geo) return;
-    probePressStart(s);
-    const via = F.opts.pressWith === 'space' ? 'space' : 'pointer';
-    if (via === 'space') space(F.opts.spaceTarget);
-    else tap(F.geo.cx, F.geo.cy);
-    F.armed = false;
-    // The game answers a press by spawning a fresh triangle in the same widget, so the wedge
-    // jumps. Clear the rotation history AND old tracked midpoint so F.sample() accepts a >90 deg
-    // spawn on the very next frame instead of rejecting it as a tracking jump and dropping F.geo.
-    if (F.geo) {
-      if (F.geo._hist) F.geo._hist.length = 0;
-      F.geo._mid = null; F.geo._mt = null; F.geo._om = null; F.geo._fit = null;
-    }
-    F.pressStamp = s ? { delta: s.delta, width: s.width, t: s.t != null ? s.t : now() } : null;
-    F.dialBlinks = 0;
-    // A second press is only possible after the re-arm gate saw a spawn, so an unresolved press
-    // here was accepted by the game even though no frame managed to settle it.
-    if (F.pressWait && !F.pressWait.verdict) recordPressVerdict('accepted', F.pressWait.biasMs, 'assumed');
-    F.lastPress = now();
-    F.pressWait = { press: F.pressStamp, at: F.lastPress, biasMs: (s && s.biasMs) || 0, verdict: null };
-    F.stats.presses++; F.pressesThisDial++;
-    if (F.attempt) {
-      F.attempt.presses++;
-      F.attempt.touched = F.lastPress;
-      F.attempt.pendingLoss = null;
-      const om = Math.abs((s && s.omega) || 0);
-      if (om > F.attempt.maxOmega) F.attempt.maxOmega = om;
-    }
-    F.dialLastPress = { t: F.lastPress, via, biasMs: (s && s.biasMs) || 0, omega: s && s.omega };
-    const pend = F.pend;
-    cancelPend();
-    L('PRESS', {
-      how, via,
-      delta: s ? Math.round(s.delta) : null,
-      pred: s ? +s.pred.toFixed(1) : null,
-      mid: s ? Math.round(s.mid) : null,
-      width: s ? Math.round(s.width) : null,
-      omega: s && s.omega != null ? Math.round(s.omega) : null,
-      fitRms: s && s.fit ? +s.fit.rms.toFixed(1) : null,
-      fitN: s && s.fit ? s.fit.n : null,
-      fitSpan: s && s.fit ? Math.round(s.fit.span) : null,
-      lockMs: F.geoAt ? Math.round(F.lastPress - F.geoAt) : null,
-      biasMs: (s && s.biasMs) || 0,
-      dialPressN: F.pressesThisDial,
-      gate: F.pressesThisDial === 1 ? 'first' : 'new-triangle',
-      late: pend ? Math.round(now() - pend.at) : null,
-    });
-  }
-
-  /* One list, not a five-deep ternary: a new verdict has to name its counter here. */
-  /** @satisfies {Record<DialVerdict, string>} */
-  const DIAL_COUNTER = {
-    hit: 'hits', miss: 'misses', ghost: 'ghosts', skipped: 'skipped', stalled: 'stalled', 'no-press': 'noPress',
-  };
-
-  /**
-   * End of a dial. A press the game acts on ends the dial within ~1.5 s; a press that misses
-   * leaves it spinning to its ~15.9 s timeout, and an unpressed dial just times out. That is
-   * the only hit/miss signal available, so it is what the counters and the sweep score.
-   */
-  function closeDial(t, ring) {
-    const presses = F.pressesThisDial;
-    const heldMs = Math.round(t - (F.geoAt || t));
-    // A zero-press dial has no current press; the previous dial's stamp is not evidence for it.
-    const last = presses > 0 ? F.dialLastPress : null;
-    const sincePress = last ? Math.round(t - last.t) : null;
-    const width = Math.round((F.geo && F.geo.width) || 0);
-    const widths = (F.geoTrace || [])
-      .map((r) => Number(r.w))
-      .filter((w) => isFinite(w) && w > 0);
-    const widthShrink = widths.length > 1 ? Math.max(...widths) - Math.min(...widths) : 0;
-    const hitMs = F.opts.hitMs || 1500;
-    // The dial is gone. A press still unresolved either ended the fish (accepted) or did nothing;
-    // the dial's own verdict below is about the DIAL, not about how accurate the press was.
-    if (F.pressWait && !F.pressWait.verdict) {
-      recordPressVerdict(presses > 0 && sincePress != null && sincePress <= hitMs ? 'accepted' : 'rejected', F.pressWait.biasMs, 'timing');
-    }
-    F.pressWait = null;
-    // A dial the bot never pressed that stayed up long enough to be real is a LOST FISH, not the
-    // ring fading after a solved one: those fade in ~100 ms.
-    // A locked ring that never rotated is the fade-out of a solved dial or a ripple, not a fish:
-    // its wedge sits still (omega 0) and no press is ever due. Count it apart so the loss tally
-    // stays honest.
-    const ghost = dialGhost({ presses, heldMs, width, widthShrink, travel: F.dialTravel }, F.opts);
-    const stalled = dialStalled({ presses, heldMs, sincePress, ghost, width }, F.opts);
-    const skipped = !ghost && presses === 0 && heldMs >= (F.opts.skipMs || 300);
-    const verdict = stalled ? 'stalled'
-      : ghost ? 'ghost'
-      : presses === 0 ? (skipped ? 'skipped' : 'no-press')
-      : (sincePress != null && sincePress <= hitMs ? 'hit' : 'miss');
-    F.stats.dialsClosed++;
-    F.stats[DIAL_COUNTER[verdict]]++;
-    if (ghost && !stalled && F.geo) {
-      F.ghostGeo = {
-        cx: F.geo.cx, cy: F.geo.cy, R: F.geo.R, width,
-        until: t + (F.opts.ghostCooldownMs || 2000),
-      };
-      F.lastLockAt = 0;                       // the memo must not immediately re-lock it
-    }
-    if (F.attempt && verdict === 'hit') F.attempt.dialHits = (F.attempt.dialHits || 0) + 1;
-    if (F.attempt && verdict === 'miss') F.attempt.dialMisses = (F.attempt.dialMisses || 0) + 1;
-    if (skipped && F.attempt) F.attempt.skipped++;
-    const rec = {
-      heldMs, presses, verdict, sincePress,
-      width,
-      omega: last && last.omega != null ? Math.round(last.omega) : null,
-      biasMs: last ? last.biasMs : null,
-      reasons: F.geoReasons || null,
-      arm: F.dialArm || null,
-      trace: F.geoReasons && !(verdict === 'hit') ? F.geoTrace.slice() : null,
-    };
-    // Per-dial detail on the attempt: "dial locked, never pressed" was visible only as a total
-    // before, and a narrow dial is exactly where that costs a fish.
-    if (F.attempt) {
-      if (!F.attempt.dialLog) F.attempt.dialLog = [];
-      // Only the expensive case: it arrived shut AND the dial died unpressed. Arriving shut is
-      // normal after a press now that the gate is opened at every lock (measured 2026-11-02: 174 of
-      // 177 dials arrive shut, and almost all of them get pressed).
-      if (F.geo && !F.geo._armed0 && presses === 0) F.stats.locksDisarmed = (F.stats.locksDisarmed || 0) + 1;
-      F.attempt.dialLog.push({
-        w: rec.width, om: rec.omega, p: presses, held: heldMs, armed0: !!(F.geo && F.geo._armed0), v: verdict,
-      });
-      if (F.attempt.dialLog.length > 12) F.attempt.dialLog.shift();
-    }
-    F.outcomes.push(rec);
-    while (F.outcomes.length > 400) F.outcomes.shift();
-    // A press is NOT a fish. The game grows its level bar to 100 over several triangles, so a press
-    // that pays out no card immediately is the normal case - scoring it a loss is what turned five
-    // healthy presses of one Flounder into five failures. Keep the press only as the record that a
-    // following catch stamps with its card delay, and let the fish attempt decide the outcome.
-    if (presses > 0) {
-      rec.closedAt = t;
-      rec.biasMs = last ? last.biasMs : null;
-      clearPendingWin();
-      F.pendingWin = rec;
-    }
-    L('dial gone', {
-      ring: ring == null ? null : +ring.toFixed(2),
-      presses, heldMs, verdict, sincePress, width: rec.width, omega: rec.omega,
-    });
+    loopCancelPend(F, loopIo);
   }
 
   /**
@@ -3350,50 +3972,6 @@ const SPECIES = [
    * keep pressing Space forever. Latch the missing result instead; only a fresh Start (after the
    * tab is reloaded) or a late card/prompt clears it. The game itself is never touched.
    */
-  // <result-missing-core>
-  /**
-   * Pure check for the client's stuck `waiting-for-result` state. A hit dial that is followed by
-   * neither a catch card nor a cast prompt is the win-shaped case; a miss or a dial whose card was
-   * already seen is a normal lost/landing fish and must not pause the session.
-   */
-  function resultMissingDue(f, t) {
-    const p = f && f.pendingWin;
-    const a = f && f.attempt;
-    if (!f || f.resultMissing || f.geo || !p || !a) return false;
-    if (p.verdict !== 'hit' || p.shapeSeen || p.landed || p.closedAt == null) return false;
-    // Keep the attempt guard: a pending win from the previous fish must not fire while the next
-    // attempt has not had a dial hit of its own yet.
-    if (!(a.presses > 0 && a.dialHits > 0)) return false;
-    const threshold = (f.opts && f.opts.resultMissingMs) || 8000;
-    return t - p.closedAt > threshold;
-  }
-
-  function clearResultMissing(why) {
-    if (!F.resultMissing) return false;
-    F.resultMissing = false;
-    F.resultMissingAt = 0;
-    F.resultMissingAttempt = null;
-    L('result missing cleared', { why: why || null });
-    return true;
-  }
-
-  function markResultMissing(t, why) {
-    if (F.resultMissing) return false;
-    F.resultMissing = true;
-    F.resultMissingAt = t;
-    const a = F.attempt;
-    F.resultMissingAttempt = a ? { n: a.n, presses: a.presses, dials: a.dials, dialHits: a.dialHits } : null;
-    if (F.stats) F.stats.resultMissing = (F.stats.resultMissing || 0) + 1;
-    L('result missing', {
-      why: why || null,
-      attempt: a ? a.n : null,
-      presses: a ? a.presses : 0,
-      dialHits: a ? a.dialHits : 0,
-      sinceDialCloseMs: F.pendingWin && F.pendingWin.closedAt != null ? Math.round(t - F.pendingWin.closedAt) : null,
-    });
-    return true;
-  }
-  // </result-missing-core>
 
   function clearPendingWin() {
     F.pendingWin = null;
@@ -3882,6 +4460,7 @@ const SPECIES = [
   // while the core is paused, on a page the owner is using, so a fresh buffer per pass is not free.
   /** @type {Uint8Array | null} */
   let rectSeen = null, rectStack = null;
+  const near4 = new Int32Array(4);
   function uiRects() {
     if (!uiCanvas || !uiCanvas.width) return null;
     if (!snapshot()) return null;
@@ -4042,373 +4621,38 @@ const SPECIES = [
     F._raf = requestAnimationFrame(loop);
   }
 
+  /** @type {LoopIo} */
+  const loopIo = {
+    isVisible: () => document.visibilityState === 'visible',
+    now,
+    stop: () => F.stop(),
+    findCatch: () => F.findCatch(),
+    findBubble: () => F.findBubble(),
+    sample: (geo) => F.sample(geo),
+    lockDial: (hx, hy, span) => F.lockDial(hx, hy, span),
+    dialAnywhere: () => dialAnywhere(),
+    recordCatch: (card) => F.recordCatch(card),
+    captureTextCursor: () => { F.txtAt = now(); },
+    tap,
+    space,
+    clearPendingWin,
+    startAttempt,
+    resolveAttempt,
+    sameDial,
+    saveDialMemory,
+    tryEscapeProfile,
+    log: L,
+    noteBubbleTap,
+    bubbleConfirmed,
+    clearResultMissing,
+    markResultMissing,
+    markShapeHit,
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
+  };
+
   function step() {
-    const t = now();
-    F.lastTickAt = t;                       // the watchdog's only fact: the loop got a frame
-    F.stats.frames++;
-    if (document.visibilityState !== 'visible') { F.hidden = true; return; }
-    if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
-    if (F.paused) return;
-    if (t - F.startedAt > F.opts.maxMinutes * 60000) { L('maxMinutes'); F.stop(); return; }
-    // 0a. an open player profile swallows inputs and hides prompts. Try Escape once in a
-    // while; the session pause (profile-open) holds the clock whether or not it lands.
-    tryEscapeProfile(t);
-    // A fish that has shown no dial and taken no press for a long time is over; the client's own
-    // timer is 15-40 s, so this only fires when the flow itself stalled (a missed re-cast).
-    if (F.attempt && F.attempt.pendingLoss && t - F.attempt.pendingLoss > (F.opts.lossGraceMs || 2500)) {
-      resolveAttempt('lost', t, 'cast prompt');
-    }
-    if (F.attempt && t - (F.attempt.touched || F.attempt.startedAt) > (F.opts.attemptIdleMs || 25000)) {
-      resolveAttempt('lost', t, 'idle');
-    }
-
-    // 0. a catch card blocks the next cast until it is tapped away. Its paper appears before its
-    // text is drawn, so the card is held open until the catch has been read - tapping on sight
-    // dismissed cards that had not printed their species yet, losing the record. Bounded, so a
-    // card that never prints text still clears.
-    // Only look for a card while a press is still awaiting its catch. The old unconditional scan
-    // read cream world art as a card at 1920x1080 and kept the bot in a dismiss/tap loop forever.
-    const awaitingCard = !!(F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000);
-    if (!F.geo && t - (F.lastCard || 0) > 1500 && awaitingCard) {
-      const card = F.findCatch();
-      if (card) {
-        clearResultMissing('catch card');
-        markShapeHit(t);
-        // half-sizes measured on the 1522x954 layout; good enough to keep the panel clear
-        F.lastCardRect = card.w && card.h
-          ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
-          : { x: card.cx - 183, y: card.cy - 203, w: 366, h: 406 };
-        const r = F.recordCatch(card);
-        if (r !== 'logged') {
-          if (F.cardWait == null) F.cardWait = t;
-          if (t - F.cardWait < 2500) { F.stats.cardWaits = (F.stats.cardWaits || 0) + 1; return; }
-          L('catch text missing', { frac: card.frac, why: F.parseWhy });
-          // Move the cursor past a card that never parsed, or the NEXT card is read from this
-          // card's strings too: the old card's first word becomes the new species and its weight
-          // and purse win the lookups. A stale cursor is how one lost card poisons the next record.
-          F.txtAt = now();
-          F.stats.textGaps = (F.stats.textGaps || 0) + 1;
-        }
-        tap(card.cx, card.cy);
-        F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0;
-        F.stats.cards = (F.stats.cards || 0) + 1;
-        L('catch card dismissed', { via: card.via, frac: card.frac, log: r });
-        return;
-      }
-    }
-
-    // 0b. A catch card that lands while the next dial is already locked used to be invisible: the
-    // branch above needs !F.geo, so the card sat there until the 600 ms win window expired and the
-    // press was scored a loss with no catch recorded. Worse, a tap aimed at the dial lands on the
-    // paper instead. Look for the card whenever a press is awaiting its verdict, and while it is up
-    // hold fire on the dial.
-    // Bounded: a lost attempt must not leave a 120 ms card scan running for the whole session.
-    if (F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000 && t - (F.cardScan || 0) > 120) {
-      F.cardScan = t;
-      const c = F.findCatch();
-      if (c) {
-        clearResultMissing('catch card');
-        markShapeHit(t);
-        F.cardUntil = t + 2200;
-        F.lastCardRect = c.w && c.h
-          ? { x: c.cx - c.w / 2, y: c.cy - c.h / 2, w: c.w, h: c.h }
-          : { x: c.cx - 183, y: c.cy - 203, w: 366, h: 406 };
-        L('catch card over dial', { frac: c.frac, cx: c.cx, cy: c.cy, dial: !!F.geo });
-      }
-    }
-
-    // 1. a bubble is always the next thing to press (CAST! or REEL!, same shape)
-    const b = F.findBubble();
-    if (b) {
-      clearResultMissing('cast prompt');
-      // The ladder counts attempts on the prompt in front of us, not the whole run: a prompt that
-      // went away and came back is a new prompt, so it starts again at the first rung.
-      if (F.lastBubbleAt && t - F.lastBubbleAt > (F.opts.castRungResetMs || 10000)) F.bubbleMiss = 0;
-      F.lastBubble = b; F.lastBubbleAt = t;
-      // The cast prompt means the minigame is over, so an attempt still open is a fish that got
-      // away. But the prompt is a bubble-shaped sprite and the card of a WIN is read up to ~3 s
-      // after the last press, so a loss is only declared once no card can still be on its way.
-      if (F.attempt) {
-        const diag = refreshLossDiagnostic(F.attempt, b, t, F.bubblePrev, awaitingCard);
-        if (!F.attempt.pendingLoss) {
-          if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
-            resolveAttempt('lost', t, 'cast prompt');
-          } else {
-            F.attempt.pendingLoss = t;
-            L('attempt loss pending', Object.assign({ n: F.attempt.n }, diag));
-          }
-        }
-      }
-      // A blob that never produces a dial is not a button. Every fruitless CAST ATTEMPT walks one
-      // rung up the ladder (click -> click plus keybind -> keybind), which is what stops the silent
-      // 60 s stall this branch used to cause by returning before the cast retry could ever run. The
-      // rung counts attempts, not frames: counting frames ran the ladder to the top in ~1 s and left
-      // the bot clicking nothing (measured live 2026-10-28: rung 4567, 36 walks, 0 dials).
-      if (t - F.lastPress > F.opts.bubbleDebounceMs) {
-        const rung = (F.bubbleMiss = (F.bubbleMiss || 0) + 1);
-        F.lastRung = rung;
-        F.needsSeat = false;                                  // a prompt is up: the character is seated
-        const rec = castRecovery(rung);
-        // The dial appears in the widget under the prompt, so the hint follows the prompt we can
-        // SEE, not the last one we happened to click: a rung that no longer taps used to freeze the
-        // hint where a false bubble had been detected, and lockDial's +/-22 px search then could
-        // never reach a dial 100 px away.
-        // Boxed prompts steer the dial hint; an `anywhere` blob never moves it, so a
-        // nearby player's name tag cannot drag the dial search off the widget.
-        var isBox = b.via !== 'anywhere';
-        if (isBox) {
-          F.hint = { x: b.cx, y: b.cy + 53 };
-          F.dialAnyFail = 0; F.dialAnyAt = 0;    // a cast is new evidence: recover promptly again
-        }
-        // A blob found by the whole-surface scan is only a hint: it can be a player's name tag,
-        // and clicking one opens that player's profile. bubbleConfirmed is the single tap
-        // gate: it never confirms an `anywhere` blob, and a boxed one only after the same
-        // spot repeats. The ladder's Space rung still casts when the hint was all we had.
-        var confirmed = bubbleConfirmed(b, t);
-        var tapOk = !!(rec.tap && confirmed);
-        if (tapOk) tap(b.cx, b.cy);
-        if (tapOk) noteBubbleTap(t);
-        // The press that summons the dial is decided here; the tail is too short to prove it
-        // later, so the last prompt action persists until the next dial lock reads it.
-        F.lastBubbleCause = { tap: tapOk, space: !!rec.space, glyph: b.glyph === true, at: t };
-        F.lastPress = t;
-        F.stats.bubbles++;
-        L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: tapOk, space: rec.space, confirmed: confirmed, glyph: b.glyph === true, gdark: typeof b.gdark === 'number' ? b.gdark : null, gsoft: typeof b.gsoft === 'number' ? b.gsoft : null });
-        const fireSpace = () => { F.lastSpaceTry = t; space(F.opts.spaceTarget); };
-        if (rec.space) fireSpace();
-        else if (!tapOk && b.via === 'anywhere' && b.glyph === true) fireSpace();
-      }
-      return;
-    }
-
-    // 2. a locked dial: play it
-    if (F.geo) {
-      const s = F.sample(F.geo);
-      if (!s || !s.valid || s.ring < 0.7) {
-        F.dialBlinks = (F.dialBlinks || 0) + 1;
-        if (++F.bad > 3) {
-          // A successful press animates the ring away for a few frames, then the next triangle
-          // appears in the same widget. Dropping the lock there cost a re-lock scan plus a lock
-          // on the fading ring, ~300 ms per press. Hold the geometry briefly instead.
-          if (F.pressesThisDial > 0 && t - F.lastPress < (F.opts.relockGraceMs || 450)) return;
-          // A narrow unpressed dial with a live spin estimate is blinking, not fading: ride
-          // through the blind frames so the planner can take the arrival it was tracking.
-          if (F.pressesThisDial === 0 && spinAlive(F.geo, t)) { F.stats.narrowHolds = (F.stats.narrowHolds || 0) + 1; return; }
-          cancelPend();
-          closeDial(t, s && s.ring);
-          F.geo = null; F.bad = 0; F.pressesThisDial = 0;
-        }
-        return;
-      }
-      F.bad = 0;
-      // Prediction error, measured without pressing. A press between the two frames invalidates the
-      // sample: the game spawns a new triangle and the angle jumps for a reason that is not model
-      // error - which is exactly what the first version of this measured and misreported.
-      const pp = F.predProbe;
-      if (pp && s.t != null && s.delta != null) {
-        const dt = s.t - pp.t;
-        if (dt >= 2 && dt <= 40 && !(F.lastPress && F.lastPress > pp.t)) {
-          const predicted = wrap180(pp.delta + (pp.omega || 0) * dt / 1000);
-          const err = wrap180(Number(s.delta) - predicted);
-          F.predLog.push({ err: +err.toFixed(1), om: pp.omega != null ? Math.round(pp.omega) : null, w: Math.round(Number(s.width) || 0), dt: Math.round(dt) });
-          while (F.predLog.length > 400) F.predLog.shift();
-        }
-      }
-      F.predProbe = { t: s.t, delta: s.delta, omega: s.omega };
-      settlePress(s, F.dialBlinks);
-      // Arc travel since the lock, in degrees: one turn is one pass of the pin under the wedge.
-      if (s.mid != null) {
-        if (F.geo._pm != null) {
-          const dm = Math.abs(wrap180(Number(s.mid) - F.geo._pm));
-          if (dm < 180) F.geo._travel = (F.geo._travel || 0) + dm;
-        }
-        F.geo._pm = Number(s.mid);
-      }
-      if (!s.tracked) F.dialBlinks = (F.dialBlinks || 0) + 1;   // a blink after a press is how a new spawn shows
-      // Re-arm BEFORE planPress() so a newly proven triangle can press/schedule on this same frame.
-      const spawnProven = newTriangle(F.pressStamp, s, F.dialBlinks, F.opts) ||
-        (F.acceptedAt != null && t - F.acceptedAt <= (F.opts.rearmAcceptedMs || 600));
-      if (rearmReady(spawnProven, F.pressesThisDial, F.opts.maxPressPerDial || 12) &&
-          (F.dialRejected || 0) < (F.opts.maxRejectedPerDial || 5)) F.armed = true;
-      s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
-      if (F.geoReasons) F.geoReasons[F.planReason || 'none'] = (F.geoReasons[F.planReason || 'none'] || 0) + 1;
-      const plan = planPress({
-        t: s.t != null ? s.t : t,
-        delta: s.delta, width: s.width, omega: s.omega,
-        armed: F.armed && s.tracked && t - F.lastPress > (F.opts.pressGapMs || 120),
-        pendingAt: F.pend ? F.pend.at : null,
-      }, {
-        trigger: (F.armCfg && F.armCfg.trigger) || F.opts.trigger,
-        midDeg: F.armCfg && F.armCfg.midDeg != null ? F.armCfg.midDeg : F.opts.midDeg,
-        marginDeg: F.opts.marginDeg,
-        leadMs: F.opts.leadMs,
-        biasMs: s.biasMs,
-        horizonMs: F.opts.schedHorizonMs,
-        replanMs: F.opts.replanMs,
-      });
-      F.planReason = plan.reason;
-      F.planNow = { pred: plan.pred, win: plan.win };   // what the press probe compares against
-      if (s.omega != null && Math.abs(s.omega) > (F.dialMaxOmega || 0)) F.dialMaxOmega = Math.abs(s.omega);
-      // Total travel of the wedge since the lock: a real dial sweeps degrees every frame, a
-      // fading one sits still while the rate estimate decays to zero.
-      if (s.delta != null) {
-        if (F.dialPrevDelta != null) F.dialTravel = (F.dialTravel || 0) + Math.abs(wrap180(Number(s.delta) - F.dialPrevDelta));
-        F.dialPrevDelta = Number(s.delta);
-      }
-      if (F.cardUntil && t < F.cardUntil) { cancelPend(); return; }   // paper is on top of the dial
-      if (s.tracked) {
-        F.geoTrace.push({ t: Math.round(t - F.geoAt), d: +Number(s.delta).toFixed(1), w: Math.round(s.width || 0),
-          om: s.omega == null ? null : Math.round(s.omega), r: plan.reason });
-        if (F.geoTrace.length > 48) F.geoTrace.shift();
-      }
-      // A first press on a narrow or fast dial is the one with the least evidence behind it. The
-      // fit becomes reliable after a few frames; until then, skip the crossing and take the next
-      // one. One skipped revolution is cheap next to a miss, which subtracts the last gain and
-      // zeroes the streak. Wide/slow dials keep pressing immediately - their window forgives it.
-      if (F.pressesThisDial === 0 && firstPressGate(s.width, s.omega, F.opts)) {
-        const stable = fitStable(s.fit, F.opts);
-        // Hold for a fraction of ONE pass, not for a fixed ceiling that is four rotations on a
-        // fast dial (see firstPressBudget). A high-tier fish is exactly the narrow/fast case.
-        const budget = firstPressBudget(Number(s.width) || 0, s.omega, F.opts);
-        // A budget too short for the fit can only delay the press; see firstPressCanMature().
-        if (!stable && firstPressCanMature(budget, F.opts)) {
-          const heldMs = t - (F.geoAt || t);
-          // Full turns of the arc waited through so far. This is the user-visible quantity - the
-          // owner reported "it does a round turn or more" - and unlike a ratio against the
-          // instantaneous width/omega it does not swing when the spin estimate spikes.
-          const passes = (F.geo && F.geo._travel ? F.geo._travel : 0) / 360;
-          if (!(F.stats.holdPassesMax >= passes)) F.stats.holdPassesMax = passes;
-          if (heldMs < budget) {
-            if (!F.geo._firstHeld) {
-              F.geo._firstHeld = true;
-              F.stats.firstPressHeld = (F.stats.firstPressHeld || 0) + 1;
-              L('first press held', {
-                width: Math.round(Number(s.width) || 0),
-                omega: s.omega == null ? null : Math.round(s.omega),
-                fitN: s.fit ? s.fit.n : 0,
-                fitSpan: s.fit ? Math.round(s.fit.span) : 0,
-                fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
-              });
-            }
-            F.planReason = 'first-fit';
-            cancelPend();
-            return;
-          }
-          if (markFirstPressForced(F.stats, F.geo)) {
-            L('first press forced', {
-              heldMs: Math.round(heldMs),
-              budget: Math.round(budget),
-              width: Math.round(Number(s.width) || 0),
-              omega: s.omega == null ? null : Math.round(s.omega),
-              fitN: s.fit ? s.fit.n : 0,
-              fitRms: s.fit ? +s.fit.rms.toFixed(1) : null,
-            });
-          }
-        }
-      }
-      if (plan.cancel) cancelPend();
-      if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
-      if (plan.press) doPress(s, 'frame');
-      return;
-    }
-
-    // 3. nothing on screen: look for a dial now and then (cheap enough at ~4 Hz)
-    if (t - F.lastDialCheck > F.opts.dialCheckMs) {
-      F.lastDialCheck = t;
-      let g = F.lockDial(F.hint.x, F.hint.y);
-      // Nothing has locked for a while: the hint may be wrong rather than empty. One whole-surface
-      // pass (throttled inside dialAnywhere) is the only thing that can recover a blind run.
-      if (!g && F.opts.dialFallbackMs && t - Math.max(F.geoAt || 0, F.startedAt) > F.opts.dialFallbackMs) {
-        g = dialAnywhere();
-      }
-      if (g) {
-        F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0; F.dialRejected = 0;
-        g._travel = 0; g._pm = null;
-        // A new spawn IS a new triangle, so the press gate must be open on arrival. It used to be
-        // left closed from the previous dial, and on a narrow dial the re-arm test (pin more than
-        // win+12 away) may never come true - measured live 2026-11-02: a lost narrow attempt locked
-        // seven dials and pressed three times, with nothing rejected.
-        g._armed0 = !!F.armed;
-        F.armed = true;                            // arc travel for this lock
-        F.geoReasons = {}; F.planReason = null; F.geoTrace = []; F.dialMaxOmega = 0; F.dialTravel = 0; F.dialPrevDelta = null;
-        // Which rung summoned this dial: the last prompt action before the lock. Stale (> one
-        // cast cycle old) means the dial arrived without a prompt press we saw - say so.
-        var bc = F.lastBubbleCause, freshBc = bc && (t - bc.at) < (F.opts.castRungResetMs || 10000);
-        F.lastDialCause = { tap: !!(freshBc && bc.tap), space: !!(freshBc && bc.space), unknown: !freshBc, at: freshBc ? bc.at : 0, dialAt: t };
-        var dcCause = F.lastDialCause.unknown ? 'unknown' : (F.lastDialCause.tap && F.lastDialCause.space ? 'tap+space' : (F.lastDialCause.tap ? 'tap' : (F.lastDialCause.space ? 'space' : 'none')));
-        F.bubbleMiss = 0; F.stallRetry = 0;                     // the ladder worked: back to the first rung
-        F.bubblePrev = null;                                    // a dial proves the prompt was real: forget tap suspicion
-        F.dialAnyFail = 0;                                      // the hint is good: recovery starts prompt
-        F.stats.dials++;
-        clearResultMissing('dial');
-        // One arm per FISH, not per dial. A fish is 5-7 dials of the same minigame, so alternating
-        // dialect by dial would put both arms inside one attempt and the A/B would compare nothing.
-        if (!F.attempt) startAttempt(t);
-        F.attempt.dials++;
-        F.attempt.touched = t;
-        F.attempt.pendingLoss = null;
-        F.needsSeat = false;                                    // a dial means the cast took
-        L('dial locked', { cx: g.cx, cy: g.cy, R: g.R, width: Math.round(g.width), arm: F.dialArm, attempt: F.attempt.n, rung: F.lastRung || 0, cause: dcCause });
-        const dialW = Number(g.width) || 0;
-        if (dialW > 0) {
-          F.attempt.widthSum += dialW;
-          F.attempt.widthN += 1;
-          F.attempt.maxWidth = Math.max(F.attempt.maxWidth || 0, dialW);
-          F.attempt.minWidth = F.attempt.minWidth ? Math.min(F.attempt.minWidth, dialW) : dialW;
-        }
-        F.lastRung = 0;                                         // logged above: which rung did the casting
-        if (!sameDial(F.lastGeo, g)) saveDialMemory(g);       // survives the next reload
-        F.lastGeo = { cx: g.cx, cy: g.cy, R: g.R };              // the widget position for the next dial
-        F.hint = { x: g.cx, y: g.cy };                           // keep dial hint on off-center seats too
-      }
-    }
-
-    // 4. Cast recovery. The cast control is a small bubble, and the caught-indicator is the same
-    // shape, so the shape detector sometimes taps an indicator that is not a button - after which
-    // nothing at all happens and the run silently stops fishing (observed: 60+ s of no dial and no
-    // press while frames kept advancing). The game's own fishing keybind casts whenever its cast
-    // button is visible and is ignored while chat has focus, so it is a safe fallback.
-    // ... and a seat hold probes at most once a minute. The hold used to suppress the retry
-    // forever: if a line is already out the prompt never appears, the hold stops the only retry
-    // that could reel it back in, and nothing in the loop can recover (measured live 2026-11-20:
-    // 60 minutes with no dial, needsSeat latched, every Resume re-paused within a second). The
-    // probe is the game's own keybind, which it ignores when no cast is available; if it does
-    // reel a stuck line, the returning prompt clears the hold by itself. The first probe waits a
-    // full interval after the hold is applied. `lastCastTry` is refreshed when the hold clears, so
-    // the retry still cannot fire on the first frame after a Resume.
-    // 3b. A pressed dial that never produces a catch card or a cast prompt is the client's stuck
-    // `waiting-for-result` state, not a missed cast. Latch it before the retry block below so the
-    // normal retry and the once-a-minute seat probe both stop; a late card/prompt clears it above.
-    if (resultMissingDue(F, t)) {
-      markResultMissing(t, 'no catch card or cast prompt');
-    }
-
-    const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs &&
-      t - Math.max(F.castHoldAt || 0, F.lastCastTry || 0) > F.opts.seatHoldRetryMs);
-    if (!F.resultMissing && (!F.castHold || seatProbe) && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
-      F.lastCastTry = t;
-      F.stats.castRetries = (F.stats.castRetries || 0) + 1;
-      const tries = (F.stallRetry = (F.stallRetry || 0) + 1);
-      // There is no bubble here to click, so the keybind is the only honest input: the recovery
-      // ladder governs the bubble branch, where the prompt's coordinates exist. Calling it here
-      // and dropping the answer only made the ladder look wired to a path that ignored it.
-      const consumed = !space(F.opts.spaceTarget);
-      L('cast retry', { consumed, tries, seatHold: !!F.castHold });
-    }
-
-    // The game shows a cast prompt only while the character is SEATED on a seat whose raycast
-    // reaches water (bundle: sit -> isRaycastHittingWater(seat.fishingReach ?? 50) -> showCastButton)
-    // or right after a fish result. A standing character therefore has no prompt and nothing the bot
-    // can synthesise sits it down, so say what is wrong instead of clicking forever - the old
-    // 60 s silent stall is exactly this state.
-    const seatWatch = F.opts.seatWatchdogMs;
-    if (seatWatch && !F.geo && !F.needsSeat && !F.resultMissing) {
-      const idle = t - Math.max(F.lastPress || 0, F.lastBubbleAt || 0, F.geoAt || 0, F.startedAt);
-      if (idle > seatWatch) {
-        F.needsSeat = true;
-        L('needs a seat', { idleMs: Math.round(idle), why: 'no cast prompt: sit on a waterside chair' });
-      }
-    }
+    stepFrame(F, now(), loopIo);
   }
 
   /* -------------------------------------------------------- attempts ----- */
@@ -4771,7 +5015,7 @@ const SPECIES = [
     const next = String(name || '').trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 24) || 'default';
     if (next !== logProfile) {
       logProfile = next;
-      ledger = null;              // the cache belongs to the old profile
+      ledgerStore.setProfile(next);
       F.txtAt = now();            // text drawn before the switch is another card
     }
     return logProfile;

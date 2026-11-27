@@ -11,6 +11,7 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 
 const CORE = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
+const { pressVerdictReport } = require('../src/diagnostics.js');
 
 /** One `F.name = function () { ... };` assignment, collected by its matching close. */
 function extract(name) {
@@ -20,15 +21,6 @@ function extract(name) {
   assert.ok(end > start, 'F.' + name + ' has no close');
   return CORE.slice(start, end + '\n  };'.length);
 }
-
-function statsCore() {
-  const a = CORE.indexOf('// <stats-core>');
-  const b = CORE.indexOf('// </stats-core>');
-  assert.ok(a >= 0 && b > a, 'stats-core sentinels are missing');
-  return new Function(CORE.slice(a, b) + '\nreturn { pressVerdictReport };')();
-}
-
-const { pressVerdictReport } = statsCore();
 
 function mkStatus(F) {
   return new Function('F', 'loadLedger', 'uiFrame', 'now', 'pressVerdictReport',

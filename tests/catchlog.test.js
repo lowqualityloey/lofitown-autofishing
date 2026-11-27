@@ -6,16 +6,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
-
-const SRC = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
-const OPEN = '// <catch-log>';
-const CLOSE = '// </catch-log>';
-const a = SRC.indexOf(OPEN);
-const b = SRC.indexOf(CLOSE);
-if (a < 0 || b < 0) throw new Error('catch-log sentinels are missing from autofish.js');
-const CODE = SRC.slice(a + OPEN.length, b);
+const Ledger = require('../src/ledger.js');
 const EXPORTS = [
   'SPECIES', 'TIER_ORDER', 'LOG_KEY', 'TIER_BY_LOWER', 'SPECIES_BY_NAME', 'tidyName',
   'normTier', 'parseWeightKg', 'splitVariant', 'speciesInfo', 'describeCatch', 'logDay',
@@ -45,8 +36,8 @@ function store(opts) {
 
 function load(opts) {
   const st = store(opts);
-  const api = new Function('window', CODE + '\nreturn { ' + EXPORTS + ' };')({ localStorage: st });
-  api.store = st;
+  const inst = Ledger.createLedger({ localStorage: st });
+  const api = Object.assign({}, Ledger, inst, { store: st });
   return api;
 }
 

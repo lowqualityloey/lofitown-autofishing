@@ -8,15 +8,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
+const Ledger = require('../src/ledger.js');
 
 const SRC = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
-const OPEN = '// <dial-memory>';
-const CLOSE = '// </dial-memory>';
-const a = SRC.indexOf(OPEN);
-const b = SRC.indexOf(CLOSE);
-if (a < 0 || b < 0) throw new Error('dial-memory sentinels are missing from autofish.js');
-const CODE = SRC.slice(a + OPEN.length, b);
-const EXPORTS = ['dialGeoFit', 'loadDialMemory', 'saveDialMemory', 'sameDial', 'DIAL_KEY', 'DIAL_R_MIN', 'DIAL_R_MAX'];
+const LOOP_SRC = readFileSync(join(__dirname, '..', 'src', 'loop.js'), 'utf8');
 
 function store(seed) {
   const data = new Map(Object.entries(seed || {}));
@@ -31,12 +26,8 @@ function load(opts) {
   const o = opts || {};
   const st = o.store || store();
   const canvas = o.canvas === undefined ? { width: 1600, height: 1000 } : o.canvas;
-  const api = new Function('window', 'uiCanvas', CODE + '\nreturn { ' + EXPORTS.join(', ') + ' };')(
-    { localStorage: st },
-    canvas
-  );
-  api.store = st;
-  return api;
+  const mem = Ledger.createDialMemory({ localStorage: st }, () => canvas);
+  return Object.assign({}, Ledger, mem, { store: st });
 }
 
 const T = load();
@@ -101,10 +92,10 @@ test('the dial search can widen, and a blind run has a whole-surface recovery', 
   assert.match(SRC, /F\.lockDial = function \(hintX, hintY, span\)/);
   assert.match(SRC, /function dialAnywhere\(\)/);
   assert.match(SRC, /dialFallbackMs: \d+/, 'the fallback needs a default');
-  const at = SRC.indexOf('let g = F.lockDial(F.hint.x, F.hint.y);');
+  const at = LOOP_SRC.indexOf('o.lockDial ? o.lockDial(F.hint.x, F.hint.y)');
   assert.ok(at > 0, 'the hinted search is missing');
-  const step = SRC.slice(at, at + 500);
-  assert.match(step, /dialAnywhere\(\)/, 'step must fall back when the hint is wrong');
+  const step = LOOP_SRC.slice(at, at + 500);
+  assert.match(step, /dialAnywhere/, 'step must fall back when the hint is wrong');
   assert.match(step, /F\.opts\.dialFallbackMs/);
 });
 
@@ -125,17 +116,17 @@ test('a missed surface asks the other canvas before concluding there is no promp
 test('a new dial opens the press gate, and a proven new triangle re-arms at once', () => {
   // Live 2026-11-02, narrow band 9/12: one lost attempt locked seven dials and pressed three times
   // with nothing rejected. The gate (F.armed) was never opened on arrival at a new spawn.
-  assert.match(SRC, /g\._armed0 = !!F\.armed;\s+F\.armed = true;/, 'a new spawn must open the gate');
-  assert.match(SRC, /const spawnProven = newTriangle\(F\.pressStamp, s, F\.dialBlinks, F\.opts\) \|\|/);
-  assert.match(SRC, /F\.acceptedAt != null && t - F\.acceptedAt <=/, 'an accepted press is proof of a spawn');
+  assert.match(LOOP_SRC, /g\._armed0 = !!F\.armed;\s+F\.armed = true;/, 'a new spawn must open the gate');
+  assert.match(LOOP_SRC, /const spawnProven = newTriangle\(F\.pressStamp, s, F\.dialBlinks, F\.opts\) \|\|/);
+  assert.match(LOOP_SRC, /F\.acceptedAt != null && t - F\.acceptedAt <=/, 'an accepted press is proof of a spawn');
   // Live 2026-11-18: waiting for the wedge to leave the window cost slow dials almost a full
   // rotation, so 61% of non-final slow dials got one press. A proven triangle is enough.
-  assert.match(SRC, /rearmReady\(spawnProven, F\.pressesThisDial, F\.opts\.maxPressPerDial \|\| 12\)/);
-  assert.doesNotMatch(SRC, /Math\.abs\(plan\.delta\) > plan\.win \+ 12/,
+  assert.match(LOOP_SRC, /rearmReady\(spawnProven, F\.pressesThisDial, F\.opts\.maxPressPerDial \|\| 12\)/);
+  assert.doesNotMatch(LOOP_SRC, /Math\.abs\(plan\.delta\) > plan\.win \+ 12/,
     'the new triangle is pressed even when the pin is already inside its window');
-  assert.match(SRC, /locksDisarmed = \(F\.stats\.locksDisarmed \|\| 0\) \+ 1/, 'a dial that dies unpressed must be countable');
-  assert.match(SRC, /!F\.geo\._armed0 && presses === 0/, 'and only that case: arriving shut is normal now');
-  assert.match(SRC, /F\.attempt\.dialLog\.push/, 'a dial that passed untouched must be visible per attempt');
+  assert.match(LOOP_SRC, /locksDisarmed = \(F\.stats\.locksDisarmed \|\| 0\) \+ 1/, 'a dial that dies unpressed must be countable');
+  assert.match(LOOP_SRC, /!F\.geo\._armed0 && presses === 0/, 'and only that case: arriving shut is normal now');
+  assert.match(LOOP_SRC, /F\.attempt\.dialLog\.push/, 'a dial that passed untouched must be visible per attempt');
 });
 
 test('a prompt found anywhere is a hint, never a click target', () => {
@@ -143,13 +134,13 @@ test('a prompt found anywhere is a hint, never a click target', () => {
   // included - and tapping one opened that player's profile in the middle of a session.
   assert.match(SRC, /via: 'anywhere'/);
   assert.match(SRC, /via: 'box'/);
-  assert.match(SRC, /var confirmed = bubbleConfirmed\(b, t\);/);
-  assert.match(SRC, /var tapOk = !!\(rec\.tap && confirmed\);/);
-  assert.match(SRC, /if \(tapOk\) tap\(b\.cx, b\.cy\);/);
-  assert.match(SRC, /if \(tapOk\) noteBubbleTap\(t\);/);
+  assert.match(LOOP_SRC, /var confirmed = bubbleConfirmed\(b, t\);/);
+  assert.match(LOOP_SRC, /var tapOk = !!\(rec\.tap && confirmed\);/);
+  assert.match(LOOP_SRC, /if \(tapOk\) tap\(b\.cx, b\.cy\);/);
+  assert.match(LOOP_SRC, /if \(tapOk\) noteBubbleTap\(t\);/);
   // Boxed prompts steer the hint; an `anywhere` name tag must not drag the dial search.
-  assert.match(SRC, /var isBox = b\.via !== 'anywhere';/);
-  assert.match(SRC, /if \(isBox\) \{[\s\S]*?F\.hint = \{ x: b\.cx, y: b\.cy \+ 53 \};/);
+  assert.match(LOOP_SRC, /var isBox = b\.via !== 'anywhere';/);
+  assert.match(LOOP_SRC, /if \(isBox\) \{[\s\S]*?F\.hint = \{ x: b\.cx, y: b\.cy \+ 53 \};/);
   // A name tag is one size smaller than the prompt: the box scan refuses anything under 28 px tall
   // and anything that is not mostly solid white.
   assert.match(SRC, /bh >= 28 && bh < 95/);
@@ -167,7 +158,7 @@ test('the recovery pass reuses the shared grab and the same validation', () => {
 });
 
 test('a lock is written back only when the widget actually moved', () => {
-  assert.match(SRC, /if \(!sameDial\(F\.lastGeo, g\)\) saveDialMemory\(g\);/);
+  assert.match(LOOP_SRC, /if \(!sameDial\(F\.lastGeo, g\)\) saveDialMemory\(g\);/);
 });
 
 // The first recovery shipped with a guessed size window that capped a wedge's height at 90 px.
@@ -188,21 +179,15 @@ test('the whole-surface wedge finder accepts the real sector and rejects specks 
 });
 
 test('off-center seats anchor a prompt box from the locked dial and update F.hint', () => {
-  const fnAt = SRC.indexOf('function seatPromptBox(');
-  assert.ok(fnAt > 0, 'seatPromptBox helper is missing');
-  const boxFn = new Function(
-    SRC.slice(SRC.indexOf('// <prompt-box>') + '// <prompt-box>'.length, SRC.indexOf('// </prompt-box>')) +
-    '\n' + SRC.slice(fnAt, SRC.indexOf('\n  }', fnAt) + 4) +
-    '\nreturn { seatPromptBox, promptBox };'
-  )();
-  const seatBox = boxFn.seatPromptBox({ cx: 610, cy: 633, R: 90 }, 1620, 1031);
+  const Vision = require('../src/vision.js');
+  const seatBox = Vision.seatPromptBox({ cx: 610, cy: 633, R: 90 }, 1620, 1031);
   assert.ok(seatBox, 'seatPromptBox must return a box for an off-center dial');
   assert.ok(seatBox.x <= 610 && 610 <= seatBox.x + seatBox.w, 'seat box covers x=610');
   assert.ok(seatBox.y <= 580 && 580 <= seatBox.y + seatBox.h, 'seat box covers prompt y=580');
 
-  const lockAt = SRC.indexOf('if (!sameDial(F.lastGeo, g)) saveDialMemory(g);');
+  const lockAt = LOOP_SRC.indexOf('if (!sameDial(F.lastGeo, g)) saveDialMemory(g);');
   assert.ok(lockAt > 0);
-  const lockTail = SRC.slice(lockAt - 300, lockAt + 250);
+  const lockTail = LOOP_SRC.slice(lockAt - 300, lockAt + 250);
   assert.match(lockTail, /F\.hint = \{ x: g\.cx, y: g\.cy \}/, 'dial lock must update F.hint for off-center seats');
 
   const anywhereAt = SRC.indexOf('function bubbleAnywhere()');

@@ -9,17 +9,10 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 
 const SRC = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
-const OPEN = '// <timing-core>';
-const CLOSE = '// </timing-core>';
-const a = SRC.indexOf(OPEN);
-const b = SRC.indexOf(CLOSE);
-if (a < 0 || b < 0) throw new Error('timing-core sentinels are missing from autofish.js');
-const code = SRC.slice(a + OPEN.length, b);
-const T = new Function(code + '\nreturn { wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk, newTriangle, pressOutcome, castRecovery, perfRates, fitStable, firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady, dialFallbackWait, dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics };')();
-const refreshStart = SRC.indexOf('function refreshLossDiagnostic');
-const refreshEnd = SRC.indexOf('\n  }', refreshStart);
-if (refreshStart < 0 || refreshEnd < refreshStart) throw new Error('refreshLossDiagnostic is missing from autofish.js');
-const refreshLossDiagnostic = new Function('lossDiagnostics', SRC.slice(refreshStart, refreshEnd) + '\n  }\nreturn refreshLossDiagnostic;')(T.lossDiagnostics);
+const TIMING_SRC = readFileSync(join(__dirname, '..', 'src', 'timing.js'), 'utf8');
+const LOOP_SRC = readFileSync(join(__dirname, '..', 'src', 'loop.js'), 'utf8');
+const T = require('../src/timing.js');
+const { refreshLossDiagnostic } = require('../src/loop.js');
 
 /** Frames at a fixed cadence: build returns [{t, mid}] with mid = start + rate*ms/1000. */
 function frames(rate, n, opts) {
@@ -131,10 +124,10 @@ test('a short shrinking narrow dial is a ghost, not a skipped fish', () => {
   assert.equal(T.dialGhost(Object.assign({}, ghost, { widthShrink: 2 }), {}), false, 'without a fade it is a skipped dial');
   assert.equal(T.dialGhost(Object.assign({}, ghost, { presses: 1 }), {}), false, 'a pressed dial is never a ghost');
   assert.equal(T.dialGhost(ghost, { ghostMaxMs: 2000 }), false, 'the lifetime is configurable');
-  assert.match(SRC, /const ghost = dialGhost\(\{ presses, heldMs, width, widthShrink, travel: F\.dialTravel \}, F\.opts\)/);
-  assert.match(SRC, /F\.ghostGeo = \{/);
-  assert.match(SRC, /F\.lastLockAt = 0/, 'the memo must be cleared on a ghost');
-  assert.match(SRC, /const last = presses > 0 \? F\.dialLastPress : null/, 'zero-press telemetry must not reuse the previous press');
+  assert.match(LOOP_SRC, /const ghost = dialGhost\(\{ presses, heldMs, width, widthShrink, travel: F\.dialTravel \}, F\.opts\)/);
+  assert.match(LOOP_SRC, /F\.ghostGeo = \{/);
+  assert.match(LOOP_SRC, /F\.lastLockAt = 0/, 'the memo must be cleared on a ghost');
+  assert.match(LOOP_SRC, /const last = presses > 0 \? F\.dialLastPress : null/, 'zero-press telemetry must not reuse the previous press');
 });
 
 test('a narrow dial with a fresh spin holds the lock through blind frames', () => {
@@ -148,7 +141,7 @@ test('a narrow dial with a fresh spin holds the lock through blind frames', () =
   assert.equal(T.spinAlive({ width: 40, _om: 120, _mt: 0 }, 1000), false, 'stale spin expires on its own');
   assert.equal(T.spinAlive({ width: 70, _om: 120, _mt: 900 }, 1000), false, 'wide dials keep the old path');
   assert.equal(T.spinAlive(null, 1000), false);
-  assert.match(SRC, /spinAlive\(F\.geo, t\)/);
+  assert.match(LOOP_SRC, /spinAlive\(F\.geo, t\)/);
   assert.doesNotMatch(SRC, /lastSpinAt/, 'the witness lives on the lock, not in new state');
 });
 
@@ -177,7 +170,7 @@ test('fast first press is an opt-in bypass of the first-press gate', () => {
   assert.equal(T.firstPressGate(45, 700, { fastFirstPress: true }), false);
   assert.equal(T.firstPressGate(45, null, { fastFirstPress: true }), false);
   assert.equal(T.firstPressGate(null, 700, { fastFirstPress: true }), false);
-  assert.match(SRC, /firstPressGate\(s\.width, s\.omega, F\.opts\)/, 'step() uses the shared gate');
+  assert.match(LOOP_SRC, /firstPressGate\(s\.width, s\.omega, F\.opts\)/, 'step() uses the shared gate');
   assert.match(SRC, /fastFirstPress: false/, 'the mode is off by default');
   assert.match(SRC, /if \(patch\.fastFirstPress != null\) F\.opts\.fastFirstPress = !!patch\.fastFirstPress/,
     'tune() can switch the live run without a restart');
@@ -200,11 +193,11 @@ test('a stalled ring can be named instead of charged as a miss or a ghost, opt-i
     ['an unpressed fish that is not ghost-shaped is untouched', { presses: 0, heldMs: 10000, ghost: false, width: 45 }, on, false],
   ];
   for (const [why, st, opts, want] of cases) assert.equal(T.dialStalled(st, opts), want, why);
-  assert.match(SRC, /const stalled = dialStalled\(\{ presses, heldMs, sincePress, ghost, width \}, F\.opts\)/,
+  assert.match(LOOP_SRC, /const stalled = dialStalled\(\{ presses, heldMs, sincePress, ghost, width \}, F\.opts\)/,
     'closeDial asks the helper');
-  assert.match(SRC, /F\.stats\[DIAL_COUNTER\[verdict\]\]\+\+/, 'the verdict names its counter through one map');
-  assert.match(SRC, /const verdict = stalled \? 'stalled'/, 'the verdict is named before ghost/miss');
-  assert.match(SRC, /if \(ghost && !stalled && F\.geo\)/, 'a stall must not start the ghost cooldown');
+  assert.match(LOOP_SRC, /F\.stats\[DIAL_COUNTER\[verdict\]\]\+\+/, 'the verdict names its counter through one map');
+  assert.match(LOOP_SRC, /const verdict = stalled \? 'stalled'/, 'the verdict is named before ghost/miss');
+  assert.match(LOOP_SRC, /if \(ghost && !stalled && F\.geo\)/, 'a stall must not start the ghost cooldown');
   assert.match(SRC, /stalled: 0/, 'the counter is initialized');
   assert.match(SRC, /stallDialMs: 0/, 'the option is off in the shipped defaults');
 });
@@ -223,8 +216,8 @@ test('the first-press hold is a fraction of one pass, not a fixed ceiling', () =
   assert.equal(T.firstPressBudget(90, 10, { firstPressMaxWaitMs: 800 }), 800, 'the ceiling still caps');
   assert.equal(T.firstPressBudget(45, -700, {}), fast, 'spin direction does not matter');
   // the step() gate has to use the budget, not the raw ceiling
-  assert.match(SRC, /firstPressBudget\(Number\(s\.width\)/);
-  assert.match(SRC, /firstPressMaxTransitFrac/);
+  assert.match(LOOP_SRC, /firstPressBudget\(Number\(s\.width\)/);
+  assert.match(TIMING_SRC, /firstPressMaxTransitFrac/);
 });
 
 test('the first-press hold is skipped when its budget cannot fit the fit it waits for', () => {
@@ -240,7 +233,7 @@ test('the first-press hold is skipped when its budget cannot fit the fit it wait
   assert.equal(T.firstPressCanMature(T.firstPressBudget(45, 700, {}), {}), false);
   // A 165 deg dial at 120 deg/s keeps its long, useful fit.
   assert.equal(T.firstPressCanMature(T.firstPressBudget(165, 120, {}), {}), true);
-  assert.match(SRC, /firstPressCanMature\(budget, F\.opts\)/, 'the gate consults the budget test');
+  assert.match(LOOP_SRC, /firstPressCanMature\(budget, F\.opts\)/, 'the gate consults the budget test');
 });
 
 test('a narrow dial with no spin estimate releases the first press promptly', () => {
@@ -265,21 +258,21 @@ test('the recovery scan backs off instead of running every second', () => {
   assert.equal(T.dialFallbackWait(4, { dialFallbackMaxMs: 1200 }), 1200);
   // the scan must use the backoff, and a cast must reset it
   assert.match(SRC, /dialFallbackWait\(F\.dialAnyFail, F\.opts\)/);
-  assert.match(SRC, /F\.dialAnyFail = 0; F\.dialAnyAt = 0/);
+  assert.match(LOOP_SRC, /F\.dialAnyFail = 0; F\.dialAnyAt = 0/);
 });
 
 test('the first press on a narrow or fast dial waits for a mature fit, only when the budget can pay', () => {
-  assert.match(SRC, /fitStable\(s\.fit, F\.opts\)/);
-  assert.match(SRC, /F\.pressesThisDial === 0/);
-  assert.match(SRC, /firstPressGate\(s\.width, s\.omega, F\.opts\)/);
-  assert.match(SRC, /Number\(width\) < \(cfg\.firstPressMaxWidthDeg \|\| 60\)/);
-  assert.match(SRC, /Math\.abs\(Number\(omega\) \|\| 0\) >= \(cfg\.firstPressFastOmega \|\| 300\)/);
-  assert.match(SRC, /firstPressCanMature\(budget, F\.opts\)/, 'a budget too short for the fit is skipped');
-  assert.match(SRC, /if \(heldMs < budget\)/, 'the hold must not starve a dial');
-  assert.match(SRC, /F\.stats\.firstPressHeld/);
-  assert.match(SRC, /markFirstPressForced\(F\.stats, F\.geo\)/);
-  assert.match(SRC, /L\('first press held'/);
-  assert.match(SRC, /L\('first press forced'/);
+  assert.match(LOOP_SRC, /fitStable\(s\.fit, F\.opts\)/);
+  assert.match(LOOP_SRC, /F\.pressesThisDial === 0/);
+  assert.match(LOOP_SRC, /firstPressGate\(s\.width, s\.omega, F\.opts\)/);
+  assert.match(TIMING_SRC, /Number\(width\) < \(cfg\.firstPressMaxWidthDeg \|\| 60\)/);
+  assert.match(TIMING_SRC, /Math\.abs\(Number\(omega\) \|\| 0\) >= \(cfg\.firstPressFastOmega \|\| 300\)/);
+  assert.match(LOOP_SRC, /firstPressCanMature\(budget, F\.opts\)/, 'a budget too short for the fit is skipped');
+  assert.match(LOOP_SRC, /if \(heldMs < budget\)/, 'the hold must not starve a dial');
+  assert.match(LOOP_SRC, /F\.stats\.firstPressHeld/);
+  assert.match(LOOP_SRC, /markFirstPressForced\(F\.stats, F\.geo\)/);
+  assert.match(LOOP_SRC, /L\('first press held'/);
+  assert.match(LOOP_SRC, /L\('first press forced'/);
 });
 
 test('a held first press that later forces is counted once per dial', () => {
@@ -298,7 +291,7 @@ test('a held first press that later forces is counted once per dial', () => {
   assert.equal(unheldStats.firstPressForced, 1);
   assert.equal(unheldStats.firstPressHeldForced, 0);
 
-  assert.match(SRC, /markFirstPressForced\(F\.stats, F\.geo\)/);
+  assert.match(LOOP_SRC, /markFirstPressForced\(F\.stats, F\.geo\)/);
   assert.match(SRC, /firstPressHeldForced: 0/);
   assert.match(SRC, /firstPressHeldForced: s\.firstPressHeldForced \|\| 0/);
 });
@@ -316,12 +309,12 @@ test('cast-prompt loss diagnostics are read-only and explicit', () => {
   assert.equal(T.lossDiagnostics(b, 4001, prev, false).confirmed, false, 'stale sighting');
   assert.equal(T.lossDiagnostics(b, 1100, Object.assign({}, prev, { blockedUntil: 1200 }), false).confirmed, false);
   assert.equal(T.lossDiagnostics(null, 1100, prev, true).promptChannel, null);
-  assert.match(SRC, /const diag = refreshLossDiagnostic\(F\.attempt, b, t, F\.bubblePrev, awaitingCard\)/);
-  const branch = SRC.slice(SRC.indexOf('const b = F.findBubble();'), SRC.indexOf('const b = F.findBubble();') + 1800);
+  assert.match(LOOP_SRC, /const diag = refreshLossDiagnostic\(F\.attempt, b, t, F\.bubblePrev, awaitingCard\)/);
+  const branch = LOOP_SRC.slice(LOOP_SRC.indexOf('// 1. a bubble'), LOOP_SRC.indexOf('// 1. a bubble') + 1800);
   assert.ok(branch.indexOf('refreshLossDiagnostic') < branch.indexOf('if (!F.attempt.pendingLoss)'),
     'the diagnostic must refresh before the pending-only decision guard');
   assert.match(SRC, /lossDiag: a\.lossDiag \|\| null/);
-  assert.match(SRC, /L\('attempt loss pending', Object\.assign\(\{ n: F\.attempt\.n \}, diag\)\)/);
+  assert.match(LOOP_SRC, /L\('attempt loss pending', Object\.assign\(\{ n: F\.attempt\.n \}, diag\)\)/);
 });
 
 test('a pending loss refreshes lossDiag on a later prompt sighting', () => {
@@ -680,7 +673,8 @@ test('per-attempt wedge telemetry: accepted presses and dial outcomes are per fi
     'recent: (F.attempts || []).slice(-10)',
     'dialMisses: a.dialMisses || 0',
   ];
-  for (const snip of need) assert.ok(SRC.includes(snip), 'missing telemetry: ' + snip);
+  const combined = SRC + '\n' + LOOP_SRC;
+  for (const snip of need) assert.ok(combined.includes(snip), 'missing telemetry: ' + snip);
 });
 
 test('widthReport computes the per-band wedge rate from the counters', () => {
@@ -697,16 +691,16 @@ test('widthReport computes the per-band wedge rate from the counters', () => {
 });
 
 test('doPress resets triangle tracking so >90 deg spawns stay locked and re-arm before planPress', () => {
-  const pressStart = SRC.indexOf('function doPress(s, how)');
-  const pressEnd = SRC.indexOf('const DIAL_COUNTER =', pressStart);
+  const pressStart = LOOP_SRC.indexOf('function doPress(');
+  const pressEnd = LOOP_SRC.indexOf('function armPress(', pressStart);
   assert.ok(pressStart > 0 && pressEnd > pressStart);
-  const dp = SRC.slice(pressStart, pressEnd);
+  const dp = LOOP_SRC.slice(pressStart, pressEnd);
   assert.match(dp, /F\.geo\._mid = null/, 'doPress must clear _mid so >90 deg spawns are not rejected as tracking jumps');
 
-  const loopStart = SRC.indexOf('// 2. a locked dial: play it');
-  const loopEnd = SRC.indexOf('// 3. nothing on screen:', loopStart);
+  const loopStart = LOOP_SRC.indexOf('// 2. a locked dial: play it');
+  const loopEnd = LOOP_SRC.indexOf('// 3. nothing on screen:', loopStart);
   assert.ok(loopStart > 0 && loopEnd > loopStart);
-  const loop = SRC.slice(loopStart, loopEnd);
+  const loop = LOOP_SRC.slice(loopStart, loopEnd);
   const rearmIdx = loop.indexOf('const spawnProven = newTriangle(');
   const planIdx = loop.indexOf('const plan = planPress(');
   assert.ok(rearmIdx > 0 && planIdx > 0 && rearmIdx < planIdx, 're-arm must run before planPress so a new spawn fires on the same frame');
@@ -716,5 +710,5 @@ test('maxPressPerDial defaults above 12 so high-tier fish do not stall on press 
   const m = SRC.match(/maxPressPerDial:\s*(\d+)/);
   assert.ok(m, 'maxPressPerDial default is missing');
   assert.ok(Number(m[1]) >= 25, 'maxPressPerDial must allow >12 presses on a dial, got ' + m[1]);
-  assert.match(SRC, /F\.dialRejected/, 'consecutive rejected presses must still guard against a broken dial');
+  assert.match(LOOP_SRC, /F\.dialRejected/, 'consecutive rejected presses must still guard against a broken dial');
 });

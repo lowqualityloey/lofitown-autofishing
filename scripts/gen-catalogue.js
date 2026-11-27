@@ -220,7 +220,7 @@ function main(argv) {
     return 2;
   }
 
-  const target = path.join(ROOT, 'autofish.js');
+  const target = path.join(ROOT, 'src', 'ledger.js');
   const source = fs.readFileSync(target, 'utf8');
   const existing = fresh ? [] : existingRows(source);
   const current = [];

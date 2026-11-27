@@ -135,7 +135,9 @@ const BOOTSTRAP = `
 })();
 `;
 
-const PARTS = ['autofish.js', 'session.js', 'layout.js', 'panel.js'];
+/** @type {string[]} */
+const CORE_MODULES = ['src/diagnostics.js', 'src/ledger.js', 'src/vision.js', 'src/timing.js', 'src/loop.js'];
+const PARTS = CORE_MODULES.concat(['autofish.js', 'session.js', 'layout.js', 'panel.js']);
 
 function read(name) {
   return fs.readFileSync(path.join(ROOT, name), 'utf8');
@@ -153,9 +155,20 @@ function stamp(core) {
   return core.replace(placeholder, 'const F = { version: ' + JSON.stringify(VERSION) + ' };');
 }
 
+/**
+ * Assemble the modular core (`src/*.js` + `autofish.js`) in execution order. Pass null for
+ * `version` to keep the unbundled `'dev'` placeholder for `fishserve`'s live `/autofish.js` route.
+ * @param {string | null} [version]
+ */
+function assembleCore(version) {
+  const raw = read('autofish.js');
+  if (raw.indexOf('window.__fish = F') < 0) throw new Error('autofish.js no longer installs window.__fish');
+  const core = version == null ? raw : stamp(raw);
+  return CORE_MODULES.map(read).concat([core]).join('\n').replace(/\r\n/g, '\n');
+}
+
 function build() {
-  const src = stamp(read('autofish.js'));
-  if (src.indexOf('window.__fish = F') < 0) throw new Error('autofish.js no longer installs window.__fish');
+  const src = assembleCore(VERSION);
   const session = read('session.js');
   if (session.indexOf('AutoFishSession') < 0) throw new Error('session.js no longer exports AutoFishSession');
   const layout = read('layout.js');
@@ -179,4 +192,4 @@ function main() {
 if (require.main === module) main();
 // UPDATE_URL is exported so scripts/release.js publishes to exactly the repository the header
 // advertises: a second copy of that URL is how the two releases would drift apart.
-module.exports = { build, OUT, PARTS, UPDATE_URL };
+module.exports = { build, assembleCore, CORE_MODULES, OUT, PARTS, UPDATE_URL };

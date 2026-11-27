@@ -5,8 +5,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const CORE = fs.readFileSync(path.join(__dirname, '..', 'autofish.js'), 'utf8');
+const LOOP_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'loop.js'), 'utf8');
+const DIAG = fs.readFileSync(path.join(__dirname, '..', 'src', 'diagnostics.js'), 'utf8');
 const PANEL = fs.readFileSync(path.join(__dirname, '..', 'panel.js'), 'utf8');
 const SESSION = fs.readFileSync(path.join(__dirname, '..', 'session.js'), 'utf8');
+const { resultMissingDue, createResultMissing } = require('../src/diagnostics.js');
 
 function slice(source, from, to) {
   const a = source.indexOf(from);
@@ -17,9 +20,8 @@ function slice(source, from, to) {
 }
 
 function resultMissingCore(F, log) {
-  const body = slice(CORE, '// <result-missing-core>', '// </result-missing-core>');
-  return new Function('F', 'L', body +
-    '\nreturn { resultMissingDue, clearResultMissing, markResultMissing };')(F, log);
+  const ctrl = createResultMissing(F, log);
+  return { resultMissingDue, clearResultMissing: ctrl.clear, markResultMissing: ctrl.mark };
 }
 
 const resultMissingApi = resultMissingCore({}, function () {});
@@ -81,7 +83,7 @@ test('a late result clears the latch and its evidence', () => {
 
 test('step uses the pure detector after the card and prompt checks', () => {
   assert.match(CORE, /resultMissingMs: 8000/);
-  const detect = slice(CORE, '// 3b. A pressed dial', 'const seatProbe');
+  const detect = slice(LOOP_SRC, '// 3b. A pressed dial', 'const seatProbe');
   assert.match(detect, /resultMissingDue\(F, t\)/);
   assert.match(detect, /markResultMissing\(t, 'no catch card or cast prompt'\)/);
 });
@@ -91,15 +93,15 @@ test('status exposes the latch and every cast retry stops while it is set', () =
   assert.match(status, /resultMissing: !!F\.resultMissing/);
   assert.match(status, /resultMissingAt:/);
   assert.match(status, /resultMissingAttempt:/);
-  assert.match(CORE, /if \(!F\.resultMissing && \(!F\.castHold \|\| seatProbe\)/);
-  assert.match(CORE, /seatWatch && !F\.geo && !F\.needsSeat && !F\.resultMissing/);
-  assert.match(CORE, /if \(st\.resultMissing\) return o\('result-missing', 'high'/);
+  assert.match(LOOP_SRC, /if \(!F\.resultMissing && \(!F\.castHold \|\| seatProbe\)/);
+  assert.match(LOOP_SRC, /seatWatch && !F\.geo && !F\.needsSeat && !F\.resultMissing/);
+  assert.match(DIAG, /if \(st\.resultMissing\) return o\('result-missing', 'high'/);
 });
 
 test('a late prompt, dial or catch card clears the latch', () => {
-  assert.match(CORE, /clearResultMissing\('cast prompt'\)/);
-  assert.match(CORE, /clearResultMissing\('dial'\)/);
-  assert.match(CORE, /clearResultMissing\('catch card'\)/);
+  assert.match(LOOP_SRC, /clearResultMissing\('cast prompt'\)/);
+  assert.match(LOOP_SRC, /clearResultMissing\('dial'\)/);
+  assert.match(LOOP_SRC, /clearResultMissing\('catch card'\)/);
 });
 
 test('the session uses a distinct, non-retryable reason and refuses Resume', () => {

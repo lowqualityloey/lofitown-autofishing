@@ -11,12 +11,8 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 
 const SRC = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
-const OPEN = '// <card-text>';
-const CLOSE = '// </card-text>';
-const a = SRC.indexOf(OPEN);
-const b = SRC.indexOf(CLOSE);
-if (a < 0 || b < 0) throw new Error('card-text sentinels are missing from autofish.js');
-const T = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { textSince, parseCard, WEIGHT, MONEY, WORD };')();
+const LOOP_SRC = readFileSync(join(__dirname, '..', 'src', 'loop.js'), 'utf8');
+const T = require('../src/vision.js');
 const TIER = (s) => /^(common|uncommon|rare|epic|legendary|secret|halloween|christmas)$/i.test(String(s));
 
 function draw(list, t0) {
@@ -102,9 +98,10 @@ test('the join stops before a tier word and keeps the old read when the name is 
 });
 
 test('every catalogue name survives being wrapped at any word boundary', () => {
-  const c = SRC.indexOf('// <species-catalogue>');
-  const d = SRC.indexOf('// </species-catalogue>');
-  const names = [...SRC.slice(c, d).matchAll(/\["([^"]+)",/g)].map((m) => m[1]);
+  const LSRC = readFileSync(join(__dirname, '..', 'src', 'ledger.js'), 'utf8');
+  const c = LSRC.indexOf('// <species-catalogue>');
+  const d = LSRC.indexOf('// </species-catalogue>');
+  const names = [...LSRC.slice(c, d).matchAll(/\["([^"]+)",/g)].map((m) => m[1]);
   const set = new Set(names.map((n) => n.toLowerCase()));
   const KNOWN = (s) => set.has(String(s).toLowerCase());
   let wrapped = 0;
@@ -132,9 +129,10 @@ test('a decimal price is a price, not a parse failure', () => {
 });
 
 test('every catalogue name passes the card word matcher', () => {
-  const c = SRC.indexOf('// <species-catalogue>');
-  const d = SRC.indexOf('// </species-catalogue>');
-  const block = SRC.slice(c, d);
+  const LSRC = readFileSync(join(__dirname, '..', 'src', 'ledger.js'), 'utf8');
+  const c = LSRC.indexOf('// <species-catalogue>');
+  const d = LSRC.indexOf('// </species-catalogue>');
+  const block = LSRC.slice(c, d);
   const names = [...block.matchAll(/\["([^"]+)",/g)].map((m) => m[1]);
   assert.ok(names.length > 200, 'the catalogue should be the full table');
   for (const name of names) assert.ok(T.WORD.test(name), name + ' would be dropped by the card reader');
@@ -147,10 +145,10 @@ test('a card with no price says why instead of inventing a catch', () => {
 });
 
 test('a card that never parsed moves the cursor before it is tapped away', () => {
-  const at = SRC.indexOf("L('catch text missing'");
+  const at = LOOP_SRC.indexOf("L('catch text missing'");
   assert.ok(at > 0, 'the missing-text branch is missing');
-  const branch = SRC.slice(at, at + 600);
-  const cursor = branch.indexOf('F.txtAt = now();');
+  const branch = LOOP_SRC.slice(at, at + 600);
+  const cursor = branch.indexOf('F.txtAt = o.now ? o.now() : t;');
   const tap = branch.indexOf('tap(card.cx, card.cy);');
   assert.ok(cursor > 0, 'the text cursor must advance past an unparsed card');
   assert.ok(tap > cursor, 'the cursor has to move before the card is dismissed');

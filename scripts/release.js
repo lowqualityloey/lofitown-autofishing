@@ -36,14 +36,14 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
-const { UPDATE_URL, build } = require('../build-userscript.js');
+const { UPDATE_URL, build, PARTS } = require('../build-userscript.js');
 
 const ROOT = path.join(__dirname, '..');
 const CHECK_ONLY = process.argv.includes('--check');
 const DIST = 'dist/autofish.user.js';
 // The files build() reads. If any is modified, "build of the working tree" is not "build of the
 // tag", so the fresh-build cross-check is skipped instead of comparing the wrong thing.
-const BUILD_INPUTS = ['package.json', 'autofish.js', 'session.js', 'layout.js', 'panel.js', 'build-userscript.js'];
+const BUILD_INPUTS = ['package.json', 'build-userscript.js'].concat(PARTS);
 
 function git(args, encoding = 'utf8') {
   return execFileSync('git', args, { cwd: ROOT, encoding, maxBuffer: 64 * 1024 * 1024 });

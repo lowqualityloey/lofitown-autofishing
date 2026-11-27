@@ -13,19 +13,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const CORE = fs.readFileSync(path.join(__dirname, '..', 'autofish.js'), 'utf8');
+const LOOP_SRC = fs.readFileSync(path.join(__dirname, '..', 'src', 'loop.js'), 'utf8');
 const PANEL = fs.readFileSync(path.join(__dirname, '..', 'panel.js'), 'utf8');
 const { createState, reduce } = require('../session.js');
 
 const T0 = 1_800_000_000_000;
 const tick = (state, at, over) => reduce(state, Object.assign({ type: 'tick', at, visible: true, catches: 0, errors: 0, todayMs: 0 }, over || {}));
 
-function glyphCore() {
-  const a = CORE.indexOf('// <glyph-core>');
-  const b = CORE.indexOf('// </glyph-core>');
-  assert.ok(a >= 0 && b > a, 'glyph-core sentinels are missing');
-  return new Function(CORE.slice(a, b) + '\nreturn { glyphMetrics };')();
-}
-const { glyphMetrics } = glyphCore();
+const { glyphMetrics } = require('../src/vision.js');
 const glyphIs = (d, w, s, e, y0, y1) => glyphMetrics(d, w, s, e, y0, y1).ok;
 
 /** White RGBA field with a painter (full-res detector buffer). Ink defaults to opaque dark. */
@@ -81,7 +76,7 @@ test('the opaque line stands between the measured prompt and tag', () => {
 });
 
 test('every bubble logs its glyph verdict for the live watch', () => {
-  assert.match(CORE, /gdark: typeof b\.gdark === 'number' \? b\.gdark : null, gsoft: typeof b\.gsoft === 'number' \? b\.gsoft : null/);
+  assert.match(LOOP_SRC, /gdark: typeof b\.gdark === 'number' \? b\.gdark : null, gsoft: typeof b\.gsoft === 'number' \? b\.gsoft : null/);
   assert.doesNotMatch(CORE, /capture-core/, 'the pixel instrument shipped out; verdict telemetry stays');
 });
 
@@ -101,14 +96,14 @@ test('the core spots an open profile from its buttons, not pixels', () => {
 
 test('the dial lock records whether tap or Space summoned it', () => {
   // The tail is too short to prove the cause later, so it persists on status.
-  assert.match(CORE, /F\.lastBubbleCause = \{ tap: tapOk, space: !!rec\.space, glyph: b\.glyph === true, at: t \};/);
-  assert.match(CORE, /F\.lastDialCause = \{ tap: /);
-  assert.match(CORE, /cause: dcCause/);
+  assert.match(LOOP_SRC, /F\.lastBubbleCause = \{ tap: tapOk, space: !!rec\.space, glyph: b\.glyph === true, at: t \};/);
+  assert.match(LOOP_SRC, /F\.lastDialCause = \{ tap: /);
+  assert.match(LOOP_SRC, /cause: dcCause/);
   assert.match(CORE, /lastDialCause: F\.lastDialCause \|\| null,/);
 });
 
 test('the narrow hold counts its engagements', () => {
-  assert.match(CORE, /F\.stats\.narrowHolds = \(F\.stats\.narrowHolds \|\| 0\) \+ 1;/);
+  assert.match(LOOP_SRC, /F\.stats\.narrowHolds = \(F\.stats\.narrowHolds \|\| 0\) \+ 1;/);
 });
 
 test('a lost attempt persists its reason on status', () => {
@@ -120,7 +115,7 @@ test('a lost attempt persists its reason on status', () => {
 
 test('the core tries Escape when a profile is open', () => {
   assert.match(CORE, /function tryEscapeProfile\(t\)/);
-  assert.match(CORE, /tryEscapeProfile\(t\);/);
+  assert.match(LOOP_SRC, /tryEscapeProfile\(t\)/);
   assert.match(CORE, /L\('escape profile', \{\}\);/);
 });
 
@@ -136,10 +131,9 @@ test('status() reports profileOpen without needing a DOM', () => {
   assert.equal(status().profileOpen, false, 'no document in scope reads closed, not throws');
 });
 
+const D = require('../src/diagnostics.js');
+
 test('doctor() names the open profile instead of waiting for a no-catch', () => {
-  const open = CORE.indexOf('// <doctor-core>');
-  const close = CORE.indexOf('// </doctor-core>');
-  const D = new Function(CORE.slice(open + '// <doctor-core>'.length, close) + '\nreturn { doctor };')();
   const base = { running: true, paused: false, hidden: false, stalled: false, postRender: true,
     snapshot: { gl: 100, canvas2d: 0 }, readback: { canvas2d: 0 }, longtasks: { inLast10s: 0, maxMs: 10 },
     worstFrameMs: 50, needsSeat: false, sincePromptMs: 5000, sinceDialMs: 60000,

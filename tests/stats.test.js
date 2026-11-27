@@ -8,14 +8,9 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
+const S = require('../src/diagnostics.js');
 
 const SRC = readFileSync(join(__dirname, '..', 'autofish.js'), 'utf8');
-const OPEN = '// <stats-core>';
-const CLOSE = '// </stats-core>';
-const a = SRC.indexOf(OPEN);
-const b = SRC.indexOf(CLOSE);
-if (a < 0 || b < 0) throw new Error('stats-core sentinels are missing from autofish.js');
-const S = new Function(SRC.slice(a + OPEN.length, b) + '\nreturn { wilson, runSummary, pressAcceptSummary, predictionSummary };')();
 
 const near = (x, y, eps) => Math.abs(x - y) <= (eps == null ? 0.001 : eps);
 
@@ -216,13 +211,14 @@ test('press acceptance separates observed from assumed', () => {
 });
 
 test('the instruments are wired into the dial path and the export', () => {
-  assert.match(SRC, /function probePressStart/);
-  assert.match(SRC, /probePressStart\(s\);/);
+  const LOOP_SRC = readFileSync(join(__dirname, '..', 'src', 'loop.js'), 'utf8');
+  assert.match(LOOP_SRC, /function probePressStart/);
+  assert.match(LOOP_SRC, /probePressStart\(F, s, t\);/);
   assert.match(SRC, /presses: pressAcceptSummary\(F\.pressLog\)/);
   assert.match(SRC, /prediction: predictionSummary\(F\.predLog\)/);
-  assert.match(SRC, /F\.pressProbe\.via = 'settled'/);
+  assert.match(LOOP_SRC, /F\.pressProbe\.via = 'settled'/);
   // The prediction sample must skip any frame a press landed between.
-  assert.match(SRC, /!\(F\.lastPress && F\.lastPress > pp\.t\)/);
+  assert.match(LOOP_SRC, /!\(F\.lastPress && F\.lastPress > pp\.t\)/);
   // And the spawn-poisoned measurement must be gone for good.
   assert.doesNotMatch(SRC, /probePressSample/);
   assert.doesNotMatch(SRC, /atJudge/);

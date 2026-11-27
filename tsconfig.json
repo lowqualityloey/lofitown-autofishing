@@ -21,6 +21,7 @@
     "autofish.js",
     "fishserve.js",
     "build-userscript.js",
+    "src/**/*.js",
     "scripts/**/*.js"
   ],
   "exclude": ["dist", "data", "shots", ".tmp", ".promptkit", ".pkab"]
