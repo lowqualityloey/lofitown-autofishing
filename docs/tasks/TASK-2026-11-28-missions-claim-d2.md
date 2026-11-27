@@ -102,7 +102,7 @@
 - **Verification Evidence**: `npm run typecheck` exit 0 (first run, zero repair cycles - the D1 `@type` annotation idiom applied pre-emptively); `node build-userscript.js` exit 0 (first run; dist rebuilt); `node --test` 466/466 pass, exit 0 (first run: 456 pre-existing + 10 new, none regressed; the D1 read-only contract test passed unmodified); `check-doctor.sh` exit 0 at the gate (session run 2): `docs-drift OK - projection agrees with the canonical Task Record`; `state-freshness OK: 160 lines / 5606 tok` - no archival repair needed. Preset-switch doctor run 1 exit 0 pre-task (158 lines / 4997 tok).
 - **CI Evidence**: `N/A - not run; no push`
 - **Review Evidence**: `Owner sign-off received 2026-11-28 09:21 (UTC+13): reply 'sign-off D2 commit' (sign-off + local atomic commit authorization; pre-existing dirt, .pkab/, and the scratch #607 log excluded; no push, no PR)`
-- **Commit Evidence**: `Owner-confirmed milestone commit on main (2026-11-28; 11 files; pre-existing dirt and .pkab/ excluded) - SHA and diffstat recorded by the docs-only follow-up commit per the workflows/commit.md two-commit pattern`
+- **Commit Evidence**: `Owner-confirmed milestone commit ad9c7653794ab5cc94c67f000180a54e2819e597 on main (2026-11-28; 11 files, 619 insertions, 28 deletions; pre-existing dirt and .pkab/ excluded); entry added by this docs-only follow-up commit per the workflows/commit.md two-commit pattern`
 - **Pull Request Evidence**: `N/A`
 - **Release Evidence**: `N/A`
 - **Blocker and Resume Condition**: `None`
