@@ -49,6 +49,12 @@ Live snapshot audit (`225` snapshots, `1,778` attempts, `172` losses) exposed fo
 3. **Off-center pier seats (`y ≈ 580`)**: `promptBox()` missed `CAST!`, `dialAnywhere()` did not update `F.hint`, and `bubbleAnywhere()` lacked `glyphMetrics`. Added `seatPromptBox(F.lastGeo, cw, ch)`, dial-lock `F.hint` sync, and glyph-verified rung-1 `Space`.
 4. **WebGL snapshot fallback**: `downscaleGl()` now retries up to 3 context/FBO failures before falling back to 2D `getImageData`.
 
+## 2026-11-27 Flow Fishing Mode & Local capture UI unification
+
+- **Added `Mode: Flow | Timed`** ([session.js](session.js), [src/loop.js](src/loop.js), [panel.js](panel.js)): **`Flow`** fishes continuously until manual **Stop** (`maxMinutes: 0`, skips duration/daily-cap/window/cooldown stops, counts elapsed time up on the surface meter, and hides the 5 timed/budgeted rows), while keeping all safety guards (`seat`, `profile-open`, `player-block`, `result-missing`, `core-crash`, `Pause in focus sessions`) active. `Stop when hidden` also steps down to `0` (`off` = pause-only while hidden and auto-resume on return).
+- **Retired `Fast first press` panel toggle & amber warning**: Live `250`-attempt telemetry in BrowserOS Neo showed `firstPressHeld: 0` after v3.9.64's `>90°` lock-continuity fix (`22/23` narrow catches); `fastFirstPress` stays available only via console `F.tune({ fastFirstPress })`.
+- **Kept `Cozier popup`** (`hideUpsell`) and **merged `Send catches to CSV` + `Overnight capture` into one `Local capture` toggle** (`localCapture` pref with Expand-Contract backwards compatibility from `postCatches` / `overnight`, syncing both `POST /catch` and `/overnight.js` over one `fishserve` origin).
+
 ## 2026-11-27 Modular Core Extraction (`src/`) & Headless Simulator (M4)
 
 Extracted all 12 pure/semi-pure sentinel blocks and the `step()` frame-loop driver out of

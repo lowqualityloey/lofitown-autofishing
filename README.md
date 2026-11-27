@@ -60,9 +60,9 @@ __fish.version
 
 The bot reads the game's rendered frames to find the **CAST!** and **REEL!** prompts, then presses the spinning reel dial at the moment the wedge crosses the pin. It uses a predicted crossing, re-arms after a proven new triangle, and falls back to a full-surface search if its remembered dial is wrong. Detection runs inside a wrapper around the renderer, because the prompts are painted into the game's canvas.
 
-The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, session time, catches, presses and today's cap. **Session & guards** holds the session length, cooldown, daily cap, clock window, profile, CSV upload and optional overnight capture.
+The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, elapsed/remaining timer, catches, presses and today's time. **Session & guards** starts with **Mode (`Flow` / `Timed`)**: **Flow** runs nonstop until you press **Stop** (keeping safety guards active and hiding the **Session**, **Cooldown**, **Daily time cap**, **Clock window**, and **Auto-start** rows), while **Timed** enforces budgeted windows and cooldowns. It also holds **Stop when hidden** (including `off` for pause-only), **Cozier popup**, **Pause in focus sessions**, **Resume after reload**, **Local capture** (streaming both CSV rows and 5-minute `fishserve` snapshots), and **Profile**.
 
-**Fast first press (opt-in).** By default the first press on a dial narrower than 60° or spinning at 300°/s or faster waits for a stable spin fit. Turn on **Fast first press** in **Session & guards** to tap the first pass anyway. It removes the visible first-turn delay, but skips the stability check and makes misses on high-tier fish more likely; it is off by default. **Diagnostics** shows fps, frame times and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
+**Diagnostics** shows fps, frame times, accuracy, and detector cost. Drag the header to move it; the **-** control collapses it to a small pill. (Console power users can still toggle `fastFirstPress` via `__fish.tune({ fastFirstPress: true })`, though the default first-press gate recorded zero unwanted holds in live 3.9.64 runs.)
 
 ![The AutoFish panel](docs/images/panel.jpg)
 
@@ -88,7 +88,7 @@ The page keeps only the last 250 attempts, so a long run needs a local sampler. 
 node fishserve.js
 ```
 
-Open **Session & guards**, click **Overnight capture**, and enter the fishserve origin, usually `http://127.0.0.1:8731`. The first snapshot posts immediately and the sampler repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
+Open **Session & guards**, turn on **Local capture**, and enter the fishserve origin, usually `http://127.0.0.1:8731`. Catches stream to `catches.csv` and the first run snapshot posts immediately and repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
 
 In the morning:
 

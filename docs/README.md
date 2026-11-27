@@ -8,6 +8,7 @@
 | [specs/2026-11-19-3.9.52-held-forced-prereg.md](specs/2026-11-19-3.9.52-held-forced-prereg.md) | Pre-registered read-only telemetry plan for 3.9.52: metrics, strengthened sample, one-sided 95% Wilson bound, and the 20% cap retirement rule. |
 | [specs/2026-11-27-jsdoc-typecheck-and-architecture.md](specs/2026-11-27-jsdoc-typecheck-and-architecture.md) | Implementation plan (RFC) for incremental JSDoc + `tsc --noEmit` type-checking, optional sentinel modularization, headless `step()` simulator, CI, and docs updates. |
 | [specs/2026-11-27-m4-modular-core-and-simulator.md](specs/2026-11-27-m4-modular-core-and-simulator.md) | Architecture & execution RFC (`PLAN-m4-modular-core`) for extracting `autofish.js` sentinels into `src/` UMD modules, shared `fishserve`/build assembly, and headless `step()` simulator. |
+| [specs/2026-11-27-flow-mode-and-panel-simplification.md](specs/2026-11-27-flow-mode-and-panel-simplification.md) | Architecture & execution RFC (`PLAN-flow-mode-panel`) for nonstop `Flow` mode, retiring `Fast first press` from UI, keeping `Cozier popup`, and unifying `Local capture`. |
 | [specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md) | Panel design spec: intent, goals, anti-goals, and the control surface chosen on 2026-10-27. |
 | [tasks/autofish-panel.md](tasks/autofish-panel.md) | Task record for the panel milestone (T1-T10, acceptance criteria). Its design spec is [specs/2026-10-27-in-game-panel-design.md](specs/2026-10-27-in-game-panel-design.md); its decisions live in [STATE.md §6](STATE.md). |
 | [tasks/TASK-2026-10-28-catch-log.md](tasks/TASK-2026-10-28-catch-log.md) | Task record for Catch log v1, with its verify commands. |
@@ -21,6 +22,7 @@
 | [tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md](tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md) | Task record for fixing mid-fish >90° lock drops, 12-press cap losses, re-arm lag, and off-center seat prompt freezes. |
 | [tasks/TASK-2026-11-27-jsdoc-typecheck.md](tasks/TASK-2026-11-27-jsdoc-typecheck.md) | Task record for incremental JSDoc + `tsc --noEmit` typing (M1–M3), CI, and docs alignment (M5). |
 | [tasks/TASK-2026-11-27-m4-modular-core.md](tasks/TASK-2026-11-27-m4-modular-core.md) | Task record for M4 `src/` modular core extraction, test/script migration, and headless `step()` simulator. |
+| [tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md](tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md) | Task record for nonstop `Flow` fishing mode, retiring `Fast first press` UI, and unified `Local capture` toggle. |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
 | [reviews/2026-11-23-catch-and-focus-live.md](reviews/2026-11-23-catch-and-focus-live.md) | Live verification of the rebuilt userscript's catch POST, focus takeover, seat warning and next catch. |
