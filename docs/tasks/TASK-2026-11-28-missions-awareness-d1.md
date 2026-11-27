@@ -103,7 +103,7 @@
 - **Verification Evidence**: `npm run typecheck` exit 0 (after 4 JSDoc `@type` fixes in the new module - the only repair cycle); `node build-userscript.js` exit 0 (dist rebuilt, byte-freshness guard green); `node --test` 456/456 pass, exit 0 (448 pre-existing + 8 new, none regressed); final `check-doctor.sh` exit 0 with `docs-drift OK` and `state-freshness OK` (output at the gate).
 - **CI Evidence**: `N/A - not run; no push`
 - **Review Evidence**: `Owner sign-off received 2026-11-28 08:37 (UTC+13): reply 'sign-off commit' (sign-off + local atomic commit authorization; D2 explicitly not started)`
-- **Commit Evidence**: `Pending - two-commit pattern per workflows/commit.md: the owner-confirmed milestone commit carries this record; the Commit Evidence entry citing that SHA is added by a docs-only follow-up commit`
+- **Commit Evidence**: `Owner-confirmed milestone commit c72d652c7421f29908eb2707e681bf35aae781e5 on main (2026-11-28; 13 files, 698 insertions, 20 deletions; pre-existing dirt and .pkab/ excluded); entry added by this docs-only follow-up commit per the workflows/commit.md two-commit pattern`
 - **Pull Request Evidence**: `N/A`
 - **Release Evidence**: `N/A`
 - **Blocker and Resume Condition**: `None`
