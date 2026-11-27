@@ -695,3 +695,26 @@ test('widthReport computes the per-band wedge rate from the counters', () => {
   assert.equal(row.pressesPerAttempt, 5.8);
   assert.equal(row.catchRate, 0.8);
 });
+
+test('doPress resets triangle tracking so >90 deg spawns stay locked and re-arm before planPress', () => {
+  const pressStart = SRC.indexOf('function doPress(s, how)');
+  const pressEnd = SRC.indexOf('const DIAL_COUNTER =', pressStart);
+  assert.ok(pressStart > 0 && pressEnd > pressStart);
+  const dp = SRC.slice(pressStart, pressEnd);
+  assert.match(dp, /F\.geo\._mid = null/, 'doPress must clear _mid so >90 deg spawns are not rejected as tracking jumps');
+
+  const loopStart = SRC.indexOf('// 2. a locked dial: play it');
+  const loopEnd = SRC.indexOf('// 3. nothing on screen:', loopStart);
+  assert.ok(loopStart > 0 && loopEnd > loopStart);
+  const loop = SRC.slice(loopStart, loopEnd);
+  const rearmIdx = loop.indexOf('const spawnProven = newTriangle(');
+  const planIdx = loop.indexOf('const plan = planPress(');
+  assert.ok(rearmIdx > 0 && planIdx > 0 && rearmIdx < planIdx, 're-arm must run before planPress so a new spawn fires on the same frame');
+});
+
+test('maxPressPerDial defaults above 12 so high-tier fish do not stall on press 13', () => {
+  const m = SRC.match(/maxPressPerDial:\s*(\d+)/);
+  assert.ok(m, 'maxPressPerDial default is missing');
+  assert.ok(Number(m[1]) >= 25, 'maxPressPerDial must allow >12 presses on a dial, got ' + m[1]);
+  assert.match(SRC, /F\.dialRejected/, 'consecutive rejected presses must still guard against a broken dial');
+});

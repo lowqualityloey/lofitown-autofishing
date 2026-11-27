@@ -186,3 +186,26 @@ test('the whole-surface wedge finder accepts the real sector and rejects specks 
   assert.equal(ok(1000, 800), false, 'a green wash over the layer is not a wedge');
   assert.equal(ok(60, 4), false, 'a thin horizontal streak is not a wedge');
 });
+
+test('off-center seats anchor a prompt box from the locked dial and update F.hint', () => {
+  const fnAt = SRC.indexOf('function seatPromptBox(');
+  assert.ok(fnAt > 0, 'seatPromptBox helper is missing');
+  const boxFn = new Function(
+    SRC.slice(SRC.indexOf('// <prompt-box>') + '// <prompt-box>'.length, SRC.indexOf('// </prompt-box>')) +
+    '\n' + SRC.slice(fnAt, SRC.indexOf('\n  }', fnAt) + 4) +
+    '\nreturn { seatPromptBox, promptBox };'
+  )();
+  const seatBox = boxFn.seatPromptBox({ cx: 610, cy: 633, R: 90 }, 1620, 1031);
+  assert.ok(seatBox, 'seatPromptBox must return a box for an off-center dial');
+  assert.ok(seatBox.x <= 610 && 610 <= seatBox.x + seatBox.w, 'seat box covers x=610');
+  assert.ok(seatBox.y <= 580 && 580 <= seatBox.y + seatBox.h, 'seat box covers prompt y=580');
+
+  const lockAt = SRC.indexOf('if (!sameDial(F.lastGeo, g)) saveDialMemory(g);');
+  assert.ok(lockAt > 0);
+  const lockTail = SRC.slice(lockAt - 300, lockAt + 250);
+  assert.match(lockTail, /F\.hint = \{ x: g\.cx, y: g\.cy \}/, 'dial lock must update F.hint for off-center seats');
+
+  const anywhereAt = SRC.indexOf('function bubbleAnywhere()');
+  const anywhereFn = SRC.slice(anywhereAt, SRC.indexOf('\n  }', anywhereAt) + 4);
+  assert.match(anywhereFn, /glyphMetrics\(/, 'bubbleAnywhere must verify prompt glyphs');
+});

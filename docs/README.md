@@ -16,6 +16,7 @@
 | [tasks/TASK-2026-11-02-press-error.md](tasks/TASK-2026-11-02-press-error.md) | Task record for per-press timing error: how far from the window a press landed, in degrees. |
 | [tasks/TASK-2026-11-18-overnight-capture.md](tasks/TASK-2026-11-18-overnight-capture.md) | Task record for overnight capture and address correction, with acceptance and live evidence. |
 | [tasks/TASK-2026-11-18-install-3.9.51.md](tasks/TASK-2026-11-18-install-3.9.51.md) | Post-night install checklist for 3.9.51: restart fishserve first, install the userscript second, and the counters that prove the re-arm change. |
+| [tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md](tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md) | Task record for fixing mid-fish >90° lock drops, 12-press cap losses, re-arm lag, and off-center seat prompt freezes. |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
 | [reviews/2026-11-23-catch-and-focus-live.md](reviews/2026-11-23-catch-and-focus-live.md) | Live verification of the rebuilt userscript's catch POST, focus takeover, seat warning and next catch. |
@@ -28,6 +29,7 @@
 
 | File | What it is |
 | :--- | :--- |
+| [releases/3.9.64.md](releases/3.9.64.md) | 3.9.64: dial lock continuity across >90° spawns, 30-press dial cap, off-center seat prompt box, and WebGL snapshot recovery. |
 | [releases/3.9.63.md](releases/3.9.63.md) | 3.9.63: guard and blind diagnostics in the overnight export and morning report. |
 | [releases/3.9.62.md](releases/3.9.62.md) | 3.9.62: combined 3.9.57-3.9.62 release. |
 | [releases/3.9.56.md](releases/3.9.56.md) | 3.9.56: catch upload and focus/seat behavior patch. |

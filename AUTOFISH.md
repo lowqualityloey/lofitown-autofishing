@@ -1,6 +1,6 @@
 # AUTOFISH — lofi.town fishing bot
 
-Status: **WORKING (3.9.63) - Guard and blind diagnostics now travel in __fish.exportRun, and the morning report reads each session's note. Then 3.9.62's detector blind for three minutes on a visible page is escalated into a persistent reload-and-sit warning, even through the cast-stall retries. Then 3.9.61's crash-loop breaker stops reviving a core that keeps dying: three restarts in ten minutes, then a `core-crash` stop whose session row carries the guard diagnostics. Then 3.9.60's watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
+Status: **WORKING (3.9.64) - Dial lock continuity across >90° spawns, 30-press dial cap with rejected-press guard, same-frame re-arm, off-center seat prompt box, and 3-strike WebGL snapshot recovery (live-verified 2026-11-27: 0/9 multi-lock churn, 46/46 presses accepted, 82.6% settled, off-center seat promoted to box). On top of 3.9.63's guard and blind diagnostics in __fish.exportRun, and the morning report reading each session's note. Then 3.9.62's detector blind for three minutes on a visible page is escalated into a persistent reload-and-sit warning, even through the cast-stall retries. Then 3.9.61's crash-loop breaker stops reviving a core that keeps dying: three restarts in ten minutes, then a `core-crash` stop whose session row carries the guard diagnostics. Then 3.9.60's watchdog on its own timer revives a core that stopped while the panel still said RUNNING, and a throwing tick is recorded instead of dying silently. Then an opt-in stallDialMs names a stuck narrow ring `stalled` instead of a miss or a ghost. Then the panel names why and when a run paused, and a Resume restarts the no-catch clock instead of re-pausing on the first tick. Then Fast first press is an opt-in bypass of the first-press stable-fit hold on narrow/fast dials (off by default; faster, with more misses possible). Then the four live-verified fixes, then 3.9.55's midnight budget split: a session that crosses midnight spends only the new day's share
 against the new day's cap: the reducer carries the pre-midnight minutes, the panel stores and shows
 the same share, and the session row still reports the whole run. The rest is 3.9.54's session-log
 fix: an interrupted row carries the catches it had and the start time the heartbeat recorded, so
@@ -40,6 +40,14 @@ dial ends early (see below), never by the coin total.
 
 Run with BrowserOS neo on the lofi.town tab, with the neo window genuinely uncovered
 (a covered window reports `hidden` and freezes the game).
+
+## 2026-11-27 Dial lock continuity, 12-press cap & off-center seats (3.9.64)
+
+Live snapshot audit (`225` snapshots, `1,778` attempts, `172` losses) exposed four root causes:
+1. **`maxPressPerDial: 12` cap**: `125/172` losses (`72.7%`) hit `p >= 12` and stalled until the 15 s escape timer (`why: "idle"`). Raised to `30` with `maxRejectedPerDial: 5`.
+2. **Post-press `>90°` lock drop**: `doPress()` cleared `_hist` but left `F.geo._mid` set to the old triangle, causing `F.sample()` to reject `>90°` spawns as tracking jumps (`1,094/1,778` = `61.5%` multi-lock churn) and `planPress()` ran one frame before `rearmReady()`. Clearing `_mid`/`_mt`/`_om`/`_fit` in `doPress()` and re-arming before `planPress()` eliminated multi-lock churn (`0/9` in live verification, `46/46` presses accepted, `82.6%` settled).
+3. **Off-center pier seats (`y ≈ 580`)**: `promptBox()` missed `CAST!`, `dialAnywhere()` did not update `F.hint`, and `bubbleAnywhere()` lacked `glyphMetrics`. Added `seatPromptBox(F.lastGeo, cw, ch)`, dial-lock `F.hint` sync, and glyph-verified rung-1 `Space`.
+4. **WebGL snapshot fallback**: `downscaleGl()` now retries up to 3 context/FBO failures before falling back to 2D `getImageData`.
 
 ## 2026-11-24 Fast first press (3.9.57)
 

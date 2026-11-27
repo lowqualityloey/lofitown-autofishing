@@ -1760,49 +1760,67 @@ const SPECIES = [
     return { x, y, w, h };
   }
   // </prompt-box>
+  /** Off-center pier seats render their prompt at (cx, cy - 53) above the locked dial. */
+  function seatPromptBox(geo, cw, ch) {
+    if (!geo || !isFinite(geo.cx) || !isFinite(geo.cy)) return null;
+    const W = Math.max(1, Math.round(cw || BUBBLE_BOX_REF.cw));
+    const H = Math.max(1, Math.round(ch || BUBBLE_BOX_REF.ch));
+    const w = Math.min(W, BUBBLE_BOX_MIN_W);
+    const h = Math.min(H, BUBBLE_BOX_MIN_H);
+    const x = Math.max(0, Math.min(W - w, Math.round(geo.cx - w / 2)));
+    const y = Math.max(0, Math.min(H - h, Math.round((geo.cy - 53) - h / 2)));
+    return { x, y, w, h };
+  }
   function bubbleInBox() {
-    const box = promptBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
-    const r = readUI(box.x, box.y, box.w, box.h);
-    if (!r) return null;
-    // Column counts straight off the buffer. The old loop built a fresh 4-element array for every
-    // pixel - 75,600 allocations per frame, i.e. ~6M/s at the loop rate. That GC pressure is what
-    // made the page stutter, so this pass reads channels by index only.
-    const d = r.d, w = r.w, h = r.h;
-    const cols = new Array(w).fill(0);
-    for (let y = 0, i = 0; y < h; y++) {
-      for (let x = 0; x < w; x++, i += 4) {
-        if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) cols[x]++;
+    const scanRect = (r) => {
+      if (!r) return null;
+      // Column counts straight off the buffer. The old loop built a fresh 4-element array for every
+      // pixel - 75,600 allocations per frame, i.e. ~6M/s at the loop rate. That GC pressure is what
+      // made the page stutter, so this pass reads channels by index only.
+      const d = r.d, w = r.w, h = r.h;
+      const cols = new Array(w).fill(0);
+      for (let y = 0, i = 0; y < h; y++) {
+        for (let x = 0; x < w; x++, i += 4) {
+          if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) cols[x]++;
+        }
       }
-    }
-    let s = -1, best = null;
-    for (let x = 0; x <= r.w; x++) {
-      const on = x < r.w && cols[x] > 3;
-      if (on && s < 0) s = x;
-      if (!on && s >= 0) {
-        const bw = x - s;                     // bubble width, not the buffer stride
-        if (bw > 45 && bw < 150) {
-          let y0 = 1e9, y1 = -1, n = 0;
-          for (let y = 0; y < h; y++) {
-            for (let xx = s, i = (y * w + s) * 4; xx < x; xx++, i += 4) {   // w = buffer width
-              if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) { n++; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      let s = -1, best = null;
+      for (let x = 0; x <= r.w; x++) {
+        const on = x < r.w && cols[x] > 3;
+        if (on && s < 0) s = x;
+        if (!on && s >= 0) {
+          const bw = x - s;                     // bubble width, not the buffer stride
+          if (bw > 45 && bw < 150) {
+            let y0 = 1e9, y1 = -1, n = 0;
+            for (let y = 0; y < h; y++) {
+              for (let xx = s, i = (y * w + s) * 4; xx < x; xx++, i += 4) {   // w = buffer width
+                if (d[i + 3] > 120 && d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) { n++; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+              }
+            }
+            const bh = y1 - y0;                 // bubble height; h stays the buffer height
+            // 25 was wide enough for a player's name tag, which is the same white-with-dark-text
+            // shape one size smaller. Tapping one opened that player's profile mid-session (reported
+            // live 2026-11-02). The prompt is ~108x50 at the reference size and scales with the
+            // canvas, so 28 px at the bottom keeps it and drops a tag.
+            const fill = n / Math.max(1, bw * bh);
+            if (bh >= 28 && bh < 95 && fill >= 0.45 && (!best || n > best.n)) {
+              best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n, via: 'box' };
+              var gm = glyphMetrics(d, w, s, x, y0, y1);
+              best.glyph = gm.ok; best.gdark = +gm.dark.toFixed(3); best.gsoft = +gm.soft.toFixed(3);
             }
           }
-          const bh = y1 - y0;                 // bubble height; h stays the buffer height
-          // 25 was wide enough for a player's name tag, which is the same white-with-dark-text
-          // shape one size smaller. Tapping one opened that player's profile mid-session (reported
-          // live 2026-11-02). The prompt is ~108x50 at the reference size and scales with the
-          // canvas, so 28 px at the bottom keeps it and drops a tag.
-          const fill = n / Math.max(1, bw * bh);
-          if (bh >= 28 && bh < 95 && fill >= 0.45 && (!best || n > best.n)) {
-            best = { cx: Math.round((s + x - 1) / 2 + r.x), cy: Math.round((y0 + y1) / 2 + r.y), w: bw, h: bh, n, via: 'box' };
-            var gm = glyphMetrics(d, w, s, x, y0, y1);
-            best.glyph = gm.ok; best.gdark = +gm.dark.toFixed(3); best.gsoft = +gm.soft.toFixed(3);
-          }
+          s = -1;
         }
-        s = -1;
       }
-    }
-    return best;
+      return best;
+    };
+    const box = promptBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    const r = readUI(box.x, box.y, box.w, box.h);
+    const best = scanRect(r);
+    if (best) return best;
+    const sbox = seatPromptBox(F.lastGeo, uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    if (!sbox || (sbox.x === box.x && sbox.y === box.y && sbox.w === box.w && sbox.h === box.h)) return null;
+    return scanRect(readUI(sbox.x, sbox.y, sbox.w, sbox.h));
   }
 
   /**
@@ -1812,20 +1830,25 @@ const SPECIES = [
    */
   const BUBBLE_GATE_PX = 10;
   function bubbleGate() {
-    const box = promptBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
-    const x0 = Math.max(0, Math.floor(box.x / SDOWN));
-    const y0 = Math.max(0, Math.floor(box.y / SDOWN));
-    const x1 = Math.min(sw, Math.ceil((box.x + box.w) / SDOWN));
-    const y1 = Math.min(sh, Math.ceil((box.y + box.h) / SDOWN));
-    let n = 0;
-    for (let y = y0; y < y1; y++) {
-      for (let x = x0, i = (y * sw + x0) * 4; x < x1; x++, i += 4) {
-        if (sdata[i + 3] > 120 && sdata[i] >= 225 && sdata[i + 1] >= 225 && sdata[i + 2] >= 225) {
-          if (++n >= BUBBLE_GATE_PX) return true;
+    const hasWhite = (box) => {
+      const x0 = Math.max(0, Math.floor(box.x / SDOWN));
+      const y0 = Math.max(0, Math.floor(box.y / SDOWN));
+      const x1 = Math.min(sw, Math.ceil((box.x + box.w) / SDOWN));
+      const y1 = Math.min(sh, Math.ceil((box.y + box.h) / SDOWN));
+      let n = 0;
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0, i = (y * sw + x0) * 4; x < x1; x++, i += 4) {
+          if (sdata[i + 3] > 120 && sdata[i] >= 225 && sdata[i + 1] >= 225 && sdata[i + 2] >= 225) {
+            if (++n >= BUBBLE_GATE_PX) return true;
+          }
         }
       }
-    }
-    return false;
+      return false;
+    };
+    const box = promptBox(uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    if (hasWhite(box)) return true;
+    const sbox = seatPromptBox(F.lastGeo, uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+    return !!(sbox && hasWhite(sbox));
   }
 
   /* -------------------------------------------------- adaptive search ---- */
@@ -1838,7 +1861,7 @@ const SPECIES = [
    */
   const SDOWN = 4;
   let sbuf = null, sctx = null, sdata = null, sw = 0, sh = 0;
-  let sgl = null, sglCanvas = null, sglTex = null, sglFbo = null, sbytes = null, sglOff = false, sglChecked = false;
+  let sgl = null, sglCanvas = null, sglTex = null, sglFbo = null, sbytes = null, sglOff = false, sglChecked = false, sglFails = 0;
 
   /**
    * The quarter-scale copy WITHOUT a fresh array every tick.
@@ -1888,13 +1911,17 @@ const SPECIES = [
         sgl.texParameteri(sgl.TEXTURE_2D, sgl.TEXTURE_WRAP_T, sgl.CLAMP_TO_EDGE);
       }
       if (sgl.isContextLost && sgl.isContextLost()) {
-        sglOff = true; L('downscale readback', { via: '2d', why: 'context lost' }); return null;
+        sgl = null; sglCanvas = null; sglTex = null; sglFbo = null; sbytes = null; sglChecked = false;
+        if (++sglFails >= 3) { sglOff = true; L('downscale readback', { via: '2d', why: 'context lost' }); }
+        return null;
       }
       if (sglCanvas.width !== w || sglCanvas.height !== h) {
         sglCanvas.width = w; sglCanvas.height = h;
         sbytes = null;
         if (!sglAttach(w, h)) {
-          sglOff = true; L('downscale readback', { via: '2d', why: 'fbo' }); return null;
+          sgl = null; sglCanvas = null; sglTex = null; sglFbo = null; sglChecked = false;
+          if (++sglFails >= 3) { sglOff = true; L('downscale readback', { via: '2d', why: 'fbo' }); }
+          return null;
         }
       }
       const n = w * h * 4;
@@ -2067,6 +2094,8 @@ const SPECIES = [
       const ink = inkMix(r);
       if (ink.white < 0.45 || ink.dark < 0.02 || ink.dark > 0.5) continue;
       const cand = { cx: Math.round(x + W / 2), cy: Math.round(y + H / 2), w: W, h: H, n: b.count * SDOWN * SDOWN, via: 'anywhere' };
+      const gm = glyphMetrics(r.d, r.w, 0, r.w, 0, r.h);
+      cand.glyph = gm.ok; cand.gdark = +gm.dark.toFixed(3); cand.gsoft = +gm.soft.toFixed(3);
       if (!best || cand.n > best.n) best = cand;
     }
     if (best) L('bubble anywhere', { cx: best.cx, cy: best.cy, w: best.w, h: best.h });
@@ -3016,6 +3045,7 @@ const SPECIES = [
     }
     F.stats.pressVerdicts[src][verdict]++;
     F.stats[verdict === 'accepted' ? 'pressAccepted' : 'pressRejected']++;
+    F.dialRejected = verdict === 'rejected' ? (F.dialRejected || 0) + 1 : 0;
     // The game spawning a new triangle is the proof newTriangle() tries to read from geometry;
     // when an accepted press cannot be seen that way on a narrow dial, this timestamp is what
     // lets the next rotation be pressed instead of skipped.
@@ -3085,8 +3115,12 @@ const SPECIES = [
     else tap(F.geo.cx, F.geo.cy);
     F.armed = false;
     // The game answers a press by spawning a fresh triangle in the same widget, so the wedge
-    // jumps. Drop the rotation history: a fit that straddles the jump would invent a wild rate.
-    if (F.geo && F.geo._hist) F.geo._hist.length = 0;
+    // jumps. Clear the rotation history AND old tracked midpoint so F.sample() accepts a >90 deg
+    // spawn on the very next frame instead of rejecting it as a tracking jump and dropping F.geo.
+    if (F.geo) {
+      if (F.geo._hist) F.geo._hist.length = 0;
+      F.geo._mid = null; F.geo._mt = null; F.geo._om = null; F.geo._fit = null;
+    }
     F.pressStamp = s ? { delta: s.delta, width: s.width, t: s.t != null ? s.t : now() } : null;
     F.dialBlinks = 0;
     // A second press is only possible after the re-arm gate saw a spawn, so an unresolved press
@@ -3348,7 +3382,8 @@ const SPECIES = [
       firstPressAssumeOmega: 300,    // no fit at all on a narrow dial: assume at least this fast
       insideNowMs: 60,              // contain: pin past centre and still inside -> press now rather than wait a turn
       relockGraceMs: 450,           // hold a dial's geometry this long after a press (the ring blinks)
-      maxPressPerDial: 12,          // safety cap on presses per dial lock (one per rotation is normal)
+      maxPressPerDial: 30,          // safety cap on presses per dial lock (high-tier fish can take >12)
+      maxRejectedPerDial: 5,        // stop re-arming if consecutive presses are rejected
       hitMs: 1500,                  // a press the game acts on ends the dial within this
       stallDialMs: 0,               // opt-in: name a narrow ring held this long 'stalled' instead of miss/ghost
       skipMs: 300,                  // an unpressed dial that lived this long lost a fish (fades are ~100 ms)
@@ -3406,7 +3441,7 @@ const SPECIES = [
       : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
           y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
     F.txtAt = now(); F.cardWait = null;                           // only text drawn from here on counts
-    F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0;
+    F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0; F.dialRejected = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
     F.bubbleMiss = 0; F.stallRetry = 0; F.lastSpaceTry = 0; F.lastCastTry = 0; F.needsSeat = false;
@@ -4040,10 +4075,9 @@ const SPECIES = [
         F.lastPress = t;
         F.stats.bubbles++;
         L('bubble', { cx: b.cx, cy: b.cy, n: b.n, hint: F.hint.y, rung, via: b.via || 'box', tap: tapOk, space: rec.space, confirmed: confirmed, glyph: b.glyph === true, gdark: typeof b.gdark === 'number' ? b.gdark : null, gsoft: typeof b.gsoft === 'number' ? b.gsoft : null });
-        if (rec.space) {
-          F.lastSpaceTry = t;
-          space(F.opts.spaceTarget);
-        }
+        const fireSpace = () => { F.lastSpaceTry = t; space(F.opts.spaceTarget); };
+        if (rec.space) fireSpace();
+        else if (!tapOk && b.via === 'anywhere' && b.glyph === true) fireSpace();
       }
       return;
     }
@@ -4091,6 +4125,12 @@ const SPECIES = [
         }
         F.geo._pm = Number(s.mid);
       }
+      if (!s.tracked) F.dialBlinks = (F.dialBlinks || 0) + 1;   // a blink after a press is how a new spawn shows
+      // Re-arm BEFORE planPress() so a newly proven triangle can press/schedule on this same frame.
+      const spawnProven = newTriangle(F.pressStamp, s, F.dialBlinks, F.opts) ||
+        (F.acceptedAt != null && t - F.acceptedAt <= (F.opts.rearmAcceptedMs || 600));
+      if (rearmReady(spawnProven, F.pressesThisDial, F.opts.maxPressPerDial || 12) &&
+          (F.dialRejected || 0) < (F.opts.maxRejectedPerDial || 5)) F.armed = true;
       s.biasMs = F.opts.biasMs || sweepBias(F.opts.sweep, F.stats.presses);
       if (F.geoReasons) F.geoReasons[F.planReason || 'none'] = (F.geoReasons[F.planReason || 'none'] || 0) + 1;
       const plan = planPress({
@@ -4121,8 +4161,6 @@ const SPECIES = [
         F.geoTrace.push({ t: Math.round(t - F.geoAt), d: +Number(s.delta).toFixed(1), w: Math.round(s.width || 0),
           om: s.omega == null ? null : Math.round(s.omega), r: plan.reason });
         if (F.geoTrace.length > 48) F.geoTrace.shift();
-      } else {
-        F.dialBlinks = (F.dialBlinks || 0) + 1;   // a blink after a press is how a new spawn shows
       }
       // A first press on a narrow or fast dial is the one with the least evidence behind it. The
       // fit becomes reliable after a few frames; until then, skip the crossing and take the next
@@ -4169,18 +4207,6 @@ const SPECIES = [
           }
         }
       }
-      // Re-arm the moment a new triangle is proven. newTriangle() reads geometry (a blink, a
-      // width jump, a jump against the prediction); an accepted press is stronger evidence than
-      // any of them. The old rule also waited for the wedge to leave the window
-      // (|delta| > win + 12), which on a slow, wide dial cost almost a full rotation before the
-      // next press: measured live 2026-11-18, 61% of non-final slow dials got exactly one press,
-      // and a 140 deg / 62 deg/s dial lived 2.0 s against a 4.45 s leave-and-return. spawnProven
-      // is the safety check - it is false for an unchanged triangle - and planPress still holds
-      // each press to pressGapMs. The cap only guards against a runaway if the game stops
-      // accepting input.
-      const spawnProven = newTriangle(F.pressStamp, s, F.dialBlinks, F.opts) ||
-        (F.acceptedAt != null && t - F.acceptedAt <= (F.opts.rearmAcceptedMs || 600));
-      if (rearmReady(spawnProven, F.pressesThisDial, F.opts.maxPressPerDial || 12)) F.armed = true;
       if (plan.cancel) cancelPend();
       if (plan.armAt != null) armPress(plan.armAt, F.geo, s);
       if (plan.press) doPress(s, 'frame');
@@ -4197,7 +4223,7 @@ const SPECIES = [
         g = dialAnywhere();
       }
       if (g) {
-        F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0;
+        F.geo = g; F.geoAt = t; F.bad = 0; F.pressesThisDial = 0; F.pressStamp = null; F.dialBlinks = 0; F.dialRejected = 0;
         g._travel = 0; g._pm = null;
         // A new spawn IS a new triangle, so the press gate must be open on arrival. It used to be
         // left closed from the previous dial, and on a narrow dial the re-arm test (pin more than
@@ -4234,6 +4260,7 @@ const SPECIES = [
         F.lastRung = 0;                                         // logged above: which rung did the casting
         if (!sameDial(F.lastGeo, g)) saveDialMemory(g);       // survives the next reload
         F.lastGeo = { cx: g.cx, cy: g.cy, R: g.R };              // the widget position for the next dial
+        F.hint = { x: g.cx, y: g.cy };                           // keep dial hint on off-center seats too
       }
     }
 

@@ -2,9 +2,9 @@
 
 <!-- Bounded projection: respect `state-guard:` thresholds in `PROMPTKIT.md`; `pk:checkpoint` archives completed history to `docs/STATE-ARCHIVE.md`. -->
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.63 (guard/blind export; tagged v3.9.63 and published 2026-11-24); in-game control panel)
+- **Project Name**: lofitown-autofishing (autofish 3.9.64 (dial continuity, 30-press cap, off-center seat prompt box, GL snapshot recovery; release-prep pending v3.9.64 tag/publish); in-game control panel)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — v3.9.63 tagged & published (`406,879` bytes, sha256 `02904b8c7112…`, source + `lofitown-autofishing-dist` mirror green). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
+- **Overall Status**: ACTIVE — **3.9.64** release-prep ready (live-verified in BrowserOS Neo, `431/431` tests); prior published baseline **v3.9.63** (`406,879` bytes, sha256 `02904b8c7112…`, source + `lofitown-autofishing-dist` mirror green). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
 - **Current Working Branch**: `main` (`4a3e0ec`, PR #37 merged 3.9.63 docs record & guard; `node --test` 428/428 & `release.js --check` green; `run.sh` & `docs/releases/3.9.51.md` hold mode-only diffs).
 - **Last Updated**: 2026-11-27
 - **Engine Version**: v2.6.1 @ unknown
@@ -136,6 +136,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-25 | lead (Freebuff session) | PromptKit OS 2.5.0 upgrade | Replaced the main checkout's 2.4.0 courier kit with the 2.5.0 release tarball (courier verified the published pin), keeping the balanced profile, local + GitHub tracking projection and the cline host. Refreshed `AGENTS.md` and `.clinerules/promptkit.md`; `PROMPTKIT.md` kept its profile, size and intake fields; `Engine Version` stamped `v2.5.0 @ unknown`. 2.5.0 adds the host-conformance capture harness and renderer scripts and writes only `AGENTS.md` for the gemini host; no migration. `node --test` 427/427. `.promptkit/`, `AGENTS.md` and `PROMPTKIT.md` stay gitignored; main's tracked tree was left untouched because its existing diff is line-ending-only. | `docs/STATE.md`; `AGENTS.md`; `PROMPTKIT.md` |
 | 2026-11-25 | lead (Freebuff session) | PR #37 merged the 3.9.63 docs record | PR #37 merged `docs/3.9.63-release` into `main` as `4a3e0ec`; the merge added `docs/releases/3.9.63.md`, indexed it in `docs/README.md`, refreshed this tracker and added the release-note guard in `tests/docs.test.js`. Full suite 428/428 and `release.js --check` green against v3.9.63. Mode-only diffs stayed out. | `docs/releases/3.9.63.md`; `docs/README.md`; `tests/docs.test.js`; `docs/STATE.md` |
 | 2026-11-27 | Antigravity (pk:checkpoint) | PromptKit OS 2.6.1 upgrade & STATE.md slimming | Upgraded `.promptkit/` courier from v2.5.0 to v2.6.1 (`node --test` 428/428); archived historical Section 1/2/6/7/8 entries and slimmed v2.5.0 Section 3A/3B boilerplate to `docs/STATE-ARCHIVE.md`. | `docs/STATE.md`; `docs/STATE-ARCHIVE.md`; `PROMPTKIT.md`; `AGENTS.md` |
+| 2026-11-27 | Antigravity (pk:debug / pk:ship prep) | 3.9.64 dial continuity & off-center seat fix | Fixed >90° post-press lock drops (`doPress` `_mid` reset), moved re-arm before `planPress`, raised `maxPressPerDial` to 30 (`maxRejectedPerDial: 5`), added `seatPromptBox`, dial-lock `F.hint` sync, `glyphMetrics` on `bubbleAnywhere`, and 3-strike `downscaleGl` recovery. Live BrowserOS Neo: `0/9` multi-lock (was `61.5%`), `46/46` presses accepted, `82.6%` settled, `(609,578)` promoted to `box`; `431/431` tests green. | `autofish.js`; `dist/autofish.user.js`; `package.json`; `docs/releases/3.9.64.md`; `docs/tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md` |
 
 ---
 
