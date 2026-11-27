@@ -134,9 +134,17 @@ test('the dial sample reads its three rings by index, without per-sample arrays'
   const fn = slice('F.sample = function (geo)', 'function cancelPend');
   assert.ok(!/PX\(/.test(fn), 'F.sample must not allocate a pixel array per sample');
   assert.ok(!/Math\.cos\(|Math\.sin\(/.test(fn), 'F.sample must use the DIAL_/PIN_ tables');
+  assert.ok(!/b\.join\(/.test(fn), 'F.sample must not build an unused pat string');
+  assert.match(fn, /const b = dialSamples;/, 'F.sample must reuse the dialSamples buffer');
   assert.match(fn, /isRim\(d, \(y \* rw \+ x\) \* 4\)/);
   assert.match(fn, /isGreen\(d, \(y \* rw \+ x\) \* 4\)/);
   assert.match(fn, /isPin\(d, \(y \* rw \+ x\) \* 4\)/);
+});
+
+test('creamFraction reads pixels by index without PX()', () => {
+  const fn = fnBody('function creamFraction(r)');
+  assert.ok(!/PX\(/.test(fn), 'creamFraction must not allocate per-sample PX arrays');
+  assert.ok(!/CREAM\(/.test(fn), 'creamFraction must not delegate to array-expecting CREAM');
 });
 
 test('the rim helpers are built from tables and read channels by index', () => {

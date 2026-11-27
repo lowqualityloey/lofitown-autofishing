@@ -1751,8 +1751,10 @@
     if (!ui.card) return;
     var phase = state.phase;
     /** @type {FishStatus | null} */
-    var status = null;
-    try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+    var status = preStatus;
+    if (!status) {
+      try { status = fish() && fish().status ? fish().status() : null; } catch (e) {}
+    }
     // A stalled core still looks like "running" from the outside - the phase never changed, the
     // frames did. Say what is actually happening, in the place the phase is printed.
     var stalled = !!(status && status.running && status.stalled);
@@ -2182,6 +2184,14 @@
     } catch (e) { /* a watchdog that can throw is not a watchdog */ }
   }
 
+  /** @type {FishStatus | null} */
+  var preStatus = null;
+  /** Reuse a status snapshot read by tickOnce() so render() skips a duplicate poll. */
+  function renderWithStatus(s) {
+    preStatus = s || null;
+    try { render(); } finally { preStatus = null; }
+  }
+
   function tickOnce() {
     // A focus session ending releases a hold it started; a manual toggle is never touched here.
     try { focusTick(); } catch (e) { noteTickError('focus', e); }
@@ -2205,7 +2215,7 @@
         dispatch({ type: 'tick', at: Date.now(), visible: document.visibilityState === 'visible', catches: 0, errors: 0, todayMs: baseTodayMs, seat: false, focus: focusOn });
         banner = '';
       } else {
-        render();
+        renderWithStatus(status);
       }
       return;
     }
@@ -2245,7 +2255,7 @@
     if (Date.now() - budgetAt > 10000) { budgetAt = Date.now(); syncBudget(); }
     if (banner && state.phase === 'running' && banner.indexOf('offline') === -1) { /* keep guard text visible */ }
 
-    render();
+    renderWithStatus(status);
   }
 
   /* ------------------------------------------------------------- mount ---- */

@@ -595,8 +595,10 @@
       rollDay(s, at);
       // Do not resume straight into a boundary: the next tick would stop the session immediately and
       // the user would see a resume that did nothing. The cap and the window are checked up front.
-      if (s.todayMs + todayFishingMs(s) >= s.dailyCapMs) return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
-      if (s.window.on && !withinWindow(s.window, at)) return { state: s, actions: [{ type: 'refuse', reason: 'window' }] };
+      if (!isFlow(s)) {
+        if (s.todayMs + todayFishingMs(s) >= s.dailyCapMs) return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
+        if (s.window.on && !withinWindow(s.window, at)) return { state: s, actions: [{ type: 'refuse', reason: 'window' }] };
+      }
       if (deliberatePause(s.pauseReason)) endBlindPause(s, at);
       var fromSeat = s.pauseReason === 'seat';
       s.phase = 'running';

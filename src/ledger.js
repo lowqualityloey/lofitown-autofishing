@@ -399,6 +399,7 @@ const SPECIES = [
     let profile = 'default';
     /** @type {any} */
     let ledger = null;
+    let epoch = 0;
     function logKey() { return LOG_PREFIX + profile; }
     function loadLedger() {
       if (ledger) return ledger;
@@ -418,6 +419,7 @@ const SPECIES = [
     }
     function saveLedger(book) {
       ledger = book;
+      epoch++;
       try { win.localStorage.setItem(logKey(), JSON.stringify(book)); return true; } catch (e) { return false; }
     }
     function logProfiles() {
@@ -435,11 +437,12 @@ const SPECIES = [
     function setProfile(next) {
       const changed = next !== profile;
       profile = next;
-      if (changed) ledger = null;
+      if (changed) { ledger = null; epoch++; }
       return changed;
     }
     function getProfile() { return profile; }
-    return { logKey, loadLedger, saveLedger, logProfiles, setProfile, getProfile };
+    function getEpoch() { return epoch; }
+    return { logKey, loadLedger, saveLedger, logProfiles, setProfile, getProfile, getEpoch };
   }
 
   return {

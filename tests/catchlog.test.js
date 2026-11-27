@@ -496,3 +496,24 @@ test('each profile has its own ledger key, and the profiles are discoverable', (
   assert.deepEqual(multi.logProfiles(), ['alt', 'default']);
   assert.equal(multi.logKey(), 'autofish:log:v1:default');
 });
+
+test('createLedger advances its epoch on save and profile switches', () => {
+  const store = {};
+  const ledger = T.createLedger({
+    localStorage: {
+      length: 0,
+      key: () => null,
+      getItem: (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); },
+    },
+  });
+  const e0 = ledger.getEpoch();
+  ledger.saveLedger(T.emptyLog(1));
+  const e1 = ledger.getEpoch();
+  assert.ok(e1 > e0, 'saveLedger increments epoch');
+  ledger.setProfile('alt');
+  const e2 = ledger.getEpoch();
+  assert.ok(e2 > e1, 'changing profile increments epoch');
+  ledger.setProfile('alt');
+  assert.equal(ledger.getEpoch(), e2, 'no-op profile call keeps epoch unchanged');
+});

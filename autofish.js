@@ -773,7 +773,6 @@
     if (!seenBuf || seenBuf.length !== total) seenBuf = new Uint8Array(total);
     return floodComponents(sw, sh, sdata, match, minPx, seenBuf);
   }
-  const CREAM = (c) => c[3] > 60 && c[0] > 225 && c[1] > 200 && c[2] > 130 && c[2] < 238;
 
   /** Dark glyphs on a white field — what separates a prompt from any other white blob. */
   function inkMix(r) {
@@ -961,11 +960,13 @@
   }
 
   function creamFraction(r) {
+    const d = r.d, w = r.w, h = r.h;
     let hit = 0, n = 0;
-    for (let y = 6; y < r.h - 6; y += 8) {
-      for (let x = 6; x < r.w - 6; x += 8) {
+    for (let y = 6; y < h - 6; y += 8) {
+      for (let x = 6; x < w - 6; x += 8) {
         n++;
-        if (CREAM(PX(r, x + r.x, y + r.y))) hit++;
+        const i = (y * w + x) * 4;
+        if (d[i + 3] > 60 && d[i] > 225 && d[i + 1] > 200 && d[i + 2] > 130 && d[i + 2] < 238) hit++;
       }
     }
     return n ? hit / n : 0;
@@ -1488,6 +1489,7 @@
    * One frame of dial state. Re-tests the rim over a small radius band so the dial's
    * fade-in / scale-in cannot drop the lock, then reads the wedge at 0.69R.
    */
+  const dialSamples = new Uint8Array(DIAL_N);
   F.sample = function (geo) {
     const pad = 14, half = Math.round(Math.max(geo.R, 100) + pad);
     const r = readUI(geo.cx - half, geo.cy - half, half * 2, half * 2);
@@ -1508,7 +1510,7 @@
     if (bestHit >= 15) geo.R = bestR;
 
     const n = DIAL_N, rr = Math.round(geo.R * 0.69);        // 63px at the measured R~91
-    const b = [];
+    const b = dialSamples;
     let greenN = 0;
     for (let k = 0; k < n; k++) {
       // 0 = 12 oclock, clockwise
@@ -1519,7 +1521,7 @@
       const nearPin = k <= 2 || k >= n - 2;
       const v = inside && isGreen(d, (y * rw + x) * 4) ? 1 : (nearPin ? 2 : 0);
       if (v === 1) greenN++;
-      b.push(v);
+      b[k] = v;
     }
     // The pin is fixed at 12 oclock and always painted, so it doubles as a geometry check:
     // if no orange appears anywhere in that band, this circle is not the dial.
@@ -1629,7 +1631,7 @@
 
     return {
       ring, valid: true, start, width, mid, delta, pred, omega, t: tNow, fit,
-      tracked, runs: runs.length, pat: b.join(''), greenN, R: geo.R,
+      tracked, runs: runs.length, greenN, R: geo.R,
     };
   };
 
@@ -2677,11 +2679,20 @@
    * only ever contains catches whose card text parsed. It survives a reload because it lives in
    * localStorage, and it needs no server.
    */
+  /** @type {string} */
+  let logSummaryKey = '';
+  /** @type {any} */
+  let logSummaryVal = null;
   F.log = function () {
+    const t = Date.now();
+    const key = ledgerStore.getEpoch() + ':' + logDay(t);
+    if (logSummaryVal && logSummaryKey === key) return logSummaryVal;
     const book = loadLedger();
-    const summary = logSummary(book, Date.now());
+    const summary = logSummary(book, t);
     // The raw unknown map is cumulative history; the worklist says what is still a gap today.
     summary.worklist = unknownWorklist(book);
+    logSummaryKey = key;
+    logSummaryVal = summary;
     return summary;
   };
   /** Which catch history the panel reads and writes. No argument reads it. */

@@ -176,6 +176,8 @@
     const mean = (arr) => (arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : null);
     const mDeg = mean(deg);
     const mMs = mean(ms);
+    let over50ms = 0;
+    for (let i = 0; i < ms.length; i++) if (ms[i] > 50) over50ms++;
     return {
       samples: rows.length,
       meanAbsDeg: mDeg != null ? +mDeg.toFixed(1) : null,
@@ -186,8 +188,8 @@
       p50Ms: q(ms, 0.5),
       p95Ms: q(ms, 0.95),
       maxMs: ms.length ? +ms[ms.length - 1].toFixed(1) : null,
-      over50ms: ms.filter((v) => v > 50).length,
-      over50msRate: ms.length ? +(ms.filter((v) => v > 50).length / ms.length).toFixed(3) : null,
+      over50ms,
+      over50msRate: ms.length ? +(over50ms / ms.length).toFixed(3) : null,
     };
   }
 
@@ -196,21 +198,26 @@
    * @param {any[]} log
    */
   function pressAcceptSummary(log) {
-    const rows = Array.isArray(log) ? log.filter(Boolean) : [];
-    const judged = rows.filter((r) => r.inside != null);
-    const assumed = rows.filter((r) => r.via === 'assumed').length;
-    const settled = rows.filter((r) => r.via === 'settled').length;
+    const list = Array.isArray(log) ? log : [];
+    let presses = 0, settled = 0, assumed = 0, insidePredicted = 0, judged = 0, winSum = 0, winN = 0;
+    for (const r of list) {
+      if (!r) continue;
+      presses++;
+      if (r.via === 'settled') settled++;
+      else if (r.via === 'assumed') assumed++;
+      if (r.inside != null) judged++;
+      if (r.inside === true) insidePredicted++;
+      if (isFinite(r.win)) { winSum += r.win; winN++; }
+    }
     return {
-      presses: rows.length,
+      presses,
       settled,
       assumed,
       assumedRate: (settled + assumed) ? +(assumed / (settled + assumed)).toFixed(3) : null,
-      insidePredicted: rows.filter((r) => r.inside === true).length,
-      judged: judged.length,
-      insideRate: judged.length ? +(rows.filter((r) => r.inside === true).length / judged.length).toFixed(3) : null,
-      meanWindowDeg: rows.filter((r) => isFinite(r.win)).length
-        ? +(rows.filter((r) => isFinite(r.win)).reduce((s, r) => s + r.win, 0) / rows.filter((r) => isFinite(r.win)).length).toFixed(1)
-        : null,
+      insidePredicted,
+      judged,
+      insideRate: judged ? +(insidePredicted / judged).toFixed(3) : null,
+      meanWindowDeg: winN ? +(winSum / winN).toFixed(1) : null,
     };
   }
 

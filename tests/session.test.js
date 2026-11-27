@@ -689,6 +689,14 @@ test('flow mode runs nonstop past duration, cap, and window, skips cooldown on s
   ({ state } = reduce(state, { type: 'tick', at: at + 2 * 3600_000 + 9_000, visible: true, catches: 15, errors: 0, todayMs: 0 }));
   assert.equal(state.phase, 'running', 'resumes automatically once tab returns');
 
+  // Pause -> Resume in Flow mode works even when daily cap is reached and clock window is closed
+  ({ state } = reduce(state, { type: 'pause', at: at + 2 * 3600_000 + 10_000 }));
+  assert.equal(state.phase, 'paused');
+  assert.equal(state.pauseReason, 'user');
+  ({ state, actions } = reduce({ ...state, todayMs: 25 * 3600_000 }, { type: 'resume', at: at + 2 * 3600_000 + 11_000 }));
+  assert.equal(state.phase, 'running', 'Flow resume ignores daily-cap and closed window');
+  assert.ok(actions.some((a) => a.type === 'resumeCore'));
+
   // Safety guard (resultMissing) still pauses in Flow mode
   ({ state } = reduce(state, { type: 'tick', at: at + 2 * 3600_000 + 15_000, visible: true, catches: 15, errors: 0, todayMs: 0, resultMissing: true }));
   assert.equal(state.phase, 'paused');
