@@ -24,6 +24,7 @@
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
 | [reviews/2026-11-23-catch-and-focus-live.md](reviews/2026-11-23-catch-and-focus-live.md) | Live verification of the rebuilt userscript's catch POST, focus takeover, seat warning and next catch. |
+| [reviews/2026-11-27-m4-modular-core-live.md](reviews/2026-11-27-m4-modular-core-live.md) | Live BrowserOS Neo verification of the M4 modular core (`src/*.js` globals, `10/10` catches, `53/53` presses accepted, `143.1 fps`, WebGL `0` fallbacks). |
 | [reviews/2026-10-27-event-card-freeze.md](reviews/2026-10-27-event-card-freeze.md) | Review of the stuck catch-card bug and its fix. |
 | [reviews/2026-10-28-performance-review.md](reviews/2026-10-28-performance-review.md) | Performance review: where the frame budget actually goes, the findings ranked, and the smallest useful fixes. |
 | [reviews/2026-11-02-lag-and-first-press-review.md](reviews/2026-11-02-lag-and-first-press-review.md) | Two-axis review of the 3.9.10-3.9.12 work, including the snapshot path that silently never ran. |
