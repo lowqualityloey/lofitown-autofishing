@@ -14,7 +14,9 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
+  /** @type {AutoFishSessionApi['DEFAULTS']} */
   var DEFAULTS = {
+    mode: 'timed',
     durationMs: 60 * 60 * 1000,
     cooldownMs: 30 * 60 * 1000,
     dailyCapMs: 4 * 60 * 60 * 1000,
@@ -30,6 +32,7 @@
   function createState(overrides) {
     /** @type {SessionState} */
     var s = {
+      mode: DEFAULTS.mode,
       phase: 'idle',
       durationMs: DEFAULTS.durationMs,
       cooldownMs: DEFAULTS.cooldownMs,
@@ -191,6 +194,23 @@
 
   /**
    * @param {SessionState} s
+   * @returns {boolean}
+   */
+  function isFlow(s) {
+    return s.mode === 'flow';
+  }
+
+  /**
+   * Explicit 0 means pause-only while hidden (never hard-stop); unset falls back to HIDDEN_STOP_MS.
+   * @param {SessionState} s
+   * @returns {number}
+   */
+  function hiddenLimitMs(s) {
+    return typeof s.hiddenStopMs === 'number' ? s.hiddenStopMs : HIDDEN_STOP_MS;
+  }
+
+  /**
+   * @param {SessionState} s
    * @param {number} at
    * @param {string | null | undefined} reason
    * @param {Record<string, unknown> | null} [diag]
@@ -206,10 +226,8 @@
     s.todayMs = (s.todayMs || 0) + todayFishingMs(s);
     s.fishingMs = 0;
     s.carriedMs = 0;
-    // A schedule boundary is not a rest. The clock window and the daily cap end the run until the
-    // next window or the next day; forcing a 30-minute cooldown on top made the panel look stuck and
-    // could make a second session collide with a closed window. Only a real stop rests.
-    var rest = reason !== 'daily-cap' && reason !== 'window';
+    // A schedule boundary is not a rest, and Flow mode never imposes a cooldown after Stop.
+    var rest = !isFlow(s) && reason !== 'daily-cap' && reason !== 'window';
     s.phase = rest ? 'cooldown' : 'idle';
     s.cooldownUntil = rest ? at + s.cooldownMs : null;
     s.stopReason = reason || 'user';
@@ -400,7 +418,8 @@
     if (s.pauseReason === 'hidden') {
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
-        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
+        var hiddenLimit = hiddenLimitMs(s);
+        if (hiddenLimit > 0 && at - s.hiddenSince > hiddenLimit) return { state: s, actions: stopSession(s, at, 'hidden') };
         return { state: s, actions: [] };
       }
       if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
@@ -411,11 +430,13 @@
       // The character's clock stops, the wall clock does not: while the seat pause holds, the
       // schedule and the day's budget keep moving. Do not sit paused past a closed window or into a
       // cap that is already spent - that would resume straight into an immediate stop.
-      if (s.window.on && !withinWindow(s.window, at)) {
-        return { state: s, actions: stopSession(s, at, 'window') };
-      }
-      if (typeof fact.todayMs === 'number' && s.todayMs >= s.dailyCapMs) {
-        return { state: s, actions: stopSession(s, at, 'daily-cap') };
+      if (!isFlow(s)) {
+        if (s.window.on && !withinWindow(s.window, at)) {
+          return { state: s, actions: stopSession(s, at, 'window') };
+        }
+        if (typeof fact.todayMs === 'number' && s.todayMs >= s.dailyCapMs) {
+          return { state: s, actions: stopSession(s, at, 'daily-cap') };
+        }
       }
       // still unseated: burn no time, but do not nag forever
       if (fact.seat === false) return runningAgain(s, at);
@@ -466,20 +487,30 @@
             start: patch.window.start === undefined ? s.window.start : patch.window.start,
             stop: patch.window.stop === undefined ? s.window.stop : patch.window.stop
           };
+        } else if (k === 'mode') {
+          s.mode = patch.mode === 'flow' ? 'flow' : 'timed';
         } else {
           /** @type {any} */ (s)[k] = /** @type {any} */ (patch)[k];
         }
+      }
+      // Switching to Flow clears any timed cooldown or window wait so Start is immediately ready.
+      if (isFlow(s) && (s.phase === 'cooldown' || s.phase === 'waiting')) {
+        s.phase = 'idle';
+        s.cooldownUntil = null;
+        s.stopReason = null;
       }
       return { state: s, actions: [{ type: 'persist' }] };
     }
 
     if (fact.type === 'start') {
       if (isActive(s.phase)) return { state: s, actions: [] };
-      if (s.cooldownUntil != null && at < s.cooldownUntil) {
-        return { state: s, actions: [{ type: 'refuse', reason: 'cooldown' }] };
-      }
-      if (s.todayMs >= s.dailyCapMs) {
-        return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
+      if (!isFlow(s)) {
+        if (s.cooldownUntil != null && at < s.cooldownUntil) {
+          return { state: s, actions: [{ type: 'refuse', reason: 'cooldown' }] };
+        }
+        if (s.todayMs >= s.dailyCapMs) {
+          return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
+        }
       }
       s.fishingMs = 0;
       s.carriedMs = 0;
@@ -500,7 +531,7 @@
       s.startedAt = at;
       s.lastTickAt = at;
       s.lastCatchAt = at;
-      if (!withinWindow(s.window, at)) {
+      if (!isFlow(s) && !withinWindow(s.window, at)) {
         s.phase = 'waiting';
         return { state: s, actions: [{ type: 'persist' }] };
       }
@@ -508,7 +539,7 @@
       return {
         state: s,
         actions: [
-          { type: 'startCore', maxMinutes: Math.ceil(s.durationMs / 60000) + 2 },
+          { type: 'startCore', maxMinutes: isFlow(s) ? 0 : Math.ceil(s.durationMs / 60000) + 2 },
           { type: 'wakeLock' },
           { type: 'persist' }
         ]
@@ -670,7 +701,8 @@
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
         s.lastTickAt = at;
-        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
+        var runHiddenLimit = hiddenLimitMs(s);
+        if (runHiddenLimit > 0 && at - s.hiddenSince > runHiddenLimit) return { state: s, actions: stopSession(s, at, 'hidden') };
         if (at - s.hiddenSince > HIDDEN_PAUSE_MS) return paused(s, at, 'hidden');
         return { state: s, actions: [] };
       }
@@ -725,17 +757,20 @@
         s.errTotal = fact.errors;
       }
 
-      // 4. the clock window closing ends the session; 5. so does the daily cap
-      if (s.window.on && !withinWindow(s.window, at)) {
-        return { state: s, actions: stopSession(s, at, 'window') };
-      }
-      if (typeof fact.todayMs === 'number' && s.todayMs + todayFishingMs(s) >= s.dailyCapMs) {
-        return { state: s, actions: stopSession(s, at, 'daily-cap') };
-      }
+      // 4. the clock window closing ends the session; 5. so does the daily cap; 6. duration.
+      // Flow mode runs nonstop until manual Stop or a safety guard below.
+      if (!isFlow(s)) {
+        if (s.window.on && !withinWindow(s.window, at)) {
+          return { state: s, actions: stopSession(s, at, 'window') };
+        }
+        if (typeof fact.todayMs === 'number' && s.todayMs + todayFishingMs(s) >= s.dailyCapMs) {
+          return { state: s, actions: stopSession(s, at, 'daily-cap') };
+        }
 
-      // 6. duration
-      if (s.fishingMs >= s.durationMs) {
-        return { state: s, actions: stopSession(s, at, 'duration') };
+        // 6. duration
+        if (s.fishingMs >= s.durationMs) {
+          return { state: s, actions: stopSession(s, at, 'duration') };
+        }
       }
 
       // 7. nothing has bitten in a while

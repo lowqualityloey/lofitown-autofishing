@@ -2611,12 +2611,13 @@
     };
   };
 
-  /** Apply numeric timing knobs to the live run. Returns the same report as calibration(). */
+  /** Apply numeric timing knobs, maxMinutes, or logUrl to the live run. Returns the calibration report. */
   F.tune = function (patch) {
     if (!patch || typeof patch !== 'object') return F.calibration();
     if (!F.opts) F.opts = {};
     if (patch.fastFirstPress != null) F.opts.fastFirstPress = !!patch.fastFirstPress;
-    ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs',
+    if (patch.logUrl !== undefined) F.logUrl = patch.logUrl ? String(patch.logUrl) : null;
+    ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs', 'maxMinutes',
       'firstPressMinN', 'firstPressMinSpanMs', 'firstPressMaxRms', 'firstPressMaxWaitMs',
       'firstPressMaxWidthDeg', 'firstPressFastOmega', 'insideNowMs', 'stallDialMs'].forEach((k) => {
       const n = Number(patch[k]);

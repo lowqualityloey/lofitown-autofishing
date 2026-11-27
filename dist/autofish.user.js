@@ -2021,7 +2021,7 @@ const SPECIES = [
     if (!isVisible()) { F.hidden = true; return; }
     if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
     if (F.paused) return;
-    if (t - F.startedAt > F.opts.maxMinutes * 60000) {
+    if (F.opts.maxMinutes > 0 && t - F.startedAt > F.opts.maxMinutes * 60000) {
       L('maxMinutes');
       if (o.stop) o.stop();
       else if (F.stop) F.stop();
@@ -4937,12 +4937,13 @@ const SPECIES = [
     };
   };
 
-  /** Apply numeric timing knobs to the live run. Returns the same report as calibration(). */
+  /** Apply numeric timing knobs, maxMinutes, or logUrl to the live run. Returns the calibration report. */
   F.tune = function (patch) {
     if (!patch || typeof patch !== 'object') return F.calibration();
     if (!F.opts) F.opts = {};
     if (patch.fastFirstPress != null) F.opts.fastFirstPress = !!patch.fastFirstPress;
-    ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs',
+    if (patch.logUrl !== undefined) F.logUrl = patch.logUrl ? String(patch.logUrl) : null;
+    ['leadMs', 'marginDeg', 'midDeg', 'biasMs', 'pressGapMs', 'schedHorizonMs', 'maxMinutes',
       'firstPressMinN', 'firstPressMinSpanMs', 'firstPressMaxRms', 'firstPressMaxWaitMs',
       'firstPressMaxWidthDeg', 'firstPressFastOmega', 'insideNowMs', 'stallDialMs'].forEach((k) => {
       const n = Number(patch[k]);
@@ -5354,7 +5355,9 @@ const SPECIES = [
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
+  /** @type {AutoFishSessionApi['DEFAULTS']} */
   var DEFAULTS = {
+    mode: 'timed',
     durationMs: 60 * 60 * 1000,
     cooldownMs: 30 * 60 * 1000,
     dailyCapMs: 4 * 60 * 60 * 1000,
@@ -5370,6 +5373,7 @@ const SPECIES = [
   function createState(overrides) {
     /** @type {SessionState} */
     var s = {
+      mode: DEFAULTS.mode,
       phase: 'idle',
       durationMs: DEFAULTS.durationMs,
       cooldownMs: DEFAULTS.cooldownMs,
@@ -5531,6 +5535,23 @@ const SPECIES = [
 
   /**
    * @param {SessionState} s
+   * @returns {boolean}
+   */
+  function isFlow(s) {
+    return s.mode === 'flow';
+  }
+
+  /**
+   * Explicit 0 means pause-only while hidden (never hard-stop); unset falls back to HIDDEN_STOP_MS.
+   * @param {SessionState} s
+   * @returns {number}
+   */
+  function hiddenLimitMs(s) {
+    return typeof s.hiddenStopMs === 'number' ? s.hiddenStopMs : HIDDEN_STOP_MS;
+  }
+
+  /**
+   * @param {SessionState} s
    * @param {number} at
    * @param {string | null | undefined} reason
    * @param {Record<string, unknown> | null} [diag]
@@ -5546,10 +5567,8 @@ const SPECIES = [
     s.todayMs = (s.todayMs || 0) + todayFishingMs(s);
     s.fishingMs = 0;
     s.carriedMs = 0;
-    // A schedule boundary is not a rest. The clock window and the daily cap end the run until the
-    // next window or the next day; forcing a 30-minute cooldown on top made the panel look stuck and
-    // could make a second session collide with a closed window. Only a real stop rests.
-    var rest = reason !== 'daily-cap' && reason !== 'window';
+    // A schedule boundary is not a rest, and Flow mode never imposes a cooldown after Stop.
+    var rest = !isFlow(s) && reason !== 'daily-cap' && reason !== 'window';
     s.phase = rest ? 'cooldown' : 'idle';
     s.cooldownUntil = rest ? at + s.cooldownMs : null;
     s.stopReason = reason || 'user';
@@ -5740,7 +5759,8 @@ const SPECIES = [
     if (s.pauseReason === 'hidden') {
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
-        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
+        var hiddenLimit = hiddenLimitMs(s);
+        if (hiddenLimit > 0 && at - s.hiddenSince > hiddenLimit) return { state: s, actions: stopSession(s, at, 'hidden') };
         return { state: s, actions: [] };
       }
       if (s.visibleSince == null) { s.visibleSince = at; return { state: s, actions: [] }; }
@@ -5751,11 +5771,13 @@ const SPECIES = [
       // The character's clock stops, the wall clock does not: while the seat pause holds, the
       // schedule and the day's budget keep moving. Do not sit paused past a closed window or into a
       // cap that is already spent - that would resume straight into an immediate stop.
-      if (s.window.on && !withinWindow(s.window, at)) {
-        return { state: s, actions: stopSession(s, at, 'window') };
-      }
-      if (typeof fact.todayMs === 'number' && s.todayMs >= s.dailyCapMs) {
-        return { state: s, actions: stopSession(s, at, 'daily-cap') };
+      if (!isFlow(s)) {
+        if (s.window.on && !withinWindow(s.window, at)) {
+          return { state: s, actions: stopSession(s, at, 'window') };
+        }
+        if (typeof fact.todayMs === 'number' && s.todayMs >= s.dailyCapMs) {
+          return { state: s, actions: stopSession(s, at, 'daily-cap') };
+        }
       }
       // still unseated: burn no time, but do not nag forever
       if (fact.seat === false) return runningAgain(s, at);
@@ -5806,20 +5828,30 @@ const SPECIES = [
             start: patch.window.start === undefined ? s.window.start : patch.window.start,
             stop: patch.window.stop === undefined ? s.window.stop : patch.window.stop
           };
+        } else if (k === 'mode') {
+          s.mode = patch.mode === 'flow' ? 'flow' : 'timed';
         } else {
           /** @type {any} */ (s)[k] = /** @type {any} */ (patch)[k];
         }
+      }
+      // Switching to Flow clears any timed cooldown or window wait so Start is immediately ready.
+      if (isFlow(s) && (s.phase === 'cooldown' || s.phase === 'waiting')) {
+        s.phase = 'idle';
+        s.cooldownUntil = null;
+        s.stopReason = null;
       }
       return { state: s, actions: [{ type: 'persist' }] };
     }
 
     if (fact.type === 'start') {
       if (isActive(s.phase)) return { state: s, actions: [] };
-      if (s.cooldownUntil != null && at < s.cooldownUntil) {
-        return { state: s, actions: [{ type: 'refuse', reason: 'cooldown' }] };
-      }
-      if (s.todayMs >= s.dailyCapMs) {
-        return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
+      if (!isFlow(s)) {
+        if (s.cooldownUntil != null && at < s.cooldownUntil) {
+          return { state: s, actions: [{ type: 'refuse', reason: 'cooldown' }] };
+        }
+        if (s.todayMs >= s.dailyCapMs) {
+          return { state: s, actions: [{ type: 'refuse', reason: 'daily-cap' }] };
+        }
       }
       s.fishingMs = 0;
       s.carriedMs = 0;
@@ -5840,7 +5872,7 @@ const SPECIES = [
       s.startedAt = at;
       s.lastTickAt = at;
       s.lastCatchAt = at;
-      if (!withinWindow(s.window, at)) {
+      if (!isFlow(s) && !withinWindow(s.window, at)) {
         s.phase = 'waiting';
         return { state: s, actions: [{ type: 'persist' }] };
       }
@@ -5848,7 +5880,7 @@ const SPECIES = [
       return {
         state: s,
         actions: [
-          { type: 'startCore', maxMinutes: Math.ceil(s.durationMs / 60000) + 2 },
+          { type: 'startCore', maxMinutes: isFlow(s) ? 0 : Math.ceil(s.durationMs / 60000) + 2 },
           { type: 'wakeLock' },
           { type: 'persist' }
         ]
@@ -6010,7 +6042,8 @@ const SPECIES = [
       if (!visible) {
         if (s.hiddenSince == null) s.hiddenSince = at;
         s.lastTickAt = at;
-        if (at - s.hiddenSince > (s.hiddenStopMs || HIDDEN_STOP_MS)) return { state: s, actions: stopSession(s, at, 'hidden') };
+        var runHiddenLimit = hiddenLimitMs(s);
+        if (runHiddenLimit > 0 && at - s.hiddenSince > runHiddenLimit) return { state: s, actions: stopSession(s, at, 'hidden') };
         if (at - s.hiddenSince > HIDDEN_PAUSE_MS) return paused(s, at, 'hidden');
         return { state: s, actions: [] };
       }
@@ -6065,17 +6098,20 @@ const SPECIES = [
         s.errTotal = fact.errors;
       }
 
-      // 4. the clock window closing ends the session; 5. so does the daily cap
-      if (s.window.on && !withinWindow(s.window, at)) {
-        return { state: s, actions: stopSession(s, at, 'window') };
-      }
-      if (typeof fact.todayMs === 'number' && s.todayMs + todayFishingMs(s) >= s.dailyCapMs) {
-        return { state: s, actions: stopSession(s, at, 'daily-cap') };
-      }
+      // 4. the clock window closing ends the session; 5. so does the daily cap; 6. duration.
+      // Flow mode runs nonstop until manual Stop or a safety guard below.
+      if (!isFlow(s)) {
+        if (s.window.on && !withinWindow(s.window, at)) {
+          return { state: s, actions: stopSession(s, at, 'window') };
+        }
+        if (typeof fact.todayMs === 'number' && s.todayMs + todayFishingMs(s) >= s.dailyCapMs) {
+          return { state: s, actions: stopSession(s, at, 'daily-cap') };
+        }
 
-      // 6. duration
-      if (s.fishingMs >= s.durationMs) {
-        return { state: s, actions: stopSession(s, at, 'duration') };
+        // 6. duration
+        if (s.fishingMs >= s.durationMs) {
+          return { state: s, actions: stopSession(s, at, 'duration') };
+        }
       }
 
       // 7. nothing has bitten in a while
@@ -6440,6 +6476,7 @@ const SPECIES = [
   function loadPrefs() {
     var p = readJSON(PREF_KEY, {});
     var prefs = {};
+    prefs.mode = p.mode === 'flow' ? 'flow' : 'timed';
     ['durationMs', 'cooldownMs', 'dailyCapMs'].forEach(function (k) {
       if (typeof p[k] === 'number') prefs[k] = p[k];
     });
@@ -6447,11 +6484,12 @@ const SPECIES = [
       prefs.window = { on: !!p.window.on, start: p.window.start, stop: p.window.stop };
     }
     prefs.resumeAfterReload = !!p.resumeAfterReload;
-    prefs.postCatches = !!p.postCatches;
+    var capOn = p.localCapture !== undefined ? !!p.localCapture : !!(p.postCatches || p.overnight);
+    prefs.localCapture = capOn;
+    prefs.postCatches = capOn;
+    prefs.overnight = capOn;
     prefs.hideUpsell = !!p.hideUpsell;
     prefs.focusMode = !!p.focusMode;
-    prefs.fastFirstPress = !!p.fastFirstPress;
-    prefs.overnight = !!p.overnight;
     if (typeof p.overnightBase === 'string') prefs.overnightBase = p.overnightBase;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
     prefs.chain = !!p.chain;
@@ -6461,7 +6499,9 @@ const SPECIES = [
 
   function savePrefs() {
     if (!window.__panel) window.__panel = {};
+    var capOn = !!overnightPref;
     writeJSON(PREF_KEY, {
+      mode: state.mode === 'flow' ? 'flow' : 'timed',
       durationMs: state.durationMs,
       cooldownMs: state.cooldownMs,
       dailyCapMs: state.dailyCapMs,
@@ -6469,11 +6509,11 @@ const SPECIES = [
       chain: !!state.chain,
       window: state.window,
       resumeAfterReload: !!window.__panel.resumeAfterReload,
-      postCatches: !!window.__panel.postCatches,
+      localCapture: capOn,
+      postCatches: capOn,
+      overnight: capOn,
       hideUpsell: !!window.__panel.hideUpsell,
       focusMode: !!focusPref,
-      fastFirstPress: !!fastPref,
-      overnight: !!overnightPref,
       overnightBase: captureBase || '',
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
     });
@@ -6639,29 +6679,11 @@ const SPECIES = [
   var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
                              // the hold; it must never change this, or the next session never engages.
   var focusSawSession = false;
-  // Opt-in speed over the first-press fit. The core's default keeps the hold; this setting is
-  // deliberately surfaced as a trade-off, not as a free improvement.
-  var fastPref = false;
 
   function renderFocusToggle() {
     if (!ui.focusToggle) return;
     ui.focusToggle.textContent = focusOn ? 'on' : 'off';
     ui.focusToggle.style.color = focusOn ? '#5ad18b' : '#9aa4ae';
-  }
-
-  function renderFastToggle() {
-    if (!ui.fastToggle) return;
-    ui.fastToggle.textContent = fastPref ? 'on' : 'off';
-    // Amber, not green: this is a speed/accuracy trade, not a free upgrade.
-    ui.fastToggle.style.color = fastPref ? '#f2c14e' : '#9aa4ae';
-  }
-
-  function setFastFirstPress(on) {
-    fastPref = !!on;
-    if (window.__panel) window.__panel.fastFirstPress = fastPref;
-    try { if (window.__fish && window.__fish.tune) window.__fish.tune({ fastFirstPress: fastPref }); } catch (e) {}
-    savePrefs();
-    render();
   }
 
   /**
@@ -6764,12 +6786,23 @@ const SPECIES = [
     return !!(st && st.last && Date.now() - Date.parse(st.last.at) > CAPTURE_STALE_MS);
   }
 
+  function syncCaptureUrl() {
+    if (!window.__panel) window.__panel = {};
+    var on = !!overnightPref;
+    window.__panel.localCapture = on;
+    window.__panel.overnight = on;
+    window.__panel.postCatches = on;
+    var server = BASE || captureServer();
+    var post = (on && server) ? server + '/catch' : null;
+    try { if (window.__fish && window.__fish.tune) window.__fish.tune({ logUrl: post }); } catch (e) {}
+  }
+
   async function armOvernight() {
     if (captureArming) return false;     // the heal timer can come due while a load is in flight
     var server = captureServer();
     if (!server) {
       captureState = 'error';
-      captureError = 'no address — click Overnight capture';
+      captureError = 'no address — click Local capture';
       renderCapture();
       return false;
     }
@@ -6827,7 +6860,7 @@ const SPECIES = [
    * again. A cancelled answer returns '' and changes nothing; a malformed one also says why.
    */
   function askCaptureAddress() {
-    var typed = window.prompt('fishserve address for overnight capture (http://host:port)', captureBase || '');
+    var typed = window.prompt('fishserve address for local capture (http://host:port)', captureBase || '');
     var base = String(typed == null ? '' : typed).trim().replace(/\/+$/, '');
     if (!/^https?:\/\/[^/]+:\d+$/.test(base)) {
       banner = base ? 'capture needs an address like http://127.0.0.1:PORT' : '';
@@ -6851,6 +6884,7 @@ const SPECIES = [
     captureState = 'off';
     captureError = '';
     captureClearBackoff();
+    syncCaptureUrl();
     savePrefs();
     armOvernight();
     render();
@@ -7097,8 +7131,9 @@ const SPECIES = [
     state.todayMs = b.ms;
     state.fishingMs = 0;
     state.catchCount = 0;
-    state.cooldownUntil = b.cooldownUntil;
-    state.phase = b.cooldownUntil ? 'cooldown' : 'idle';
+    var flow = state.mode === 'flow';
+    state.cooldownUntil = flow ? null : b.cooldownUntil;
+    state.phase = (!flow && b.cooldownUntil) ? 'cooldown' : 'idle';
     state.stopReason = null;
     state.pauseReason = null;
     state.startedAt = null;
@@ -7123,11 +7158,10 @@ const SPECIES = [
       // reducer has already reset fishingMs, so the day's total has to come from the store.
       baseTodayMs = loadBudget().ms;
       var server = BASE || captureServer();
-      var post = (window.__panel && window.__panel.postCatches && server) ? server + '/catch' : null;
+      var post = (window.__panel && (window.__panel.localCapture || window.__panel.postCatches) && server) ? server + '/catch' : null;
       fish().start({
         maxMinutes: a.maxMinutes,
         logUrl: post,
-        fastFirstPress: !!(window.__panel && window.__panel.fastFirstPress),
       });
     },
     stopCore: function () { try { fish().stop(); } catch (e) {} },
@@ -7212,7 +7246,7 @@ const SPECIES = [
     // A hold is explicit: a reload must not turn a paused session into a running one.
     if (live.phase === 'paused') return 'paused session ended by the reload — start again when ready';
     if (state.phase === 'cooldown') return 'session ended by the reload — cooling down';
-    if (state.todayMs >= state.dailyCapMs) return 'session ended by the reload — daily cap reached';
+    if (state.mode !== 'flow' && state.todayMs >= state.dailyCapMs) return 'session ended by the reload — daily cap reached';
     // start() itself honours the clock window: outside it the session waits instead of fishing.
     dispatch({ type: 'start', at: Date.now() });
     return state.phase === 'waiting' ? 'waiting for the clock window after the reload' : 'session resumed after the reload';
@@ -7286,7 +7320,8 @@ const SPECIES = [
     '.perf{font-size:9.5px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.capture{font-size:10px;color:#8b95a0;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.capture.on{color:#5ad18b}.capture.warn{color:#f2c14e}',
-    '.fastnote{font-size:9.5px;line-height:1.35;color:#f2c14e;margin-top:-4px}',
+    '.timedgrp{display:flex;flex-direction:column;gap:9px}',
+    '.icon.mode{width:auto;min-width:44px;padding:0 7px;font-size:10.5px;font-weight:600;border-radius:7px}',
     '.perfjson{margin:0;max-height:150px;overflow:auto;font:9px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;color:#cfd6dd;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}',
     '.sec{border-top:1px solid rgba(255,255,255,.08)}',
     '.sechead{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;color:#aab4bf;font:inherit;font-size:11px;letter-spacing:.3px;padding:8px 0 7px;cursor:pointer;text-align:left}',
@@ -7340,11 +7375,18 @@ const SPECIES = [
     var setSec = section('Session & guards');
     var diagSec = section('Diagnostics');
 
-    setSec.body.append(
+    var modeRow = el('div', 'row');
+    var modeLabel = el('div', 'label', 'Mode');
+    var modeToggle = el('button', 'icon mode', 'Timed');
+    modeToggle.title = 'Flow: fish nonstop until Stop · Timed: bounded by session, cooldown and daily cap';
+    modeRow.append(modeLabel, modeToggle);
+    setSec.body.appendChild(modeRow);
+
+    var timedWrap = el('div', 'timedgrp');
+    timedWrap.append(
       stepperRow('Session', 'dur'),
       stepperRow('Cooldown', 'cool'),
-      stepperRow('Daily time cap', 'cap'),
-      stepperRow('Stop when hidden', 'hidden')
+      stepperRow('Daily time cap', 'cap')
     );
 
     // clock window
@@ -7353,12 +7395,23 @@ const SPECIES = [
     var winToggle = el('button', 'icon', 'off');
     winToggle.title = 'run only between two times';
     winRow.append(winLabel, winToggle);
-    setSec.body.appendChild(winRow);
+    timedWrap.appendChild(winRow);
 
     var timeRow = el('div', 'row');
     timeRow.appendChild(stepper('from', 15));
     timeRow.appendChild(stepper('to', 15));
-    setSec.body.appendChild(timeRow);
+    timedWrap.appendChild(timeRow);
+
+    // Rest, then run again in Timed mode.
+    var chainRow = el('div', 'row');
+    var chainLabel = el('div', 'label', 'Auto-start next run');
+    var chainToggle = el('button', 'icon', 'off');
+    chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
+    chainRow.append(chainLabel, chainToggle);
+    timedWrap.appendChild(chainRow);
+    setSec.body.appendChild(timedWrap);
+
+    setSec.body.appendChild(stepperRow('Stop when hidden', 'hidden'));
 
     // cosmetic only: quietens the in-session Cozier upsell, see setUpsellHidden()
     var upsellRow = el('div', 'row');
@@ -7377,26 +7430,6 @@ const SPECIES = [
     focusRow.append(focusLabel, focusToggle);
     setSec.body.appendChild(focusRow);
 
-    // Fast first press: opt in to tapping the first pass on a narrow or fast dial instead of
-    // waiting for the stable spin fit. The note is always visible so the trade is not hidden
-    // behind a tooltip; the default (off) keeps the measured zero-miss first-press gate.
-    var fastRow = el('div', 'row');
-    var fastLabel = el('div', 'label', 'Fast first press');
-    var fastToggle = el('button', 'icon', fastPref ? 'on' : 'off');
-    fastToggle.title = 'tap the first pass on narrow or fast dials without waiting for a stable spin fit; faster, but high-tier fish are more likely to be missed';
-    fastRow.append(fastLabel, fastToggle);
-    setSec.body.appendChild(fastRow);
-    setSec.body.appendChild(el('div', 'fastnote', 'Faster first taps on narrow/fast dials. Skips the fit check, so harder fish can be missed.'));
-
-    // Rest, then run again. Off by default: a run that restarts itself is a surprise, and the
-    // window and the cap still bound it.
-    var chainRow = el('div', 'row');
-    var chainLabel = el('div', 'label', 'Auto-start next run');
-    var chainToggle = el('button', 'icon', 'off');
-    chainToggle.title = 'after the cooldown, start the next session on its own (still bounded by the window and the cap)';
-    chainRow.append(chainLabel, chainToggle);
-    setSec.body.appendChild(chainRow);
-
     var reloadRow = el('div', 'row');
     var reloadLabel = el('div', 'label', 'Resume after reload');
     var reloadToggle = el('button', 'icon', (window.__panel && window.__panel.resumeAfterReload) ? 'on' : 'off');
@@ -7404,22 +7437,13 @@ const SPECIES = [
     reloadRow.append(reloadLabel, reloadToggle);
     setSec.body.appendChild(reloadRow);
 
-    // Off by default: a userscript has no server, and a failed localhost POST on every catch is noise.
-    var postRow = el('div', 'row');
-    var postLabel = el('div', 'label', 'Send catches to CSV');
-    var postToggle = el('button', 'icon', (window.__panel && window.__panel.postCatches) ? 'on' : 'off');
-    postToggle.title = 'send each catch to the local fishserve CSV (opt-in; the local ledger always works)';
-    postRow.append(postLabel, postToggle);
-    setSec.body.appendChild(postRow);
-
-    // A sampler that lives in the console dies with the page. This is the setting that brings it
-    // back on every load; the line under the meters proves whether it is actually posting.
+    // Unified fishserve opt-in: streams catches to catches.csv and loads the 5-minute sampler.
     var captureRow = el('div', 'row');
-    var captureLabel = el('div', 'label', 'Overnight capture');
+    var captureLabel = el('div', 'label', 'Local capture');
     var captureToggle = el('button', 'icon', overnightPref ? 'on' : 'off');
-    captureToggle.title = 'post a run snapshot to fishserve every five minutes, and load the sampler again after a reload';
+    captureToggle.title = 'send catches to fishserve CSV and post run snapshots every five minutes';
     // The row is the control, not the 14 px switch: the status line tells the owner to click
-    // "Overnight capture", and that has to work wherever on the row they click.
+    // capture, and that has to work wherever on the row they click.
     captureRow.style.cursor = 'pointer';
     captureRow.title = captureToggle.title;
     captureRow.append(captureLabel, captureToggle);
@@ -7527,9 +7551,10 @@ const SPECIES = [
     // merge rather than replace, or every one of those references is lost.
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
+      modeToggle: modeToggle, timedWrap: timedWrap,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
-      focusToggle: focusToggle, fastToggle: fastToggle,
-      chainToggle: chainToggle, reloadToggle: reloadToggle, postToggle: postToggle,
+      focusToggle: focusToggle,
+      chainToggle: chainToggle, reloadToggle: reloadToggle,
       captureToggle: captureToggle, captureLine: captureLine,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
@@ -7590,6 +7615,17 @@ const SPECIES = [
       }
       dispatch({ type: 'stop', at: at, reason: 'user' });
     });
+    modeToggle.addEventListener('click', function () {
+      var next = state.mode === 'flow' ? 'timed' : 'flow';
+      dispatch({ type: 'config', at: Date.now(), patch: { mode: next } });
+      try {
+        if (window.__fish && window.__fish.tune && (state.phase === 'running' || state.phase === 'paused')) {
+          window.__fish.tune({ maxMinutes: next === 'flow' ? 0 : Math.ceil(state.durationMs / 60000) + 2 });
+        }
+      } catch (e) {}
+      savePrefs();
+      render();
+    });
     winToggle.addEventListener('click', function () {
       dispatch({ type: 'config', at: Date.now(), patch: { window: { on: !state.window.on } } });
       savePrefs();
@@ -7603,7 +7639,6 @@ const SPECIES = [
       setFocusMode(focusPref);
       savePrefs();
     });
-    fastToggle.addEventListener('click', function () { setFastFirstPress(!fastPref); });
     chainToggle.addEventListener('click', function () {
       dispatch({ type: 'config', at: Date.now(), patch: { chain: !state.chain } });
       savePrefs();
@@ -7613,22 +7648,15 @@ const SPECIES = [
       savePrefs();
       render();
     });
-    postToggle.addEventListener('click', function () {
-      if (window.__panel) window.__panel.postCatches = !window.__panel.postCatches;
-      savePrefs();
-      render();
-    });
     captureRow.addEventListener('click', function () {
       var next = !overnightPref;
-      // The inlined userscript was not served by fishserve, so it has no origin to fetch the sampler
-      // from. Ask on the first click whatever the switch currently says: with the pref left on and
-      // no address, waiting for a turn-off first is what made this need two clicks. The answer is
-      // stored with the pref, so a reload does not ask again. A cancelled or malformed answer leaves
-      // the capture off - otherwise a pref that cannot run would have no way to be switched off.
+      // The inlined userscript was not served by fishserve, so it has no origin to fetch from.
+      // Ask on the first click whatever the switch currently says; a cancelled/malformed answer
+      // leaves local capture off so both CSV streaming and snapshots stay cleanly disabled.
       if (!captureServer()) next = !!askCaptureAddress();
       overnightPref = next;
       captureClearBackoff();
-      if (window.__panel) window.__panel.overnight = overnightPref;
+      syncCaptureUrl();
       savePrefs();
       if (next) armOvernight(); else disarmOvernight();
       render();
@@ -7723,14 +7751,14 @@ const SPECIES = [
       dur: 'one session length; Pause holds it without ending it',
       cool: 'rest after Stop or a finished run; a daily-cap or clock-window stop does not use it',
       cap: 'maximum fishing TIME per day, not a fish count; 24 h is allowed',
-      hidden: 'stop the run after the tab stays hidden this long'
+      hidden: 'stop the run after the tab stays hidden this long (off pauses without stopping)'
     };
     label.title = hints[key] || '';
     val.type = 'text';
     val.inputMode = 'text';
     val.autocomplete = 'off';
     val.spellcheck = false;
-    val.title = minutesText(conf.min) + ' – ' + minutesText(conf.max) + ' — type a value (90, 1h 30) or use the buttons';
+    val.title = (conf.min === 0 ? 'off' : minutesText(conf.min)) + ' – ' + minutesText(conf.max) + ' — type a value (90, 1h 30) or use the buttons';
     val.setAttribute('aria-label', labelText + ' duration');
     box.append(minus, val, plus);
     row.append(label, box);
@@ -7772,7 +7800,7 @@ const SPECIES = [
       dispatch({ type: 'config', at: Date.now(), patch: patch });
       // pointerdown prevents the default focus change, so the input can still be focused here and
       // render() would leave its stale text alone. The stepper owns this value; write it directly.
-      if (ui[key] && ui[key].val) ui[key].val.value = minutesText(next);
+      if (ui[key] && ui[key].val) ui[key].val.value = stepperText(key, next);
       savePrefs();
     }
     function hold(delta) {
@@ -7813,9 +7841,10 @@ const SPECIES = [
   function bindTyped(input, key) {
     function commit() {
       var conf = keyConf(key);
-      var minutes = parseMinutes(input.value);
+      var raw = String(input.value || '').trim().toLowerCase();
+      var minutes = (key === 'hidden' && (raw === 'off' || raw === 'none')) ? 0 : parseMinutes(input.value);
       if (minutes == null) {
-        input.value = minutesText(state[conf.field]);
+        input.value = stepperText(key, state[conf.field]);
         input.setAttribute('aria-invalid', 'true');
         return;
       }
@@ -7827,7 +7856,7 @@ const SPECIES = [
         dispatch({ type: 'config', at: Date.now(), patch: patch });
         savePrefs();
       }
-      input.value = minutesText(next);
+      input.value = stepperText(key, next);
       render();
     }
     input.addEventListener('focus', function () { input.select(); });
@@ -7840,14 +7869,17 @@ const SPECIES = [
   }
 
   // Ranges are for people who want to leave it fishing overnight: a 12 h session and a
-  // 24 h daily cap are reachable, and the cooldown can go down to one minute. The cap is
-  // still the thing that stops an abandoned tab from fishing for days. keyConf is the only
-  // source of those bounds: the steppers and the typed inputs both read it.
+  // 24 h daily cap are reachable, and the cooldown can go down to one minute. keyConf is the
+  // single source of those bounds: the steppers and the typed inputs both read it.
   function keyConf(key) {
     if (key === 'dur') return { field: 'durationMs', min: 5 * 60000, max: 720 * 60000, unit: 5 * 60000 };
     if (key === 'cool') return { field: 'cooldownMs', min: 1 * 60000, max: 120 * 60000, unit: 1 * 60000 };
-    if (key === 'hidden') return { field: 'hiddenStopMs', min: 2 * 60000, max: 60 * 60000, unit: 1 * 60000 };
+    if (key === 'hidden') return { field: 'hiddenStopMs', min: 0, max: 60 * 60000, unit: 1 * 60000 };
     return { field: 'dailyCapMs', min: 30 * 60000, max: 1440 * 60000, unit: 60 * 60000 };
+  }
+
+  function stepperText(key, ms) {
+    return (key === 'hidden' && ms === 0) ? 'off' : minutesText(ms);
   }
 
   function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
@@ -8099,28 +8131,28 @@ const SPECIES = [
     ui.chip.textContent = stalled ? 'stalled' : (alarm ? doc.verdict : phase);
     ui.chip.title = alarm ? doc.action : '';
     ui.dot.className = 'dot ' + (stalled ? 'stalled' : phase);
+    var flow = state.mode === 'flow';
+    if (ui.modeToggle) {
+      ui.modeToggle.textContent = flow ? 'Flow' : 'Timed';
+      ui.modeToggle.style.color = flow ? '#5ad18b' : '#9aa4ae';
+    }
+    if (ui.timedWrap) ui.timedWrap.style.display = flow ? 'none' : '';
     ui.winToggle.textContent = state.window.on ? 'on' : 'off';
     ui.winToggle.style.color = state.window.on ? '#5ad18b' : '#9aa4ae';
     ui.timeRow.style.display = state.window.on ? '' : 'none';
     renderUpsellToggle();
     renderFocusToggle();
-    renderFastToggle();
     renderCapture();
 
     if (!focused(ui.dur.val)) ui.dur.val.value = minutesText(state.durationMs);
     if (!focused(ui.cool.val)) ui.cool.val.value = minutesText(state.cooldownMs);
     if (!focused(ui.cap.val)) ui.cap.val.value = minutesText(state.dailyCapMs);
-    if (!focused(ui.hidden.val)) ui.hidden.val.value = minutesText(state.hiddenStopMs);
+    if (!focused(ui.hidden.val)) ui.hidden.val.value = stepperText('hidden', state.hiddenStopMs);
     ui.chainToggle.textContent = state.chain ? 'on' : 'off';
     if (ui.reloadToggle) {
       var reloadOn = !!(window.__panel && window.__panel.resumeAfterReload);
       ui.reloadToggle.textContent = reloadOn ? 'on' : 'off';
       ui.reloadToggle.style.color = reloadOn ? '#5ad18b' : '#9aa4ae';
-    }
-    if (ui.postToggle) {
-      var postOn = !!(window.__panel && window.__panel.postCatches);
-      ui.postToggle.textContent = postOn ? 'on' : 'off';
-      ui.postToggle.style.color = postOn ? '#5ad18b' : '#9aa4ae';
     }
     if (!focused(ui.time_from.val)) ui.time_from.val.value = state.window.start;
     if (!focused(ui.time_to.val)) ui.time_to.val.value = state.window.stop;
@@ -8144,14 +8176,22 @@ const SPECIES = [
       blindNote = 'detector blind for ' + Math.floor(blindMs / 60000) + ' min — reload the game tab, then sit on a chair by the water';
     }
 
-    if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
-    else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' paused';
-    else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cooling';
-    else if (phase === 'waiting') ui.mLeft.textContent = 'at ' + state.window.start;
-    else ui.mLeft.textContent = minutesText(state.durationMs);
+    if (flow) {
+      if (phase === 'running') ui.mLeft.textContent = minutesText(state.fishingMs) + ' flow';
+      else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.fishingMs) + ' paused';
+      else ui.mLeft.textContent = 'flow';
+    } else {
+      if (phase === 'running') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' left';
+      else if (phase === 'paused') ui.mLeft.textContent = minutesText(state.durationMs - state.fishingMs) + ' paused';
+      else if (phase === 'cooldown' && state.cooldownUntil) ui.mLeft.textContent = minutesText(state.cooldownUntil - Date.now()) + ' cooling';
+      else if (phase === 'waiting') ui.mLeft.textContent = 'at ' + state.window.start;
+      else ui.mLeft.textContent = minutesText(state.durationMs);
+    }
     ui.mCatches.textContent = String((stats.cards || state.catchCount || 0));
     ui.mPresses.textContent = String(stats.presses || 0);
-    ui.mToday.textContent = minutesText((state.todayMs || 0) + todaySessionMs()) + ' / ' + minutesText(state.dailyCapMs);
+    ui.mToday.textContent = flow
+      ? minutesText((state.todayMs || 0) + todaySessionMs())
+      : minutesText((state.todayMs || 0) + todaySessionMs()) + ' / ' + minutesText(state.dailyCapMs);
     renderLog();
     renderPerf();
 
@@ -8166,14 +8206,14 @@ const SPECIES = [
     secondary.title = '';
     if (phase === 'running') {
       primary.textContent = 'Pause';
-      primary.title = 'hold this session without ending it or starting the cooldown';
+      primary.title = 'hold this session without ending it' + (flow ? '' : ' or starting the cooldown');
       secondary.textContent = 'Stop';
       secondary.className = 'secondary';
-      secondary.title = 'end the session and start the cooldown';
+      secondary.title = flow ? 'end the session' : 'end the session and start the cooldown';
     } else if (phase === 'paused') {
       secondary.textContent = 'Stop';
       secondary.className = 'secondary';
-      secondary.title = 'end the session and start the cooldown';
+      secondary.title = flow ? 'end the session' : 'end the session and start the cooldown';
       if (resultMissing) {
         primary.textContent = 'Reload game';
         primary.title = 'reload the game tab to clear its waiting-for-result lock';
@@ -8500,7 +8540,7 @@ const SPECIES = [
           return;
         }
         banner = 'the fishing core had stopped — restarted';
-        RUNNERS.startCore({ maxMinutes: Math.ceil(state.durationMs / 60000) + 2 });
+        RUNNERS.startCore({ maxMinutes: state.mode === 'flow' ? 0 : Math.ceil(state.durationMs / 60000) + 2 });
         zombieRevives++;
         try { render(); } catch (e) {}
       }
@@ -8602,22 +8642,23 @@ const SPECIES = [
     if (prefs.profile && fish() && fish().logProfile) fish().logProfile(prefs.profile);
     var budget = loadBudget();
     var win = prefs.window || S.DEFAULTS.window;
+    var flow = prefs.mode === 'flow';
     state = S.createState({
+      mode: flow ? 'flow' : 'timed',
       window: { on: !!win.on, start: win.start, stop: win.stop },
       durationMs: prefs.durationMs || S.DEFAULTS.durationMs,
       cooldownMs: prefs.cooldownMs || S.DEFAULTS.cooldownMs,
       dailyCapMs: prefs.dailyCapMs || S.DEFAULTS.dailyCapMs,
-      hiddenStopMs: prefs.hiddenStopMs || S.DEFAULTS.hiddenStopMs,
+      hiddenStopMs: typeof prefs.hiddenStopMs === 'number' ? prefs.hiddenStopMs : S.DEFAULTS.hiddenStopMs,
       chain: !!prefs.chain,
       todayMs: budget.ms,
-      cooldownUntil: budget.cooldownUntil,
-      phase: budget.cooldownUntil ? 'cooldown' : 'idle'
+      cooldownUntil: flow ? null : budget.cooldownUntil,
+      phase: (!flow && budget.cooldownUntil) ? 'cooldown' : 'idle'
     });
     baseTodayMs = budget.ms;
     budgetDay = budget.day;
     window.__panel = window.__panel || {};
     window.__panel.resumeAfterReload = !!prefs.resumeAfterReload;
-    window.__panel.postCatches = !!prefs.postCatches;
 
     await loadToday();
     state.todayMs = baseTodayMs;
@@ -8638,9 +8679,8 @@ const SPECIES = [
     // zero dial presses until the toggle was clicked. focusTick() engages the hold when a session
     // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
-    fastPref = !!prefs.fastFirstPress;
-    window.__panel.fastFirstPress = fastPref;
-    overnightPref = !!prefs.overnight;
+    overnightPref = !!(prefs.localCapture || prefs.overnight || prefs.postCatches);
+    syncCaptureUrl();
     captureClearBackoff();
     // The night a reload used to end: with the setting on, mount loads the sampler again. It posts
     // once immediately, so the capture line proves the path before the tab is left alone. After
@@ -8664,8 +8704,6 @@ const SPECIES = [
     window.__panel.focus = inFocusSession;
     window.__panel.focusMode = focusOn;
     window.__panel.setFocusMode = setFocusMode;
-    window.__panel.setFastFirstPress = setFastFirstPress;
-    window.__panel.overnight = overnightPref;
     window.__panel.armOvernight = armOvernight;
     if (fish()) fish().exportDiag = exportDiag;
     window.__panel.guard = function () {

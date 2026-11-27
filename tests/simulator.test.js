@@ -381,3 +381,16 @@ test('simulator 4: maxPressPerDial (30), maxRejectedPerDial (5), and resultMissi
   latchSim.stepAt(11200);
   assert.equal(latchSim.F.resultMissing, false, 'late cast prompt clears resultMissing');
 });
+
+test('simulator 5: maxMinutes 0 (Flow mode) runs past 15h without timeout while maxMinutes > 0 stops', () => {
+  const flowSim = createHarness({ maxMinutes: 0 });
+  flowSim.F.startedAt = 1000;
+  flowSim.stepAt(1000 + 15 * 3600_000);
+  assert.equal(flowSim.F.running, true, 'maxMinutes: 0 never triggers timeout stop');
+
+  const timedSim = createHarness({ maxMinutes: 1 });
+  timedSim.F.startedAt = 1000;
+  timedSim.stepAt(1000 + 65_000);
+  assert.equal(timedSim.F.running, false, 'maxMinutes > 0 stops once elapsed');
+  assert.ok(timedSim.logs.some((l) => l.msg === 'maxMinutes'));
+});

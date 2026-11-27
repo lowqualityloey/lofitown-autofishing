@@ -30,6 +30,8 @@ interface Rect {
 
   type SessionPhase = 'idle' | 'running' | 'paused' | 'waiting' | 'cooldown';
 
+  type SessionMode = 'flow' | 'timed';
+
   type PauseReason =
     | 'user'
     | 'hidden'
@@ -57,6 +59,7 @@ interface Rect {
   }
 
   interface SessionState {
+    mode: SessionMode;
     phase: SessionPhase;
     durationMs: number;
     cooldownMs: number;
@@ -94,6 +97,7 @@ interface Rect {
   }
 
   interface SessionConfigPatch {
+    mode?: SessionMode;
     durationMs?: number;
     cooldownMs?: number;
     dailyCapMs?: number;
@@ -187,6 +191,7 @@ interface Rect {
 
   interface AutoFishSessionApi {
     DEFAULTS: {
+      mode: SessionMode;
       durationMs: number;
       cooldownMs: number;
       dailyCapMs: number;
@@ -288,6 +293,7 @@ interface Rect {
     mountError?: string;
     state?: (() => SessionState | null) | SessionState | null;
     resumeAfterReload?: boolean;
+    localCapture?: boolean;
     postCatches?: boolean;
     hideUpsell?: boolean;
     focusMode?: boolean;

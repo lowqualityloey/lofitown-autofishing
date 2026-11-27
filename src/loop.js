@@ -350,7 +350,7 @@
     if (!isVisible()) { F.hidden = true; return; }
     if (F.hidden) { F.hidden = false; F.hiddenPauses++; }
     if (F.paused) return;
-    if (t - F.startedAt > F.opts.maxMinutes * 60000) {
+    if (F.opts.maxMinutes > 0 && t - F.startedAt > F.opts.maxMinutes * 60000) {
       L('maxMinutes');
       if (o.stop) o.stop();
       else if (F.stop) F.stop();

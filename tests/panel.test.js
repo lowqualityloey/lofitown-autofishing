@@ -317,7 +317,7 @@ test('the budget is local: today and the cooldown survive a reload', () => {
   assert.ok(src.includes('baseTodayMs = Math.max(local, server)'), 'the server is a mirror, not the authority');
   assert.ok(src.includes('} catch (e) { baseTodayMs = local; }'), 'an offline fetch keeps the local budget');
   assert.ok(src.includes('state.todayMs = baseTodayMs'), 'mount restores the day before the first tick');
-  assert.ok(src.includes("phase: budget.cooldownUntil ? 'cooldown' : 'idle'"), 'a live cooldown is restored, not bypassed');
+  assert.ok(src.includes("phase: (!flow && budget.cooldownUntil) ? 'cooldown' : 'idle'"), 'a live cooldown is restored in timed mode');
   assert.ok(src.includes('function todaySessionMs()'), 'the live session is split from the day it carried');
   assert.match(src, /fishingMs \|\| 0\) - \(state\.carriedMs \|\| 0\)/, 'only today\'s share is stored and shown');
 });
@@ -360,11 +360,11 @@ test('reload resume and catch POSTs are opt-in, and resume no longer needs a clo
   assert.ok(live.includes("live.phase === 'paused'"), 'a user hold is not turned into a running session by a reload');
   assert.ok(live.includes("state.phase === 'cooldown'"), 'a live cooldown is respected');
   assert.ok(live.includes('state.todayMs >= state.dailyCapMs'), 'a spent cap is respected');
-  assert.ok(src.includes('prefs.postCatches = !!p.postCatches'), 'the POST pref is read');
-  assert.ok(src.includes('postCatches: !!window.__panel.postCatches'), 'the POST pref is saved');
+  assert.ok(src.includes('var capOn = p.localCapture !== undefined ? !!p.localCapture : !!(p.postCatches || p.overnight);'), 'legacy catch POST / overnight prefs migrate to localCapture');
+  assert.ok(src.includes('localCapture: capOn'), 'localCapture pref is saved');
   const start = src.slice(src.indexOf('startCore: function'), src.indexOf('stopCore:'));
   assert.match(start, /var server = BASE \|\| captureServer\(\);/, 'the catch URL uses the same capture address as the rows');
-  assert.ok(start.includes("var post = (window.__panel && window.__panel.postCatches && server) ? server + '/catch' : null"), 'the URL is only passed when opted in');
+  assert.ok(start.includes("var post = (window.__panel && (window.__panel.localCapture || window.__panel.postCatches) && server) ? server + '/catch' : null"), 'the URL is only passed when opted in');
   assert.ok(start.includes('logUrl: post'), 'startCore carries the opt-in URL');
 });
 
@@ -373,14 +373,14 @@ test('a userscript catch POST uses the capture address fallback, not BASE', () =
   const fn = block.slice(block.indexOf('function'), block.lastIndexOf('}') + 1);
   assert.ok(fn.indexOf('captureServer') > 0, 'the start path resolves the capture address');
 
-  function startWith(BASE, server, postCatches) {
+  function startWith(BASE, server, localCapture) {
     let started = null;
     const sandbox = {
       BASE: BASE,
       captureServer: function () { return server; },
       loadBudget: function () { return { ms: 0 }; },
       fish: function () { return { start: function (o) { started = o; } }; },
-      window: { __panel: { postCatches: postCatches } }
+      window: { __panel: { localCapture: localCapture } }
     };
     vm.runInNewContext('(' + fn + ')({ maxMinutes: 62 });', sandbox);
     return started;
@@ -401,15 +401,15 @@ test('a userscript catch POST uses the capture address fallback, not BASE', () =
   assert.equal(started.logUrl, null, 'no address means no POST');
 });
 
-test('overnight capture survives a reload and says in the panel whether it is armed', () => {
-  // The capture used to be a console paste: the 2026-11-17 night reloaded and data/runs jumped
-  // 07:18Z -> 15:01Z. The setting has to live in the panel, mount has to load the sampler again,
-  // and the panel has to say whether posts are actually landing.
-  assert.match(src, /prefs\.overnight = !!p\.overnight/, 'the pref is read');
-  assert.match(src, /overnight: !!overnightPref/, 'the setting is saved');
+test('local capture unifies catch CSV + 5-minute snapshots, survives reload, and shows status', () => {
+  assert.ok(src.includes("var captureLabel = el('div', 'label', 'Local capture');"), 'the single unified Local capture row is labelled');
+  assert.ok(!src.includes('Send catches to CSV'), 'the duplicate CSV toggle is retired');
+  assert.ok(!src.includes("'Overnight capture'"), 'the duplicate Overnight toggle is retired');
+  assert.match(src, /localCapture: capOn/, 'the pref is saved');
   assert.match(src, /overnightBase: captureBase \|\| ''/, 'the fishserve address is kept with it');
   assert.ok(src.includes('if (overnightPref) armOvernight();'), 'mount arms the sampler from the stored setting');
   assert.ok(src.includes('captureBase = BASE || prefs.overnightBase'), 'a served panel knows the address; an inlined one remembers it');
+  assert.ok(src.includes('function syncCaptureUrl()'), 'syncCaptureUrl updates both CSV streaming and live core logUrl');
 
   const arm = src.slice(src.indexOf('async function armOvernight'), src.indexOf('function disarmOvernight'));
   assert.ok(arm.length > 0, 'armOvernight exists');
@@ -492,22 +492,14 @@ test('a stop says what stopped it, and the hidden threshold is configurable', ()
   assert.ok(src.includes('Auto-start next run'), 'and labelled');
 });
 
-test('fast first press is opt-in, states its trade-off, and reaches the live core', () => {
-  // This is a speed/accuracy trade, not a free upgrade. It has to stay off by default, carry a
-  // visible warning, survive a reload, and apply both to a live run and to the next start.
-  assert.match(src, /prefs\.fastFirstPress = !!p\.fastFirstPress/, 'the pref is read');
-  assert.match(src, /fastFirstPress: !!fastPref/, 'the pref is saved');
-  assert.ok(src.includes('Fast first press'), 'the control is named');
-  assert.ok(src.includes('Faster first taps on narrow/fast dials'), 'the speed claim is explicit');
-  assert.ok(src.includes('harder fish can be missed'), 'the miss trade-off is explicit');
-  assert.match(src, /fastnote\{/, 'the warning has its own styling');
-  assert.ok(src.includes('fastToggle: fastToggle'), 'the toggle is registered for render');
-  assert.match(src, /fastToggle\.addEventListener\('click', function \(\) \{ setFastFirstPress\(!fastPref\); \}\)/);
-  assert.match(src, /tune\(\{ fastFirstPress: fastPref \}\)/, 'a live run is re-tuned immediately');
-  assert.match(src, /fastFirstPress: !!\(window\.__panel && window\.__panel\.fastFirstPress\)/,
-    'the next start carries the setting');
-  assert.ok(src.includes('window.__panel.setFastFirstPress = setFastFirstPress'), 'the setting is testable');
-  assert.match(src, /fastPref = !!prefs\.fastFirstPress/, 'mount adopts the stored setting');
+test('fast first press is retired from the panel UI, Cozier popup stays, and Flow mode hides timed controls', () => {
+  assert.ok(!src.includes('Fast first press'), 'the obsolete UI toggle is retired');
+  assert.ok(!src.includes('fastnote{'), 'the permanent amber warning is retired');
+  assert.ok(src.includes("'Cozier popup'"), 'Cozier popup control is kept');
+  assert.ok(src.includes("el('div', 'label', 'Mode')"), 'Mode switch is present');
+  assert.ok(src.includes('timedWrap.style.display = flow ? \'none\' : \'\''), 'Flow mode hides timed/budget rows');
+  assert.ok(src.includes("if (key === 'hidden') return { field: 'hiddenStopMs', min: 0"), 'Stop when hidden can step down to off');
+  assert.ok(src.includes("minutesText(state.fishingMs) + ' flow'"), 'Flow mode counts elapsed time up on the surface meter');
 });
 
 test('the panel says why and when a run paused', () => {

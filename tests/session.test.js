@@ -661,3 +661,47 @@ test('a guard pause records its own time, and a stop clears it', () => {
   const stopped = reduce(quiet.state, { type: 'stop', at: T0 + 12 * 60_000, reason: 'user' });
   assert.equal(stopped.state.pausedAt, null, 'a finished session is not still paused');
 });
+
+test('flow mode runs nonstop past duration, cap, and window, skips cooldown on stop, and still honors safety guards', () => {
+  let { state, actions } = reduce(
+    createState({ mode: 'flow', durationMs: 60_000, dailyCapMs: 60_000, cooldownMs: 30 * 60_000, window: { on: true, start: '00:00', stop: '00:01' } }),
+    { type: 'start', at: T0 }
+  );
+  assert.equal(state.phase, 'running');
+  assert.equal(actions[0].maxMinutes, 0, 'Flow mode removes core timeout');
+
+  // Tick 15 hours forward with catches -> never hits duration, daily-cap, or window stop
+  let at = T0;
+  for (let h = 1; h <= 15; h++) {
+    at = T0 + h * 3600_000;
+    ({ state } = reduce(state, { type: 'tick', at, visible: true, catches: h, errors: 0, todayMs: 25 * 3600_000 }));
+    assert.equal(state.phase, 'running', 'still running after ' + h + 'h');
+  }
+
+  // Hidden pause-only (hiddenStopMs: 0) holds indefinitely while hidden and resumes on return
+  ({ state } = reduce(state, { type: 'config', at, patch: { hiddenStopMs: 0 } }));
+  ({ state } = reduce(state, { type: 'tick', at: at + 10_000, visible: false, catches: 15, errors: 0, todayMs: 0 }));
+  ({ state } = reduce(state, { type: 'tick', at: at + 20_000, visible: false, catches: 15, errors: 0, todayMs: 0 }));
+  assert.equal(state.pauseReason, 'hidden');
+  ({ state } = reduce(state, { type: 'tick', at: at + 2 * 3600_000, visible: false, catches: 15, errors: 0, todayMs: 0 }));
+  assert.equal(state.phase, 'paused', 'hiddenStopMs: 0 never hard-stops the run');
+  ({ state } = reduce(state, { type: 'tick', at: at + 2 * 3600_000 + 5_000, visible: true, catches: 15, errors: 0, todayMs: 0 }));
+  ({ state } = reduce(state, { type: 'tick', at: at + 2 * 3600_000 + 9_000, visible: true, catches: 15, errors: 0, todayMs: 0 }));
+  assert.equal(state.phase, 'running', 'resumes automatically once tab returns');
+
+  // Safety guard (resultMissing) still pauses in Flow mode
+  ({ state } = reduce(state, { type: 'tick', at: at + 2 * 3600_000 + 15_000, visible: true, catches: 15, errors: 0, todayMs: 0, resultMissing: true }));
+  assert.equal(state.phase, 'paused');
+  assert.equal(state.pauseReason, 'result-missing');
+
+  // Manual Stop enters idle directly without cooldown
+  ({ state } = reduce(state, { type: 'stop', at: at + 2 * 3600_000 + 20_000, reason: 'user' }));
+  assert.equal(state.phase, 'idle');
+  assert.equal(state.cooldownUntil, null);
+
+  // Switching Timed -> Flow during cooldown clears cooldown back to idle
+  let timed = createState({ phase: 'cooldown', cooldownUntil: T0 + 600_000, stopReason: 'user' });
+  ({ state } = reduce(timed, { type: 'config', at: T0, patch: { mode: 'flow' } }));
+  assert.equal(state.phase, 'idle');
+  assert.equal(state.cooldownUntil, null);
+});
