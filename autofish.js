@@ -2869,6 +2869,13 @@
       startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
       endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
       untimedRows: merged.length - timed.length,
+      // Read-only mission snapshot (D1): what the Quests DOM shows, or null when it shows
+      // nothing. Same contract as panelState above - a missing or throwing panel hook must
+      // never fail the export, which is the night's only record.
+      missions: (function () {
+        try { return typeof F.exportMissions === 'function' ? F.exportMissions() : null; }
+        catch (e) { return { error: String((e && e.message) || e) }; }
+      })(),
       presses: pressAcceptSummary(F.pressLog),
       prediction: predictionSummary(F.predLog),
       pressLog: (F.pressLog || []).slice(-60),

@@ -179,6 +179,26 @@ function splitRow(line) {
 
 const readRows = (file) => fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.length > 0);
 
+/**
+ * Newest data/runs snapshot carrying a mission payload (additive D1 field, optional in every
+ * export). A torn or pre-D1 snapshot is skipped; a missing runs dir yields null.
+ */
+function latestMissions(dir) {
+  try {
+    const entries = fs.readdirSync(dir)
+      .filter((f) => f.startsWith('export-') && f.endsWith('.json'))
+      .sort()
+      .reverse();
+    for (const f of entries) {
+      try {
+        const rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+        if (rec && rec.missions) return { file: f, missions: rec.missions };
+      } catch (e) { /* skip unreadable snapshots */ }
+    }
+  } catch (e) { /* no runs dir yet */ }
+  return null;
+}
+
 /** Local calendar day (YYYY-MM-DD) of an ISO timestamp, so day totals match the wall clock. */
 function localDay(iso) {
   const d = new Date(iso);
@@ -403,6 +423,7 @@ function createServer() {
           coverage: result.coverage,
           summary: result.summary,
           catchesCount: catchRows,
+          missions: latestMissions(RUNS()),
           runsFiles: snapshots.length,
           text: result.text,
         });

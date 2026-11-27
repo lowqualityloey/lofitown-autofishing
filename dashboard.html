@@ -166,6 +166,11 @@
   </div>
 
   <section class="panel">
+    <h2>Missions (latest snapshot)</h2>
+    <div id="missionsBody" class="empty">Waiting for snapshots...</div>
+  </section>
+
+  <section class="panel">
     <h2>Recent catches (catches.csv)</h2>
     <div id="recentBody" class="empty">No catches recorded yet.</div>
   </section>
@@ -248,6 +253,22 @@
     }).join('') + '</div>';
   }
 
+  function renderMissions(m) {
+    if (!m || !m.missions) return '<div class="empty">No mission snapshot yet — quests ride the 5-minute capture post while the game\'s Missions panel is open.</div>';
+    var head = '<div class="diag-row"><div class="diag-key">Scope</div><div class="diag-val">' +
+      esc(m.missions.scope || '?') +
+      (m.missions.countdown ? ' · resets in ' + esc(m.missions.countdown) : '') +
+      (m.file ? ' · ' + esc(m.file) : '') + '</div></div>';
+    var rows = (Array.isArray(m.missions.missions) ? m.missions.missions : []).map(function (q) {
+      return [esc(q.objective || ''), esc(q.reward || '--'), esc(q.complete ? 'Complete' : (q.progress || '--'))];
+    });
+    return head + renderTable(
+      [{ label: 'Objective' }, { label: 'Reward', num: true }, { label: 'Progress' }],
+      rows,
+      'No quests in the snapshot.'
+    );
+  }
+
   function setBusy(busy) {
     loading = busy;
     el('refreshBtn').disabled = busy;
@@ -319,6 +340,7 @@
       }
 
       el('diagBody').innerHTML = renderDiag(s);
+      el('missionsBody').innerHTML = renderMissions(rep.missions);
 
       el('trophyBody').innerHTML = renderTable(
         [{ label: 'Time', nowrap: true }, { label: 'Species' }, { label: 'Tags' }, { label: 'Weight', num: true }],

@@ -136,7 +136,7 @@ const BOOTSTRAP = `
 `;
 
 /** @type {string[]} */
-const CORE_MODULES = ['src/diagnostics.js', 'src/ledger.js', 'src/vision.js', 'src/timing.js', 'src/loop.js'];
+const CORE_MODULES = ['src/diagnostics.js', 'src/ledger.js', 'src/vision.js', 'src/timing.js', 'src/loop.js', 'src/missions.js'];
 const PARTS = CORE_MODULES.concat(['autofish.js', 'session.js', 'layout.js', 'panel.js']);
 
 function read(name) {

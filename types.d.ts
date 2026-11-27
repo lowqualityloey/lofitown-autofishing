@@ -288,6 +288,7 @@ interface Rect {
     tune(opts?: unknown): unknown;
     exportRun(opts?: { reset?: boolean }): string;
     exportDiag?(): Record<string, unknown>;
+    exportMissions?(): Record<string, unknown> | null;
     [key: string]: any;
   }
 
@@ -509,6 +510,7 @@ interface Rect {
     AutoFishTiming?: Record<string, any>;
     AutoFishVision?: Record<string, any>;
     AutoFishLedger?: Record<string, any>;
+    AutoFishMissions?: Record<string, any>;
     AutoFishDiagnostics?: Record<string, any>;
     AutoFishLoop?: AutoFishLoopApi;
     __fish?: FishApi | FishCore | null;

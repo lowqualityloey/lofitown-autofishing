@@ -1447,6 +1447,14 @@
     '.chev{flex:none;display:inline-block;font-size:9px;color:#8b95a0;transition:transform .16s cubic-bezier(.16,1,.3,1)}',
     '.sec.open .chev{transform:rotate(90deg)}',
     '.secbody{display:flex;flex-direction:column;gap:8px;padding-bottom:9px}',
+    '.missions-scope{display:flex;flex-direction:column;gap:3px}',
+    '.missions-head{font-size:10px;color:#8b95a0;letter-spacing:.3px}',
+    '.missions-row{display:flex;gap:6px;align-items:baseline;font-size:11px}',
+    '.missions-objective{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#dfe5ea}',
+    '.missions-status{flex:none;color:#aab4bf}',
+    '.missions-status.done{color:#5ad18b}',
+    '.missions-reward{flex:none;color:#e8c766}',
+    '.missions-empty{font-size:11px;color:#8b95a0}',
     '.pill{width:48px;height:48px;padding:0;color:#e8ecef;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.trophy-pop{position:absolute;inset:0;z-index:10;background:#12161c;min-height:280px;max-height:440px;display:flex;flex-direction:column;gap:6px;padding:10px}',
     '.card.pop-open .body,.card.pop-open .banner{display:none!important}',
@@ -1509,6 +1517,11 @@
     // while everything decided once (lengths, guards, profile, frame report) folds away below.
     var setSec = section('Session & guards');
     var diagSec = section('Diagnostics');
+    // D1: read-only mission awareness. Collapsed by default like every tier-2 fold; the
+    // reader never clicks anything in the game (HARD-2) and never claims (D2 stays out).
+    var missionsSec = section('Missions');
+    ui.missionsRows = el('div', 'missions-body');
+    missionsSec.body.appendChild(ui.missionsRows);
 
     setSec.body.appendChild(el('div', 'subhead', 'Schedule'));
 
@@ -1725,7 +1738,7 @@
     diagSec.body.appendChild(perfBox);
 
     // Tier 2 lives below the run view, never above it.
-    body.append(setSec.el, diagSec.el);
+    body.append(setSec.el, diagSec.el, missionsSec.el);
 
     var bannerEl = el('div', 'banner');
     bannerEl.setAttribute('role', 'status');
@@ -2497,6 +2510,7 @@
 
   function render() {
     if (!ui.card) return;
+    try { renderMissions(); } catch (e) { /* display-only; a game UI change reads as no quests */ }
     var phase = state.phase;
     /** @type {FishStatus | null} */
     var status = preStatus;
@@ -2900,6 +2914,62 @@
     return out;
   }
 
+  /** Last Quests reads per scope, so the fold keeps both tabs' last known state. */
+  var missionsCache = { daily: null, weekly: null };
+
+  /**
+   * Read-only Quests display (D1). The source of truth is the game's own DOM, read through
+   * AutoFishMissions.readQuests: nothing is clicked, and .cozy-missions-claim is observed,
+   * never activated (HARD-1/HARD-2). A closed or reshaped game UI reads as "no quests", never
+   * as an error, so a game update cannot break the session loop from here.
+   */
+  function renderMissions() {
+    var rowsBox = ui.missionsRows;
+    if (!rowsBox) return;
+    /** @type {any} */
+    var read = null;
+    try {
+      if (window.AutoFishMissions) read = window.AutoFishMissions.readQuests(document);
+    } catch (e) { read = null; }
+    if (read && (read.scope === 'daily' || read.scope === 'weekly')) missionsCache[read.scope] = read;
+    var scopes = ['daily', 'weekly'];
+    var blocks = [];
+    for (var i = 0; i < scopes.length; i++) {
+      if (missionsCache[scopes[i]]) blocks.push(missionsBlock(missionsCache[scopes[i]]));
+    }
+    rowsBox.innerHTML = '';
+    if (!blocks.length) {
+      rowsBox.append(el('div', 'missions-empty', "open the game's Missions panel (app menu) — quests are read-only"));
+      return;
+    }
+    for (var j = 0; j < blocks.length; j++) rowsBox.append(blocks[j]);
+  }
+
+  /** One scope block: a countdown head plus its mission rows. */
+  function missionsBlock(read) {
+    var box = el('div', 'missions-scope');
+    box.append(el('div', 'missions-head', (read.scope || '?') + (read.countdown ? ' · resets in ' + read.countdown : '')));
+    var list = Array.isArray(read.missions) ? read.missions : [];
+    for (var i = 0; i < list.length; i++) {
+      var q = list[i] || {};
+      var row = el('div', 'missions-row');
+      row.append(el('span', 'missions-objective', String(q.objective || '')));
+      row.append(el('span', 'missions-status' + (q.complete ? ' done' : ''), q.complete ? '\u2713 Complete' : String(q.progress || '\u2014')));
+      row.append(el('span', 'missions-reward', q.reward ? String(q.reward) + 'c' : '\u2014'));
+      box.append(row);
+    }
+    return box;
+  }
+
+  /** Read-only Quests read for __fish.exportRun() (D1); null when the Quests panel shows nothing. */
+  function exportMissions() {
+    if (!window.AutoFishMissions) return null;
+    /** @type {any} */
+    var read = null;
+    try { read = window.AutoFishMissions.readQuests(document); } catch (e) { return null; }
+    return read || null;
+  }
+
   /** What exportRun() adds when the panel is mounted; null fields when it is not. */
   function exportDiag() {
     return { guard: guardDiag(), blind: blindDiag() };
@@ -3118,6 +3188,7 @@
     window.__panel.checkUpdate = checkForUpdate;
     if (fish()) {
       fish().exportDiag = exportDiag;
+      fish().exportMissions = exportMissions;
       fish().onCatch = function (row) {
         if (isTrophyCatchRow(row)) playRareChime(row);
       };

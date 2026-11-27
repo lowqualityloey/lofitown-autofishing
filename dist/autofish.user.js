@@ -2337,6 +2337,132 @@ const SPECIES = [
 });
 
 // @ts-check
+/* src/missions.js — read-only lofi.town Quests reader: thin DOM walk + pure parser.
+ * UMD: browser global AutoFishMissions, CommonJS require('./src/missions.js').
+ *
+ * Read-only by contract (TASK-2026-11-28-missions-awareness-d1): nothing here clicks, and
+ * `.cozy-missions-claim` is observed for presence only, never activated — claiming is D2, a
+ * separate task. Scope comes from the countdown format (HH:MM:SS daily vs D:HH:MM:SS weekly),
+ * so the reader never needs to switch the game's own tabs.
+ *
+ * Evidence shapes come from the live M0 spike (2026-11-28): rows read as objective text,
+ * a reward number ("450", "1,550"), then progress ("0/1") or status ("Complete"); the daily
+ * countdown is HH:MM:SS and the weekly one D:HH:MM:SS.
+ */
+/**
+ * @param {any} root
+ * @param {() => Record<string, any>} factory
+ */
+(function (root, factory) {
+  var api = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.AutoFishMissions = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  var DAILY_RE = /^\d{1,2}:\d{2}:\d{2}$/;
+  var WEEKLY_RE = /^\d{1,2}:\d{2}:\d{2}:\d{2}$/;
+  var REWARD_RE = /^\d{1,3}(,\d{3})*$/;
+  var PROGRESS_RE = /^\d+\s*\/\s*\d+$/;
+  var COMPLETE_RE = /^complete$/i;
+  var CLAIM_CLASS = 'cozy-missions-claim';
+
+  /**
+   * Pure: which quest scope a countdown line belongs to. A plain clock time ("8:08") is neither.
+   * @param {string} line
+   * @returns {'daily' | 'weekly' | null}
+   */
+  function countdownScope(line) {
+    var t = String(line || '').trim();
+    if (WEEKLY_RE.test(t)) return 'weekly';
+    if (DAILY_RE.test(t)) return 'daily';
+    return null;
+  }
+
+  /**
+   * Pure: turn the Quests panel's text lines into mission records. Lines are scanned in order;
+   * an objective is any non-numeric text line followed by a reward line and a progress
+   * ("0/1") or status ("Complete") line. Headings, tab labels and the countdown are ignored.
+   * A triple without its progress line is not a readable row and is left out — a missing line
+   * never becomes a fabricated quest.
+   * @param {string[]} lines
+   * @returns {Array<{ objective: string, reward: string | null, progress: string | null, complete: boolean }>}
+   */
+  function parseLines(lines) {
+    var out = [];
+    var arr = Array.isArray(lines) ? lines : [];
+    var i = 0;
+    while (i < arr.length) {
+      var line = String(arr[i] || '').trim();
+      i++;
+      if (!line || DAILY_RE.test(line) || WEEKLY_RE.test(line)) continue;
+      if (/^(daily|weekly|quests?)$/i.test(line)) continue;
+      if (REWARD_RE.test(line) || PROGRESS_RE.test(line) || COMPLETE_RE.test(line)) continue;
+      /** @type {string | null} */
+      var reward = null;
+      /** @type {string | null} */
+      var progress = null;
+      if (i < arr.length && REWARD_RE.test(String(arr[i] || '').trim())) { reward = String(arr[i]).trim(); i++; }
+      if (i < arr.length && (PROGRESS_RE.test(String(arr[i] || '').trim()) || COMPLETE_RE.test(String(arr[i] || '').trim()))) {
+        progress = String(arr[i]).trim();
+        i++;
+      }
+      if (progress == null) continue;
+      out.push({
+        objective: line,
+        reward: reward,
+        progress: PROGRESS_RE.test(progress) ? progress.replace(/\s/g, '') : null,
+        complete: COMPLETE_RE.test(progress),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Pure: normalize one read. An explicit scope hint wins; otherwise the countdown format
+   * decides; with neither, the read is honestly scoped "unknown".
+   * @param {any[]} parsed
+   * @param {string} countdown
+   * @param {string} [scopeHint]
+   */
+  function shapeRead(parsed, countdown, scopeHint) {
+    var scope = scopeHint || countdownScope(countdown) || 'unknown';
+    return {
+      scope: scope,
+      countdown: countdown || null,
+      missions: Array.isArray(parsed) ? parsed : [],
+      claimVisible: false,
+      readAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * DOM walk (thin): read whatever the Quests panel shows right now, without clicking anything.
+   * Returns null when the panel is not open or shows no readable rows. The claim control is
+   * observed for presence only.
+   * @param {Document} doc
+   * @returns {Record<string, any> | null}
+   */
+  function readQuests(doc) {
+    if (!doc || !doc.querySelector) return null;
+    var root = /** @type {HTMLElement | null} */ (doc.querySelector('.cozy-missions-panel'));
+    if (!root || !root.textContent) return null;
+    var lines = String(root.innerText || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+    var countdown = '';
+    for (var i = 0; i < lines.length; i++) {
+      if (DAILY_RE.test(lines[i]) || WEEKLY_RE.test(lines[i])) { countdown = lines[i]; break; }
+    }
+    var parsed = parseLines(lines);
+    if (!parsed.length) return null;
+    var read = shapeRead(parsed, countdown);
+    try { read.claimVisible = !!doc.querySelector('.' + CLAIM_CLASS); } catch (e) { read.claimVisible = false; }
+    return read;
+  }
+
+  return { readQuests: readQuests, parseLines: parseLines, shapeRead: shapeRead, countdownScope: countdownScope };
+});
+
+// @ts-check
 /**
  * lofi.town autofish v3 — continuous cast -> reel -> dial loop.
  *
@@ -5207,6 +5333,13 @@ const SPECIES = [
       startedAt: timed.length ? new Date(timed[0]).toISOString() : null,
       endedAt: timed.length ? new Date(timed[timed.length - 1]).toISOString() : null,
       untimedRows: merged.length - timed.length,
+      // Read-only mission snapshot (D1): what the Quests DOM shows, or null when it shows
+      // nothing. Same contract as panelState above - a missing or throwing panel hook must
+      // never fail the export, which is the night's only record.
+      missions: (function () {
+        try { return typeof F.exportMissions === 'function' ? F.exportMissions() : null; }
+        catch (e) { return { error: String((e && e.message) || e) }; }
+      })(),
       presses: pressAcceptSummary(F.pressLog),
       prediction: predictionSummary(F.predLog),
       pressLog: (F.pressLog || []).slice(-60),
@@ -7901,6 +8034,14 @@ const SPECIES = [
     '.chev{flex:none;display:inline-block;font-size:9px;color:#8b95a0;transition:transform .16s cubic-bezier(.16,1,.3,1)}',
     '.sec.open .chev{transform:rotate(90deg)}',
     '.secbody{display:flex;flex-direction:column;gap:8px;padding-bottom:9px}',
+    '.missions-scope{display:flex;flex-direction:column;gap:3px}',
+    '.missions-head{font-size:10px;color:#8b95a0;letter-spacing:.3px}',
+    '.missions-row{display:flex;gap:6px;align-items:baseline;font-size:11px}',
+    '.missions-objective{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#dfe5ea}',
+    '.missions-status{flex:none;color:#aab4bf}',
+    '.missions-status.done{color:#5ad18b}',
+    '.missions-reward{flex:none;color:#e8c766}',
+    '.missions-empty{font-size:11px;color:#8b95a0}',
     '.pill{width:48px;height:48px;padding:0;color:#e8ecef;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
     '.trophy-pop{position:absolute;inset:0;z-index:10;background:#12161c;min-height:280px;max-height:440px;display:flex;flex-direction:column;gap:6px;padding:10px}',
     '.card.pop-open .body,.card.pop-open .banner{display:none!important}',
@@ -7963,6 +8104,11 @@ const SPECIES = [
     // while everything decided once (lengths, guards, profile, frame report) folds away below.
     var setSec = section('Session & guards');
     var diagSec = section('Diagnostics');
+    // D1: read-only mission awareness. Collapsed by default like every tier-2 fold; the
+    // reader never clicks anything in the game (HARD-2) and never claims (D2 stays out).
+    var missionsSec = section('Missions');
+    ui.missionsRows = el('div', 'missions-body');
+    missionsSec.body.appendChild(ui.missionsRows);
 
     setSec.body.appendChild(el('div', 'subhead', 'Schedule'));
 
@@ -8179,7 +8325,7 @@ const SPECIES = [
     diagSec.body.appendChild(perfBox);
 
     // Tier 2 lives below the run view, never above it.
-    body.append(setSec.el, diagSec.el);
+    body.append(setSec.el, diagSec.el, missionsSec.el);
 
     var bannerEl = el('div', 'banner');
     bannerEl.setAttribute('role', 'status');
@@ -8951,6 +9097,7 @@ const SPECIES = [
 
   function render() {
     if (!ui.card) return;
+    try { renderMissions(); } catch (e) { /* display-only; a game UI change reads as no quests */ }
     var phase = state.phase;
     /** @type {FishStatus | null} */
     var status = preStatus;
@@ -9354,6 +9501,62 @@ const SPECIES = [
     return out;
   }
 
+  /** Last Quests reads per scope, so the fold keeps both tabs' last known state. */
+  var missionsCache = { daily: null, weekly: null };
+
+  /**
+   * Read-only Quests display (D1). The source of truth is the game's own DOM, read through
+   * AutoFishMissions.readQuests: nothing is clicked, and .cozy-missions-claim is observed,
+   * never activated (HARD-1/HARD-2). A closed or reshaped game UI reads as "no quests", never
+   * as an error, so a game update cannot break the session loop from here.
+   */
+  function renderMissions() {
+    var rowsBox = ui.missionsRows;
+    if (!rowsBox) return;
+    /** @type {any} */
+    var read = null;
+    try {
+      if (window.AutoFishMissions) read = window.AutoFishMissions.readQuests(document);
+    } catch (e) { read = null; }
+    if (read && (read.scope === 'daily' || read.scope === 'weekly')) missionsCache[read.scope] = read;
+    var scopes = ['daily', 'weekly'];
+    var blocks = [];
+    for (var i = 0; i < scopes.length; i++) {
+      if (missionsCache[scopes[i]]) blocks.push(missionsBlock(missionsCache[scopes[i]]));
+    }
+    rowsBox.innerHTML = '';
+    if (!blocks.length) {
+      rowsBox.append(el('div', 'missions-empty', "open the game's Missions panel (app menu) — quests are read-only"));
+      return;
+    }
+    for (var j = 0; j < blocks.length; j++) rowsBox.append(blocks[j]);
+  }
+
+  /** One scope block: a countdown head plus its mission rows. */
+  function missionsBlock(read) {
+    var box = el('div', 'missions-scope');
+    box.append(el('div', 'missions-head', (read.scope || '?') + (read.countdown ? ' · resets in ' + read.countdown : '')));
+    var list = Array.isArray(read.missions) ? read.missions : [];
+    for (var i = 0; i < list.length; i++) {
+      var q = list[i] || {};
+      var row = el('div', 'missions-row');
+      row.append(el('span', 'missions-objective', String(q.objective || '')));
+      row.append(el('span', 'missions-status' + (q.complete ? ' done' : ''), q.complete ? '\u2713 Complete' : String(q.progress || '\u2014')));
+      row.append(el('span', 'missions-reward', q.reward ? String(q.reward) + 'c' : '\u2014'));
+      box.append(row);
+    }
+    return box;
+  }
+
+  /** Read-only Quests read for __fish.exportRun() (D1); null when the Quests panel shows nothing. */
+  function exportMissions() {
+    if (!window.AutoFishMissions) return null;
+    /** @type {any} */
+    var read = null;
+    try { read = window.AutoFishMissions.readQuests(document); } catch (e) { return null; }
+    return read || null;
+  }
+
   /** What exportRun() adds when the panel is mounted; null fields when it is not. */
   function exportDiag() {
     return { guard: guardDiag(), blind: blindDiag() };
@@ -9572,6 +9775,7 @@ const SPECIES = [
     window.__panel.checkUpdate = checkForUpdate;
     if (fish()) {
       fish().exportDiag = exportDiag;
+      fish().exportMissions = exportMissions;
       fish().onCatch = function (row) {
         if (isTrophyCatchRow(row)) playRareChime(row);
       };
