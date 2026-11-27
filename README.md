@@ -6,7 +6,7 @@ A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no buil
 
 ## Status
 
-**Actively maintained.** Published release **3.9.64** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.64)) · unreleased features on `main` queued for the next tag (`Mode: Flow / Timed`, unified `Local capture`, modular `src/` core, hot-path polish) · **full test suite passing** on 2026-11-27 · [MIT](LICENSE)
+**Actively maintained.** Current release **3.9.65** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.65)) · **full test suite passing** on 2026-11-27 · [MIT](LICENSE)
 
 Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://www.tampermonkey.net/), the game open, and a character you can seat.
 
@@ -36,11 +36,11 @@ The obvious alternatives are doing the loop manually or using another lofi.town 
 4. Click a chair, bench or stool at the water's edge and wait for the game's own **CAST!** prompt. The bot cannot seat you.
 5. Press **Start** on the panel. The badge changes to **RUNNING** and `presses` starts climbing.
 
-There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.64`) or this browser-console command:
+There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.65`) or this browser-console command:
 
 ```js
 __fish.version
-// 3.9.64
+// 3.9.65
 ```
 
 ### Nothing happened?
@@ -60,13 +60,13 @@ __fish.version
 
 The bot reads the game's rendered frames to find the **CAST!** and **REEL!** prompts, then presses the spinning reel dial at the moment the wedge crosses the pin. It uses a predicted crossing, re-arms after a proven new triangle, and falls back to a full-surface search if its remembered dial is wrong. Detection runs inside a wrapper around the renderer, because the prompts are painted into the game's canvas.
 
-The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, elapsed/remaining timer, catches, presses and today's time. **Session & guards** holds **Session**, **Cooldown**, **Daily time cap**, **Stop when hidden**, **Clock window**, **Cozier popup**, **Pause in focus sessions**, **Auto-start next run**, **Resume after reload**, and **Profile**; on `main` (queued for the next release), it also adds **Mode (`Flow` / `Timed`)** (**Flow** runs nonstop until you press **Stop** with safety guards active and hides timed/budgeted rows), allows **Stop when hidden: `off`** (pause-only), retires the **Fast first press** UI toggle (still available via `__fish.tune({ fastFirstPress: true })`), and merges **Send catches to CSV** + **Overnight capture** into one **Local capture** toggle.
+The panel keeps the everyday controls on its surface: **Start / Pause**, **Stop**, elapsed/remaining timer, catches, presses and today's time. **Session & guards** starts with **Mode (`Flow` / `Timed`)**: **Flow** runs nonstop until you press **Stop** (with all safety guards active and hiding the **Session**, **Cooldown**, **Daily time cap**, **Clock window**, and **Auto-start next run** rows), while **Timed** enforces budgeted windows and cooldowns. It also holds **Stop when hidden** (including `off` for pause-only), **Cozier popup**, **Pause in focus sessions**, **Resume after reload**, **Local capture** (streaming both CSV rows and 5-minute `fishserve` snapshots), and **Profile**. (Console power users can still toggle `fastFirstPress` via `__fish.tune({ fastFirstPress: true })`.)
 
 **Diagnostics** shows fps, frame times, accuracy, and detector cost. Drag the header to move it; the **-** control collapses it to a small pill.
 
 ![The AutoFish panel showing Flow mode, Local capture, and live diagnostics](docs/images/panel.jpg)
 
-The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.64. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
+The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.65. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
 
 ## Limits and requirements
 
@@ -88,7 +88,7 @@ The page keeps only the last 250 attempts, so a long run needs a local sampler. 
 node fishserve.js
 ```
 
-Open **Session & guards**, enable capture (**Local capture** on `main`; **Send catches to CSV** + **Overnight capture** in `v3.9.64`), and enter the fishserve origin, usually `http://127.0.0.1:8731`. Catches stream to `catches.csv` and the first run snapshot posts immediately and repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
+Open **Session & guards**, turn on **Local capture**, and enter the fishserve origin, usually `http://127.0.0.1:8731`. Catches stream to `catches.csv` and the first run snapshot posts immediately and repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
 
 In the morning:
 

@@ -2,10 +2,10 @@
 
 <!-- Bounded projection: respect `state-guard:` thresholds in `PROMPTKIT.md`; `pk:checkpoint` archives completed history to `docs/STATE-ARCHIVE.md`. -->
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.64 published at `v3.9.64` / `94626a4`; `main` ahead with M4 modular core, Flow mode, unified `Local capture`, and hot-path perf polish)
+- **Project Name**: lofitown-autofishing (autofish 3.9.65: Flow mode, unified `Local capture`, M4 `src/` modular core, JSDoc static type-checking, Flow `resume` fix, hot-path perf cleanups)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — **v3.9.64** published (`94626a4`, `408,592` bytes, `sha256 5f6ecdaf6281`, source + `lofitown-autofishing-dist` mirror green via `release.js --check`); `main` at `9c7dae7` (`440/440` tests, `tsc --noEmit` exit `0`, `dist/autofish.user.js` `413,732` bytes). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
-- **Current Working Branch**: `main` (`9c7dae7`, ahead of `v3.9.64`; pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
+- **Overall Status**: ACTIVE — **v3.9.65** shipping (`440/440` tests, `tsc --noEmit` exit `0`, live 1h Flow soak `81/82` caught `98.8%`, `143.1 fps`, `allocMBPerSec: 0`); prior baseline **v3.9.64** (`94626a4`, `408,592` bytes, `sha256 5f6ecdaf6281`). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
+- **Current Working Branch**: `main` (pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
 - **Last Updated**: 2026-11-27
 - **Engine Version**: v2.6.1 @ unknown
 - **Runtime**: Node v26.13.1 (WSL), zero dependencies, no bundler
@@ -46,8 +46,8 @@
 - **Active Task Pointer**: `TASK-2026-11-27-flow-mode-and-panel-simplification`
 - **Owner / Current Actor**: lead / Antigravity
 - **Start Time**: `2026-11-27`
-- **Current Revision**: `9c7dae7`
-- **Next Action**: Cut next release tag (`v3.9.65`) when ready (`pk:ship`) so Tampermonkey auto-updates ship Flow mode, `Local capture`, and M4 modular core.
+- **Current Revision**: `v3.9.65` release (`HEAD` on `main`)
+- **Next Action**: Field-run `v3.9.65` across local midnight and verify Zen/Gecko frame budget (`__fish.perf()`).
 
 ---
 
@@ -119,7 +119,7 @@ Older decisions (2026-10-27–2026-11-17) are archived in `docs/STATE-ARCHIVE.md
 ---
 
 ## 7. Next Immediate Actions (Queued)
-1. **Tag & publish `v3.9.65` (`pk:ship`) when ready** so Tampermonkey auto-updates ship Flow mode, unified `Local capture`, modular `src/` core, and hot-path perf polish.
+1. **Monitor `v3.9.65` overnight soak.** Confirm `overnight-report.js` coverage cleanly after an unattended Flow night.
 2. **Field-run across local midnight.** Verify that only the post-midnight share spends the new day's cap (`Timed` mode) and that `Flow` mode runs smoothly across rollover.
 3. **Measure the Zen frame budget.** Use `__fish.perf()` on Gecko before changing any scan throttle.
 4. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat bubbles) at untested window sizes.
@@ -141,6 +141,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-27 | Antigravity (pk:plan / M4) | Modular core extraction (`src/`) & headless simulator | Extracted `src/{diagnostics,ledger,vision,timing,loop}.js` (`// @ts-check` UMD modules), shared `assembleCore()` across `build-userscript.js` + `fishserve.js` (`GET /autofish.js`), migrated sentinel tests & `scripts/{gen-catalogue,overnight-report}.js` to `require('../src/...')`, and added `tests/simulator.test.js` (`PLAN-m4-modular-core`, committed `0c71e6e`/`7802bf4`; `436/436` tests, `tsc --noEmit` exit `0`). Verified live in BrowserOS Neo: `['3.9.64', true x 5]`, `10/10` caught (`d: 1`), `53/53` accepted, `143.1 fps`, `snapshot.gl: 4233 / canvas2d: 0`. | `src/*.js`; `autofish.js`; `build-userscript.js`; `fishserve.js`; `types.d.ts`; `tsconfig.json`; `scripts/*.js`; `tests/*.test.js`; `dist/autofish.user.js`; `AUTOFISH.md`; `docs/specs/2026-11-27-m4-modular-core-and-simulator.md`; `docs/tasks/TASK-2026-11-27-m4-modular-core.md`; `docs/reviews/2026-11-27-m4-modular-core-live.md`; `docs/STATE.md` |
 | 2026-11-27 | Antigravity (pk:plan) | Flow mode & panel simplification | Added `Mode: Flow \| Timed` (`maxMinutes: 0`, `hiddenStopMs: 0`), kept safety guards + `Cozier popup`, retired `Fast first press` UI + amber warning, and unified `Send catches to CSV` + `Overnight capture` into one `Local capture` toggle with Expand-Contract pref migration (`PLAN-flow-mode-panel`, committed `8efe8c8`; `438/438` tests, `tsc --noEmit` exit `0`). | `session.js`; `src/loop.js`; `autofish.js`; `panel.js`; `types.d.ts`; `dist/autofish.user.js`; `tests/{panel,session,simulator}.test.js`; `README.md`; `AUTOFISH.md`; `docs/specs/2026-11-27-flow-mode-and-panel-simplification.md`; `docs/tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md`; `docs/STATE.md` |
 | 2026-11-27 | Antigravity (pk:review / pk:fix) | Flow `resume` fix, perf polish & docs sync | Bypassed `dailyCapMs`/`window` checks on Flow `resume` (`session.js`), added `createLedger().getEpoch()` + `F.log()` memoization, reused `tickOnce()` status in `render()`, eliminated `PX()` in `creamFraction` and unused `pat`/array allocs in `F.sample()`, consolidated `src/diagnostics.js` filter passes (`9c7dae7`; `440/440` tests, `tsc --noEmit` exit `0`), and synced `README.md`, `docs/STATE.md`, `docs/releases/3.9.64.md`, and `docs/README.md` (flagging stale `3.9.31` README screenshots). | `session.js`; `src/{ledger,diagnostics}.js`; `autofish.js`; `panel.js`; `dist/autofish.user.js`; `tests/{session,catchlog,perf}.test.js`; `README.md`; `docs/STATE.md`; `docs/releases/3.9.64.md`; `docs/README.md` |
+| 2026-11-27 | Antigravity (pk:ship) | Ship `v3.9.65` release + live README screenshots | Refreshed README/docs screenshots from BrowserOS Neo live Flow session (`34737e3`), verified 1h live soak (`81/82` caught `98.8%`, `423/423` accepted `100.0%`, `143.1 fps`, `allocMBPerSec: 0`), bumped `package.json` to `3.9.65`, rebuilt `dist/autofish.user.js`, published `v3.9.65` source + `lofitown-autofishing-dist` mirror (`release.js --check` green). | `package.json`; `dist/autofish.user.js`; `docs/releases/3.9.65.md`; `docs/README.md`; `docs/STATE.md`; `AUTOFISH.md`; `README.md`; `docs/images/*.jpg` |
 
 ---
 
