@@ -114,7 +114,7 @@
 - **Verification Evidence**: `npm run typecheck` exit 0; `node --test` 448/448 pass, exit 0 (final run, executed 2026-11-28 with all four changed files in tree). Two earlier `node --test` runs exited 1 on `tests/docs.test.js:32` (unindexed new records: first the task record, then the scope-1 record) - resolved by indexing both in `docs/README.md` via Scope Change 1; the test was not modified. `check-doctor.sh`: exit 0 pre-change (install verification) and exit 0 at the gate (`docs-drift OK - projection agrees with the canonical Task Record`; `state-freshness OK: 163 lines / 5844 tok`); two intermediate doctor runs exited 1 on `docs-drift DIVERGED` while the 3A projection was being reconciled field-by-field to this authoritative record (last divergence: `Owner / Current Actor` naming difference between this record's Identity and State sections).
 - **CI Evidence**: `N/A - not run; no push`
 - **Review Evidence**: `Owner sign-off received 2026-11-28 07:39 (UTC+13): reply 'sign-off D1 commit' (sign-off + D1 direction pick + local commit authorization)`
-- **Commit Evidence**: `Pending - two-commit pattern per workflows/commit.md: the owner-confirmed milestone commit carries this record; the Commit Evidence entry citing that SHA is added by a docs-only follow-up commit (a commit cannot contain its own hash)`
+- **Commit Evidence**: `Owner-confirmed milestone commit 11c8afe0e7ef83f77cd2c4d9ca2958a8eda56337 on main (2026-11-28; 4 files, 152 insertions, 11 deletions; pre-existing dirt and .pkab/ excluded); entry added by this docs-only follow-up commit per the workflows/commit.md two-commit pattern`
 - **Pull Request Evidence**: `N/A`
 - **Release Evidence**: `N/A`
 - **Blocker and Resume Condition**: `None`
