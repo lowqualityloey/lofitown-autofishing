@@ -30,10 +30,14 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { assembleCore } = require('./build-userscript.js');
+const { analyze, loadSnapshots } = require('./scripts/overnight-report.js');
 
 const PORT = Number(process.env.FISHSERVE_PORT) || 8731;
-const CATCH_HEAD = ['time', 'species', 'rarity', 'quality', 'weight', 'value'];
+const CATCH_HEAD = ['time', 'species', 'rarity', 'quality', 'weight', 'value', 'profile', 'shiny', 'golden'];
 const SESSION_HEAD = ['time', 'started_at', 'minutes', 'catches', 'reason', 'profile', 'note'];
+const DEFAULT_KEEP_DAYS = 14;
+const DEFAULT_MAX_RUNS = 1000;
+const MIN_PRUNE_AGE_MS = 24 * 60 * 60 * 1000;
 // The game page and this server's own install page are the only origins that need to talk to it.
 // A wildcard let any page the user visited read the history, append CSV rows, or write PNGs - and
 // CORS alone never stopped a write, so a foreign Origin is rejected outright on POST.
@@ -70,6 +74,7 @@ const STATIC = {
   '/autofish.user.js': 'dist/autofish.user.js',
   '/panel.user.js': 'autofish.user.js',
   '/install': 'install.html',
+  '/dashboard': 'dashboard.html',
   '/overnight.js': 'scripts/overnight-export.js'
 };
 
@@ -103,19 +108,55 @@ const ensure = (file, head) => {
 };
 
 /**
- * sessions.csv used to have five columns, then six; another build's file may already be on disk.
- * Columns are appended to the header, never backfilled into rows: a row without profile is the
- * default profile, and a row without note is simply silent, so the history keeps the values the
- * old build wrote and only the header line changes, once, at startup.
+ * CSV schemas expand across builds (sessions: 5 -> 7 cols, catches: 6 -> 9 cols). New header
+ * columns are appended cleanly once at startup while older rows keep reading with safe defaults.
  */
-const ensureSessionHead = (file) => {
-  ensure(file, SESSION_HEAD);
+const ensureCsvHead = (file, head, sentinel) => {
+  ensure(file, head);
   const rows = readRows(file);
-  if (rows.length && !splitRow(rows[0].replace(/\r$/, '')).includes('note')) {
-    rows[0] = SESSION_HEAD.join(',');
+  if (rows.length && !splitRow(rows[0].replace(/\r$/, '')).includes(sentinel)) {
+    rows[0] = head.join(',');
     fs.writeFileSync(file, rows.join('\n') + '\n');
   }
 };
+
+/**
+ * Bound data/runs/ retention without touching snapshots newer than 24h, so an active overnight
+ * session is never pruned out from under a morning report even under heavy 5-minute captures.
+ */
+function pruneRuns(dir, nowMs) {
+  if (!fs.existsSync(dir)) return 0;
+  const now = nowMs || Date.now();
+  const keepDays = Math.max(1, Number(process.env.FISHSERVE_KEEP_DAYS) || DEFAULT_KEEP_DAYS);
+  const maxRuns = Math.max(1, Number(process.env.FISHSERVE_MAX_RUNS) || DEFAULT_MAX_RUNS);
+  const maxAgeMs = Math.max(MIN_PRUNE_AGE_MS, keepDays * 24 * 60 * 60 * 1000);
+  const entries = fs.readdirSync(dir)
+    .filter((name) => /^export-.*\.json$/.test(name))
+    .map((name) => {
+      const full = path.join(dir, name);
+      try {
+        const st = fs.statSync(full);
+        return { name, full, mtimeMs: st.mtimeMs };
+      } catch (e) { return null; }
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let removed = 0;
+  const kept = [];
+  for (const item of entries) {
+    const age = now - item.mtimeMs;
+    if (age >= MIN_PRUNE_AGE_MS && age > maxAgeMs) {
+      try { fs.unlinkSync(item.full); removed++; } catch (e) {}
+    } else kept.push(item);
+  }
+  let excess = kept.length - maxRuns;
+  for (let i = 0; i < kept.length && excess > 0; i++) {
+    const item = kept[i];
+    if (now - item.mtimeMs < MIN_PRUNE_AGE_MS) continue;
+    try { fs.unlinkSync(item.full); removed++; excess--; } catch (e) {}
+  }
+  return removed;
+}
 
 /** Split one CSV line, honouring the quoting written by cell(). */
 function splitRow(line) {
@@ -176,8 +217,8 @@ function withHost(text, host) {
 }
 
 function createServer() {
-  ensure(CATCHES(), CATCH_HEAD);
-  ensureSessionHead(SESSIONS());
+  ensureCsvHead(CATCHES(), CATCH_HEAD, 'golden');
+  ensureCsvHead(SESSIONS(), SESSION_HEAD, 'note');
 
   return http.createServer((req, res) => {
     const url = req.url.split('?');
@@ -209,7 +250,9 @@ function createServer() {
       const full = path.join(__dirname, file);
       fs.readFile(full, (e, d) => {
         if (e) { res.writeHead(404, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, cors)); return res.end('not found'); }
-        res.writeHead(200, route === '/install' ? Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, cors) : Object.assign({}, JS_HEAD, cors));
+        res.writeHead(200, (route === '/install' || route === '/dashboard')
+          ? Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, cors)
+          : Object.assign({}, JS_HEAD, cors));
         // The userscript has to inject the panel from whichever host:port served it, and only the
         // request knows that (8731 is often already taken on Windows by an older copy).
         res.end(route.slice(-8) === '.user.js' ? withHost(d.toString('utf8'), req.headers.host) : d);
@@ -223,10 +266,13 @@ function createServer() {
           const rec = JSON.parse(body);
           if (!rec.species) throw new Error('no species in payload');
           const when = new Date(rec.t || Date.now());
-          const row = [when.toISOString(), rec.species, rec.rarity, rec.quality, rec.weight, rec.value];
+          const profile = sessionToken(rec.profile, 'default', 24);
+          const shiny = rec.shiny ? 'yes' : 'no';
+          const golden = rec.golden ? 'yes' : 'no';
+          const row = [when.toISOString(), rec.species, rec.rarity, rec.quality, rec.weight, rec.value, profile, shiny, golden];
           fs.appendFileSync(CATCHES(), row.map(cell).join(',') + '\n');
           console.log(['catch', when.toISOString().slice(11, 19), rec.species,
-            rec.rarity || '-', rec.quality || '-', rec.weight || '-', rec.value || '-'].join('  '));
+            rec.rarity || '-', rec.quality || '-', rec.weight || '-', rec.value || '-', profile].join('  '));
           json(res, 200, { ok: true });
         } catch (e) {
           json(res, 400, { ok: false, e: String((e && e.message) || e) });
@@ -290,6 +336,7 @@ function createServer() {
           const stamp = new Date().toISOString().replace(/[:.]/g, '-');
           const name = 'export-' + stamp + '.json';
           fs.writeFileSync(path.join(dir, name), JSON.stringify(rec));
+          pruneRuns(dir);
           console.log(['export', rec.attempts.length + ' attempts', rec.profile || '-', name].join('  '));
           json(res, 200, { ok: true, file: name });
         } catch (e) {
@@ -320,9 +367,48 @@ function createServer() {
     if (req.method === 'GET' && route === '/recent') {
       const n = Math.max(1, Math.min(200, Number(query.get('n')) || 5));
       const rows = readRows(CATCHES()).slice(1).map(splitRow)
-        .map((r) => ({ time: r[0], species: r[1], rarity: r[2], quality: r[3], weight: r[4], value: r[5] }))
+        .map((r) => ({
+          time: r[0],
+          species: r[1],
+          rarity: r[2],
+          quality: r[3],
+          weight: r[4],
+          value: r[5],
+          profile: r[6] || 'default',
+          shiny: r[7] === 'yes',
+          golden: r[8] === 'yes',
+        }))
         .slice(-n);
       json(res, 200, { rows });
+      return;
+    }
+
+    if (req.method === 'GET' && route === '/report') {
+      try {
+        const all = query.get('all') === '1';
+        const hoursVal = Number(query.get('hours'));
+        const sinceMs = Date.parse(query.get('since') || '');
+        const dir = RUNS();
+        const snapshots = loadSnapshots([dir]);
+        const result = snapshots.length
+          ? analyze(snapshots, {
+            night: !all,
+            hours: hoursVal > 0 ? hoursVal : undefined,
+            since: Number.isFinite(sinceMs) ? sinceMs : undefined,
+          })
+          : { text: 'no snapshots in ' + dir + '\n', coverage: null, snapshots: [], summary: null };
+        const catchRows = fs.existsSync(CATCHES()) ? Math.max(0, readRows(CATCHES()).length - 1) : 0;
+        json(res, 200, {
+          ok: true,
+          coverage: result.coverage,
+          summary: result.summary,
+          catchesCount: catchRows,
+          runsFiles: snapshots.length,
+          text: result.text,
+        });
+      } catch (e) {
+        json(res, 500, { ok: false, e: String((e && e.message) || e) });
+      }
       return;
     }
 
@@ -331,7 +417,7 @@ function createServer() {
   });
 }
 
-module.exports = { createServer, PORT };
+module.exports = { createServer, PORT, pruneRuns };
 
 if (require.main === module) {
   createServer().listen(PORT, '127.0.0.1', () => console.log('fishserve on ' + PORT));

@@ -41,6 +41,14 @@ dial ends early (see below), never by the coin total.
 Run with BrowserOS neo on the lofi.town tab, with the neo window genuinely uncovered
 (a covered window reports `hidden` and freezes the game).
 
+## 2026-11-28 Rare alerts, 24h Trophy Viewer, Local Dashboard & 12h Soak Fixes (post-3.9.65)
+
+12h overnight live `v3.9.65` soak (`140/145` = `96.6%` caught, `747/747` accepted presses, `0` dial-phase failures) uncovered two remaining field bugs plus four quality-of-life improvements (`PLAN-trophy-alerts-dashboard`, verified by `446/446` tests and `tsc --noEmit` exit `0`, awaiting live Browser/Trophy/Dashboard field verification & `v3.9.66` release cut):
+1. **False `lost (cast prompt)` while `catchCardPending`**: all `5/5` overnight losses were 1-frame unconfirmed prompt sightings right after winning a dial while waiting for the catch card. `src/loop.js` now requires `diag.confirmed` while `awaitingCard` is true before arming `pendingLoss` or resolving lost, plus `autofish.js` populates `row.golden` on parsed catches.
+2. **Bounded `result-missing` recovery**: when `Resume after reload` is `on` and a `waiting-for-result` lock persists past a 15 s grace period, `AutoFishSession.reloadGate` permits up to `2` reloads per rolling `60m` window (`result-missing-reload` row + heartbeat `autoReload: true` so the panel auto-resumes safely across reload while keeping manual pauses paused).
+3. **Panel UX**: toggleable Web Audio `Rare catch chime` (`off` by default; Legendary/Secret/Shiny/Golden), 24h `IndexedDB` (`autofish:trophies:v1`, 30-card cap/profile) cropped WebGL card viewer opened by clicking `LEG`, `SEC`, or `shiny·golden`, 6h-cached clickable header update badge (`!BASE`), and 1-click **`↓ CSV`** export.
+4. **`fishserve.js` Local Dashboard**: expanded `catches.csv` backwards-compatibly (`+profile,+shiny,+golden`), added `GET /report` (reusing `scripts/overnight-report.js`) and `GET /dashboard` (`dashboard.html`, linked from green `capture armed`), and added `data/runs/` pruning (`FISHSERVE_KEEP_DAYS=14`, `FISHSERVE_MAX_RUNS=1000`, never deleting `<24h`).
+
 ## 2026-11-27 Dial lock continuity, 12-press cap & off-center seats (3.9.64)
 
 Live snapshot audit (`225` snapshots, `1,778` attempts, `172` losses) exposed four root causes:

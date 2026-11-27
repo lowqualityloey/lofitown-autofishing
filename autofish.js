@@ -1121,6 +1121,41 @@
    * Catch log. One row per fish, POSTed to the local logger which appends it to catches.csv.
    * Species, rarity, weight and value are read from the card's own text, never inferred.
    */
+  function isTrophyCatch(row) {
+    return !!(row && (row.rarity === 'Legendary' || row.rarity === 'Secret' || row.shiny || row.golden));
+  }
+
+  /**
+   * Read the visible catch-card rect synchronously via readUI() while the WebGL/2D frame is live,
+   * then downscale and JPEG-encode on a small scratch canvas. Never runs on common-epic catches.
+   */
+  function captureCardBlob(card, cb) {
+    if (!uiCanvas || typeof document === 'undefined' || !card) return cb(null);
+    const box = F.lastCardRect || cardBox(uiCanvas.width, uiCanvas.height);
+    const r = readUI(box.x, box.y, box.w, box.h);
+    if (!r || !r.d || !r.w || !r.h) return cb(null);
+    try {
+      const src = document.createElement('canvas');
+      src.width = r.w; src.height = r.h;
+      const sctx = src.getContext('2d');
+      if (!sctx) return cb(null);
+      const img = sctx.createImageData(r.w, r.h);
+      img.data.set(r.d.subarray(0, r.w * r.h * 4));
+      sctx.putImageData(img, 0, 0);
+      const maxW = 240;
+      const scale = r.w > maxW ? maxW / r.w : 1;
+      const dw = Math.max(1, Math.round(r.w * scale));
+      const dh = Math.max(1, Math.round(r.h * scale));
+      const out = document.createElement('canvas');
+      out.width = dw; out.height = dh;
+      const octx = out.getContext('2d');
+      if (!octx) return cb(null);
+      octx.drawImage(src, 0, 0, dw, dh);
+      if (out.toBlob) out.toBlob((blob) => cb(blob || null), 'image/jpeg', 0.74);
+      else cb(null);
+    } catch (e) { cb(null); }
+  }
+
   F.recordCatch = function (card) {
     const rec = F.parseCatch();
     if (!rec) return 'pending';
@@ -1138,6 +1173,8 @@
     row.rarity = info.rarity;
     row.raritySource = info.derived ? 'catalogue' : 'card';
     row.shiny = info.shiny;
+    row.golden = info.golden;
+    row.profile = logProfile;
     F.catches.push(row);
     // A sequence, not the ring's length: the session's no-catch clock (panel -> session.js) only
     // advances on a strictly larger fact, so a 400-row display ring froze it after 400 fish.
@@ -1168,6 +1205,9 @@
       } catch (e) {}
     }
     if (typeof F.onCatch === 'function') { try { F.onCatch(row); } catch (e) {} }
+    if (isTrophyCatch(row) && typeof F.onTrophy === 'function') {
+      try { captureCardBlob(card, (blob) => { try { F.onTrophy(row, blob); } catch (e) {} }); } catch (e) {}
+    }
     return 'logged';
   };
 

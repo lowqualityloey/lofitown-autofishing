@@ -525,3 +525,15 @@ test('the panel says why and when a run paused', () => {
   assert.ok(src.includes('|| pauseNote || banner'), 'the note reaches the banner chain');
   assert.ok(src.includes("host.dataset.pauseReason = state.pauseReason"), 'the reason is observable outside the closed root');
 });
+
+test('panel includes rare chime, IndexedDB trophy viewer, update badge, CSV export, dashboard link, and bounded auto-reload', () => {
+  assert.ok(src.includes("'Rare catch chime'"), 'rare catch chime toggle exists in Settings');
+  assert.ok(src.includes('function playRareChime('), 'Web Audio rare chime generator exists');
+  assert.ok(src.includes("var TROPHY_DB = 'autofish:trophies:v1'"), 'trophy cards use IndexedDB, never localStorage');
+  assert.ok(src.includes('function openTrophyPop(') && src.includes('trophy-pop'), 'clickable trophy popover exists');
+  assert.ok(src.includes('function checkForUpdate(') && src.includes('UPDATE_CHECK_URL'), 'cached GitHub update check exists');
+  assert.ok(src.includes('function downloadLedgerCsv(') && src.includes("'↓ CSV'"), 'one-click ledger CSV export exists');
+  assert.ok(src.includes("captureServer() + '/dashboard'"), 'healthy green capture line opens local dashboard');
+  assert.ok(src.includes('function maybeAutoReloadResultMissing(') && src.includes('reloadGate'), 'result-missing auto-reload uses bounded reloadGate');
+  assert.ok(src.includes('autoReload: true') && src.includes('!live.autoReload'), 'bounded auto-reload resumes cleanly while user pauses stay paused');
+});

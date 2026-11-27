@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync } = require('node:fs');
+const { mkdtempSync, readFileSync, readdirSync, existsSync, writeFileSync, mkdirSync, utimesSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 
@@ -13,6 +13,7 @@ function boot(seed) {
   process.env.FISHSERVE_RUNS = join(dir, 'runs');
   // An existing file, for the upgrade path: boot() would otherwise create a fresh header.
   if (seed && seed.sessions) writeFileSync(join(dir, 'sessions.csv'), seed.sessions);
+  if (seed && seed.catches) writeFileSync(join(dir, 'catches.csv'), seed.catches);
   delete require.cache[require.resolve('../fishserve.js')];
   const { createServer } = require('../fishserve.js');
   const server = createServer();
@@ -315,4 +316,87 @@ test('a missing static asset is a 404, not a 500', async () => {
     const res = await fetch('http://127.0.0.1:' + port + '/nope.js');
     assert.equal(res.status, 404);
   } finally { server.close(); }
+});
+
+test('catches.csv upgrades legacy 6-column headers, records profile/shiny/golden, and /recent exposes them', async () => {
+  const legacyCsv = 'time,species,rarity,quality,weight,value\n2026-11-27T01:00:00.000Z,Salmon,Common,,1.2kg,15\n';
+  const { server, port } = await boot({ catches: legacyCsv });
+  try {
+    await post(port, '/catch', {
+      t: '2026-11-28T02:00:00.000Z',
+      species: 'Leviathan',
+      rarity: 'Secret',
+      weight: '99kg',
+      value: '999',
+      profile: 'alt',
+      shiny: true,
+      golden: false,
+    });
+    const rec = await (await fetch('http://127.0.0.1:' + port + '/recent?n=10')).json();
+    assert.equal(rec.rows.length, 2);
+    assert.deepEqual(
+      { species: rec.rows[0].species, profile: rec.rows[0].profile, shiny: rec.rows[0].shiny, golden: rec.rows[0].golden },
+      { species: 'Salmon', profile: 'default', shiny: false, golden: false }
+    );
+    assert.deepEqual(
+      { species: rec.rows[1].species, profile: rec.rows[1].profile, shiny: rec.rows[1].shiny, golden: rec.rows[1].golden },
+      { species: 'Leviathan', profile: 'alt', shiny: true, golden: false }
+    );
+  } finally { server.close(); }
+});
+
+test('GET /dashboard and GET /report serve local analytics and handle empty directories cleanly', async () => {
+  const { server, port } = await boot();
+  try {
+    const dash = await fetch('http://127.0.0.1:' + port + '/dashboard');
+    assert.equal(dash.status, 200);
+    assert.match(dash.headers.get('content-type') || '', /^text\/html/);
+    assert.ok((await dash.text()).includes('AutoFish Local Dashboard'));
+
+    const emptyRep = await (await fetch('http://127.0.0.1:' + port + '/report')).json();
+    assert.equal(emptyRep.ok, true);
+    assert.equal(emptyRep.coverage, null);
+
+    await post(port, '/export', {
+      profile: 'default',
+      attempts: [{ id: 'a1', n: 1, t: Date.now() - 60_000, v: 'caught', w: 90, p: 2, pa: 2, pr: 0 }],
+    });
+    const fullRep = await (await fetch('http://127.0.0.1:' + port + '/report')).json();
+    assert.equal(fullRep.ok, true);
+    assert.equal(fullRep.runsFiles, 1);
+    assert.equal(fullRep.summary.run.attempts, 1);
+    assert.equal(fullRep.summary.run.caught, 1);
+  } finally { server.close(); }
+});
+
+test('POST /export prunes runs older than 14 days or excess over maxRuns, never deleting files <24h old', async () => {
+  const prevKeep = process.env.FISHSERVE_KEEP_DAYS;
+  const prevMax = process.env.FISHSERVE_MAX_RUNS;
+  process.env.FISHSERVE_KEEP_DAYS = '14';
+  process.env.FISHSERVE_MAX_RUNS = '2';
+  const { server, dir, port } = await boot();
+  try {
+    const runsDir = join(dir, 'runs');
+    mkdirSync(runsDir, { recursive: true });
+    const now = Date.now();
+    const oldExpired = join(runsDir, 'export-old.json');
+    const older2d = join(runsDir, 'export-2d.json');
+    const recent1h = join(runsDir, 'export-1h.json');
+    writeFileSync(oldExpired, JSON.stringify({ attempts: [] }));
+    writeFileSync(older2d, JSON.stringify({ attempts: [] }));
+    writeFileSync(recent1h, JSON.stringify({ attempts: [] }));
+    utimesSync(oldExpired, new Date(now - 20 * 86400_000), new Date(now - 20 * 86400_000));
+    utimesSync(older2d, new Date(now - 2 * 86400_000), new Date(now - 2 * 86400_000));
+    utimesSync(recent1h, new Date(now - 3600_000), new Date(now - 3600_000));
+
+    await post(port, '/export', { attempts: [{ n: 1, outcome: 'caught' }] });
+    const left = readdirSync(runsDir).sort();
+    assert.ok(!left.includes('export-old.json'), 'files older than 14d are pruned');
+    assert.ok(!left.includes('export-2d.json'), 'oldest >24h file pruned when count exceeds maxRuns=2');
+    assert.ok(left.includes('export-1h.json'), 'files younger than 24h are never deleted');
+  } finally {
+    if (prevKeep === undefined) delete process.env.FISHSERVE_KEEP_DAYS; else process.env.FISHSERVE_KEEP_DAYS = prevKeep;
+    if (prevMax === undefined) delete process.env.FISHSERVE_MAX_RUNS; else process.env.FISHSERVE_MAX_RUNS = prevMax;
+    server.close();
+  }
 });

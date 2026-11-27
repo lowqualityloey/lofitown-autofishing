@@ -422,12 +422,14 @@
       F.lastBubble = b; F.lastBubbleAt = t;
       if (F.attempt) {
         const diag = refreshLossDiagnostic(F.attempt, b, t, F.bubblePrev, awaitingCard);
-        if (!F.attempt.pendingLoss) {
-          if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
-            resolveAttempt('lost', t, 'cast prompt');
-          } else {
-            F.attempt.pendingLoss = t;
-            L('attempt loss pending', Object.assign({ n: F.attempt.n }, diag));
+        if (!awaitingCard || (diag && diag.confirmed)) {
+          if (!F.attempt.pendingLoss) {
+            if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
+              resolveAttempt('lost', t, 'cast prompt');
+            } else {
+              F.attempt.pendingLoss = t;
+              L('attempt loss pending', Object.assign({ n: F.attempt.n }, diag));
+            }
           }
         }
       }

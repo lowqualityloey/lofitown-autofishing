@@ -4,9 +4,9 @@
 ## 1. Executive Summary & Current Position
 - **Project Name**: lofitown-autofishing (autofish 3.9.65: Flow mode, unified `Local capture`, M4 `src/` modular core, JSDoc static type-checking, Flow `resume` fix, hot-path perf cleanups)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — **v3.9.65** shipping (`440/440` tests, `tsc --noEmit` exit `0`, live 1h Flow soak `81/82` caught `98.8%`, `143.1 fps`, `allocMBPerSec: 0`); prior baseline **v3.9.64** (`94626a4`, `408,592` bytes, `sha256 5f6ecdaf6281`). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
+- **Overall Status**: ACTIVE — **PLAN-trophy-alerts-dashboard** implemented on `main` (`446/446` tests, `tsc --noEmit` exit `0`, `dist/autofish.user.js` `439,292` bytes, uncommitted pending atomic commit/review before cutting `v3.9.66`); prior shipped baseline **v3.9.65** (`fa11ebf` head). Historical release recaps archived to `docs/STATE-ARCHIVE.md` and `docs/releases/`.
 - **Current Working Branch**: `main` (pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
-- **Last Updated**: 2026-11-27
+- **Last Updated**: 2026-11-28
 - **Engine Version**: v2.6.1 @ unknown
 - **Runtime**: Node v26.13.1 (WSL), zero dependencies, no bundler
 
@@ -20,9 +20,9 @@
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-11-27-flow-mode-and-panel-simplification.md` (`PLAN-flow-mode-panel` — Implemented & verified (`8efe8c8`, Flow `resume` + perf polish in `9c7dae7`); prior M4 `PLAN-m4-modular-core` shipped & live-verified in `ff5657d`)
-- **Active Task Spec**: `docs/tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md` (Level 2)
-- **Key Source Files in Flight**: `session.js`, `src/{diagnostics,ledger,vision,timing,loop}.js`, `autofish.js`, `panel.js`, `types.d.ts`, `dist/autofish.user.js`, `tests/*.test.js`, `README.md`, `AUTOFISH.md`, `docs/*`. Published `v3.9.64` release + live evidence in `AUTOFISH.md` & `docs/releases/3.9.64.md`.
+- **Active RFC / Spec**: `docs/specs/2026-11-28-trophy-alerts-and-local-dashboard.md` (`PLAN-trophy-alerts-dashboard` — Implemented & verified cleanly via `tsc --noEmit` + `446/446` unit tests)
+- **Active Task Spec**: `docs/tasks/TASK-2026-11-28-trophy-alerts-and-local-dashboard.md` (Level 2)
+- **Key Source Files in Flight**: `src/loop.js`, `autofish.js`, `session.js`, `panel.js`, `fishserve.js`, `dashboard.html`, `scripts/overnight-report.js`, `types.d.ts`, `dist/autofish.user.js`, `tests/*.test.js`, `README.md`, `AUTOFISH.md`, `docs/*`.
 - **Verification Commands (Scoped)**:
   - Typecheck: `npm run typecheck` (`tsc --noEmit` via `typescript@7.0.2`, `checkJs: true`, `strictNullChecks: true`; `devDependencies` only)
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
@@ -36,18 +36,18 @@
 ---
 ## 3A. Execution-Control Projection (Optional)
 > `docs/tasks/<task-id>.md` is authoritative; escape `|` as `\|` in tables.
-- **Task ID**: `TASK-2026-11-27-flow-mode-and-panel-simplification`
-- **Task Record**: `docs/tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md`
+- **Task ID**: `TASK-2026-11-28-trophy-alerts-and-local-dashboard`
+- **Task Record**: `docs/tasks/TASK-2026-11-28-trophy-alerts-and-local-dashboard.md`
 - **Ceremony Level**: `2`
-- **Specification**: `docs/specs/2026-11-27-flow-mode-and-panel-simplification.md`
-- **Execution Scope**: `Flow` nonstop fishing mode, `Stop when hidden: off`, retire `Fast first press` panel toggle, keep `Cozier popup`, unify `Local capture`
+- **Specification**: `docs/specs/2026-11-28-trophy-alerts-and-local-dashboard.md`
+- **Execution Scope**: Web Audio rare chime, 24h IndexedDB trophy card viewer, 6h cached header update pill, 1-click CSV export, `fishserve.js` `/report` + `/dashboard`, `data/runs/` pruning, false `cast prompt` loss fix, `row.golden` fix, bounded `result-missing` auto-reload
 - **Execution State**: `done`
 - **Mapped `pk:tasks` Status**: `Done`
-- **Active Task Pointer**: `TASK-2026-11-27-flow-mode-and-panel-simplification`
+- **Active Task Pointer**: `TASK-2026-11-28-trophy-alerts-and-local-dashboard`
 - **Owner / Current Actor**: lead / Antigravity
-- **Start Time**: `2026-11-27`
-- **Current Revision**: `v3.9.65` release (`HEAD` on `main`)
-- **Next Action**: Field-run `v3.9.65` across local midnight and verify Zen/Gecko frame budget (`__fish.perf()`).
+- **Start Time**: `2026-11-28`
+- **Current Revision**: `main` (post-`v3.9.65`, pre-`v3.9.66`)
+- **Next Action**: Live-verify panel/dashboard/trophies in Ego Lite, push to `origin/main`, and decide whether to ship `v3.9.66`.
 
 ---
 
@@ -142,6 +142,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-27 | Antigravity (pk:plan) | Flow mode & panel simplification | Added `Mode: Flow \| Timed` (`maxMinutes: 0`, `hiddenStopMs: 0`), kept safety guards + `Cozier popup`, retired `Fast first press` UI + amber warning, and unified `Send catches to CSV` + `Overnight capture` into one `Local capture` toggle with Expand-Contract pref migration (`PLAN-flow-mode-panel`, committed `8efe8c8`; `438/438` tests, `tsc --noEmit` exit `0`). | `session.js`; `src/loop.js`; `autofish.js`; `panel.js`; `types.d.ts`; `dist/autofish.user.js`; `tests/{panel,session,simulator}.test.js`; `README.md`; `AUTOFISH.md`; `docs/specs/2026-11-27-flow-mode-and-panel-simplification.md`; `docs/tasks/TASK-2026-11-27-flow-mode-and-panel-simplification.md`; `docs/STATE.md` |
 | 2026-11-27 | Antigravity (pk:review / pk:fix) | Flow `resume` fix, perf polish & docs sync | Bypassed `dailyCapMs`/`window` checks on Flow `resume` (`session.js`), added `createLedger().getEpoch()` + `F.log()` memoization, reused `tickOnce()` status in `render()`, eliminated `PX()` in `creamFraction` and unused `pat`/array allocs in `F.sample()`, consolidated `src/diagnostics.js` filter passes (`9c7dae7`; `440/440` tests, `tsc --noEmit` exit `0`), and synced `README.md`, `docs/STATE.md`, `docs/releases/3.9.64.md`, and `docs/README.md` (flagging stale `3.9.31` README screenshots). | `session.js`; `src/{ledger,diagnostics}.js`; `autofish.js`; `panel.js`; `dist/autofish.user.js`; `tests/{session,catchlog,perf}.test.js`; `README.md`; `docs/STATE.md`; `docs/releases/3.9.64.md`; `docs/README.md` |
 | 2026-11-27 | Antigravity (pk:ship) | Ship `v3.9.65` release + live README screenshots | Refreshed README/docs screenshots from BrowserOS Neo live Flow session (`34737e3`), verified 1h live soak (`81/82` caught `98.8%`, `423/423` accepted `100.0%`, `143.1 fps`, `allocMBPerSec: 0`), bumped `package.json` to `3.9.65`, rebuilt `dist/autofish.user.js`, published `v3.9.65` source + `lofitown-autofishing-dist` mirror (`release.js --check` green). | `package.json`; `dist/autofish.user.js`; `docs/releases/3.9.65.md`; `docs/README.md`; `docs/STATE.md`; `AUTOFISH.md`; `README.md`; `docs/images/*.jpg` |
+| 2026-11-28 | Antigravity (pk:plan) | Rare alerts, 24h Trophy Viewer, Local Dashboard & 12h soak fixes | Fixed false `lost (cast prompt)` on unconfirmed sightings during `awaitingCard`, added `row.golden` propagation, Web Audio `Rare catch chime`, 24h `IndexedDB` cropped catch-card viewer (`LEG`/`SEC`/`shiny·golden`), 6h-cached clickable update pill, 1-click `↓ CSV` export, `fishserve.js` `GET /report` + `GET /dashboard` (`dashboard.html`), expanded `catches.csv` (`+profile,+shiny,+golden`), `data/runs/` pruning (`14d`/`1000`), and bounded `result-missing` auto-reload (`<=2/h`). `tsc --noEmit` 0 errors; `node --test` `446/446` pass; `check-doctor.sh` exit `0`. | `src/loop.js`; `autofish.js`; `session.js`; `panel.js`; `fishserve.js`; `dashboard.html`; `scripts/overnight-report.js`; `types.d.ts`; `dist/autofish.user.js`; `tests/*.test.js`; `docs/specs/2026-11-28-trophy-alerts-and-local-dashboard.md`; `docs/tasks/TASK-2026-11-28-trophy-alerts-and-local-dashboard.md` |
 
 ---
 

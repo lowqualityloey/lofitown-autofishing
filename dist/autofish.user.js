@@ -2103,12 +2103,14 @@ const SPECIES = [
       F.lastBubble = b; F.lastBubbleAt = t;
       if (F.attempt) {
         const diag = refreshLossDiagnostic(F.attempt, b, t, F.bubblePrev, awaitingCard);
-        if (!F.attempt.pendingLoss) {
-          if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
-            resolveAttempt('lost', t, 'cast prompt');
-          } else {
-            F.attempt.pendingLoss = t;
-            L('attempt loss pending', Object.assign({ n: F.attempt.n }, diag));
+        if (!awaitingCard || (diag && diag.confirmed)) {
+          if (!F.attempt.pendingLoss) {
+            if (t - (F.attempt.presses ? (F.attempt.touched || 0) : 0) > (F.opts.lossGraceMs || 2500)) {
+              resolveAttempt('lost', t, 'cast prompt');
+            } else {
+              F.attempt.pendingLoss = t;
+              L('attempt loss pending', Object.assign({ n: F.attempt.n }, diag));
+            }
           }
         }
       }
@@ -3457,6 +3459,41 @@ const SPECIES = [
    * Catch log. One row per fish, POSTed to the local logger which appends it to catches.csv.
    * Species, rarity, weight and value are read from the card's own text, never inferred.
    */
+  function isTrophyCatch(row) {
+    return !!(row && (row.rarity === 'Legendary' || row.rarity === 'Secret' || row.shiny || row.golden));
+  }
+
+  /**
+   * Read the visible catch-card rect synchronously via readUI() while the WebGL/2D frame is live,
+   * then downscale and JPEG-encode on a small scratch canvas. Never runs on common-epic catches.
+   */
+  function captureCardBlob(card, cb) {
+    if (!uiCanvas || typeof document === 'undefined' || !card) return cb(null);
+    const box = F.lastCardRect || cardBox(uiCanvas.width, uiCanvas.height);
+    const r = readUI(box.x, box.y, box.w, box.h);
+    if (!r || !r.d || !r.w || !r.h) return cb(null);
+    try {
+      const src = document.createElement('canvas');
+      src.width = r.w; src.height = r.h;
+      const sctx = src.getContext('2d');
+      if (!sctx) return cb(null);
+      const img = sctx.createImageData(r.w, r.h);
+      img.data.set(r.d.subarray(0, r.w * r.h * 4));
+      sctx.putImageData(img, 0, 0);
+      const maxW = 240;
+      const scale = r.w > maxW ? maxW / r.w : 1;
+      const dw = Math.max(1, Math.round(r.w * scale));
+      const dh = Math.max(1, Math.round(r.h * scale));
+      const out = document.createElement('canvas');
+      out.width = dw; out.height = dh;
+      const octx = out.getContext('2d');
+      if (!octx) return cb(null);
+      octx.drawImage(src, 0, 0, dw, dh);
+      if (out.toBlob) out.toBlob((blob) => cb(blob || null), 'image/jpeg', 0.74);
+      else cb(null);
+    } catch (e) { cb(null); }
+  }
+
   F.recordCatch = function (card) {
     const rec = F.parseCatch();
     if (!rec) return 'pending';
@@ -3474,6 +3511,8 @@ const SPECIES = [
     row.rarity = info.rarity;
     row.raritySource = info.derived ? 'catalogue' : 'card';
     row.shiny = info.shiny;
+    row.golden = info.golden;
+    row.profile = logProfile;
     F.catches.push(row);
     // A sequence, not the ring's length: the session's no-catch clock (panel -> session.js) only
     // advances on a strictly larger fact, so a 400-row display ring froze it after 400 fish.
@@ -3504,6 +3543,9 @@ const SPECIES = [
       } catch (e) {}
     }
     if (typeof F.onCatch === 'function') { try { F.onCatch(row); } catch (e) {} }
+    if (isTrophyCatch(row) && typeof F.onTrophy === 'function') {
+      try { captureCardBlob(card, (blob) => { try { F.onTrophy(row, blob); } catch (e) {} }); } catch (e) {}
+    }
     return 'logged';
   };
 
@@ -6185,6 +6227,27 @@ const SPECIES = [
 
   var REVIVE_WINDOW_MS = 10 * 60 * 1000;   // rolling window for crash-loop accounting
   var REVIVE_CAP = 3;                      // restarts allowed inside it before the session stops
+  var RELOAD_WINDOW_MS = 60 * 60 * 1000;   // rolling window for result-missing auto-reloads
+  var RELOAD_CAP = 2;                      // page reloads allowed per hour before falling back manual
+
+  /**
+   * Prune timestamps older than `windowMs` and allow up to `cap` events per window.
+   * @param {number[] | null | undefined} times
+   * @param {number} now
+   * @param {number} windowMs
+   * @param {number} cap
+   * @returns {ReviveGateResult}
+   */
+  function rollingGate(times, now, windowMs, cap) {
+    /** @type {number[]} */
+    var kept = [];
+    (times || []).forEach(function (t) {
+      if (typeof t === 'number' && now - t < windowMs) kept.push(t);
+    });
+    if (kept.length >= cap) return { allow: false, times: kept };
+    kept.push(now);
+    return { allow: true, times: kept };
+  }
 
   /**
    * A core that keeps dying is not a liveness problem any more. Three restarts in ten minutes means
@@ -6196,14 +6259,17 @@ const SPECIES = [
    * @returns {ReviveGateResult}
    */
   function reviveGate(times, now) {
-    /** @type {number[]} */
-    var kept = [];
-    (times || []).forEach(function (t) {
-      if (typeof t === 'number' && now - t < REVIVE_WINDOW_MS) kept.push(t);
-    });
-    if (kept.length >= REVIVE_CAP) return { allow: false, times: kept };
-    kept.push(now);
-    return { allow: true, times: kept };
+    return rollingGate(times, now, REVIVE_WINDOW_MS, REVIVE_CAP);
+  }
+
+  /**
+   * Cap automatic `result-missing` reloads (2/hour) so an upstream outage never loops forever.
+   * @param {number[] | null | undefined} times
+   * @param {number} now
+   * @returns {ReviveGateResult}
+   */
+  function reloadGate(times, now) {
+    return rollingGate(times, now, RELOAD_WINDOW_MS, RELOAD_CAP);
   }
 
   var BLIND_WARN_MS = 3 * 60 * 1000;   // a detector this blind is not waiting for a bite
@@ -6252,7 +6318,7 @@ const SPECIES = [
     return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindSilence: blindSilence, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, reloadGate: reloadGate, blindSilence: blindSilence, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
 });
 
 // @ts-check
@@ -6415,6 +6481,16 @@ const SPECIES = [
   var LIVE_KEY = 'autofish.live';
   var BUDGET_KEY = 'autofish:budget:v1';
   var BUDGET_PREFIX = BUDGET_KEY + ':';
+  var UPDATE_CACHE_KEY = 'autofish:update:v1';
+  var UPDATE_CHECK_URL = 'https://api.github.com/repos/lowqualityloey/lofitown-autofishing-dist/releases/latest';
+  var UPDATE_DOWNLOAD_URL = 'https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js';
+  var UPDATE_TTL_MS = 6 * 3600 * 1000;
+  var RELOAD_GUARD_KEY = 'autofish:reload-guard:v1';
+  var RESULT_MISSING_RELOAD_GRACE_MS = 15000;
+  var TROPHY_DB = 'autofish:trophies:v1';
+  var TROPHY_STORE = 'cards';
+  var TROPHY_TTL_MS = 24 * 60 * 60 * 1000;
+  var TROPHY_CAP = 30;
   var TICK_MS = 1000;
 
   /** @type {SessionState} */
@@ -6424,6 +6500,19 @@ const SPECIES = [
   var budgetAt = 0;           // last periodic write of BUDGET_KEY
   var budgetDay = '';         // the local day BUDGET_KEY belongs to, for a rollover mid-run
   var banner = '';
+  var rareChimePref = false;
+  /** @type {any} */
+  var audioCtx = null;
+  /** @type {{ tag: string, url: string, checkedAt: number } | null} */
+  var updateInfo = null;
+  var updateChecking = false;
+  /** @type {number | null} */
+  var resultMissingSince = null;
+  var trophyCounts = { total: 0, Legendary: 0, Secret: 0, variant: 0 };
+  var trophyPopOpen = false;
+  var trophyFilter = 'all';
+  /** @type {string[]} */
+  var trophyUrls = [];
   /** @type {number | null} */
   var tickTimer = null;
   /** @type {number | null} */
@@ -6513,6 +6602,7 @@ const SPECIES = [
     prefs.overnight = capOn;
     prefs.hideUpsell = !!p.hideUpsell;
     prefs.focusMode = !!p.focusMode;
+    prefs.rareChime = !!p.rareChime;
     if (typeof p.overnightBase === 'string') prefs.overnightBase = p.overnightBase;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
     prefs.chain = !!p.chain;
@@ -6537,6 +6627,7 @@ const SPECIES = [
       overnight: capOn,
       hideUpsell: !!window.__panel.hideUpsell,
       focusMode: !!focusPref,
+      rareChime: !!rareChimePref,
       overnightBase: captureBase || '',
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
     });
@@ -6782,6 +6873,7 @@ const SPECIES = [
   var captureState = 'off';     // off | arming | armed | error
   var captureError = '';
   var captureEditReady = false; // the amber line accepts a corrected address
+  var captureDashReady = false; // the green armed line opens fishserve /dashboard
   var captureArming = false;    // one load in flight; a tick can ask again while it runs
   var captureRetryAt = 0;       // when the next self-heal attempt is due
   var captureRetries = 0;       // attempts since it was last healthy
@@ -6986,16 +7078,18 @@ const SPECIES = [
       armed = true;
     }
     captureEditReady = !!(overnightPref && !BASE && tone === 'warn');
+    captureDashReady = !!(overnightPref && armed && !captureEditReady && captureServer());
     if (ui.captureLine) {
       ui.captureLine.textContent = line;
       ui.captureLine.className = 'capture' + (line ? '' : ' hide') + (tone ? ' ' + tone : '');
       ui.captureLine.title = overnightPref
         ? 'posts __fish.exportRun() to ' + (captureServer() || 'fishserve') + ' every five minutes; data/runs keeps one file per post' +
           (captureRetryAt ? '; retrying on a backoff (30 s to 5 m)' : '') +
-          (captureEditReady ? '; click to change the fishserve address' : '')
+          (captureEditReady ? '; click to change the fishserve address' : '') +
+          (captureDashReady ? '; click to open overnight dashboard' : '')
         : 'sample this run every five minutes, and load the sampler again after a reload';
-      ui.captureLine.style.cursor = captureEditReady ? 'pointer' : '';
-      if (captureEditReady) {
+      ui.captureLine.style.cursor = (captureEditReady || captureDashReady) ? 'pointer' : '';
+      if (captureEditReady || captureDashReady) {
         ui.captureLine.setAttribute('role', 'button');
         ui.captureLine.tabIndex = 0;
       } else {
@@ -7102,6 +7196,392 @@ const SPECIES = [
     return v === 'dev' ? 'dev' : 'v' + v;
   }
 
+  /* --------------------------------------------------- update check badge ---- */
+
+  function parseSemver(v) {
+    var m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(v || '').trim());
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  }
+
+  function isNewerVer(remoteTag, localTag) {
+    if (!remoteTag || !localTag || localTag === 'dev') return false;
+    var r = parseSemver(remoteTag);
+    var l = parseSemver(localTag);
+    if (!r || !l) return false;
+    for (var i = 0; i < 3; i++) {
+      if (r[i] > l[i]) return true;
+      if (r[i] < l[i]) return false;
+    }
+    return false;
+  }
+
+  function renderVerBadge() {
+    if (!ui.ver) return;
+    var api = fish();
+    var local = (api && api.version) || '';
+    var hasUpdate = !BASE && updateInfo && isNewerVer(updateInfo.tag, local);
+    if (hasUpdate && updateInfo) {
+      ui.ver.textContent = versionLabel() + ' → ' + updateInfo.tag;
+      ui.ver.className = 'ver update';
+      ui.ver.title = 'update available (' + updateInfo.tag + ') — click to install in Tampermonkey';
+      ui.ver.setAttribute('role', 'button');
+      ui.ver.tabIndex = 0;
+    } else {
+      ui.ver.textContent = versionLabel();
+      ui.ver.className = 'ver';
+      ui.ver.title = 'build ' + (local || 'unknown');
+      ui.ver.removeAttribute('role');
+      ui.ver.tabIndex = -1;
+    }
+  }
+
+  async function checkForUpdate(force) {
+    if (BASE || updateChecking || typeof fetch !== 'function') return;
+    var cached = readJSON(UPDATE_CACHE_KEY, null);
+    if (!force && cached && cached.tag && cached.checkedAt && Date.now() - cached.checkedAt < UPDATE_TTL_MS) {
+      updateInfo = cached;
+      renderVerBadge();
+      return;
+    }
+    updateChecking = true;
+    try {
+      var res = await fetch(UPDATE_CHECK_URL, { headers: { Accept: 'application/vnd.github+json' } });
+      if (!res || !res.ok) return;
+      var data = await res.json();
+      if (!data || !data.tag_name) return;
+      var downloadUrl = UPDATE_DOWNLOAD_URL;
+      if (Array.isArray(data.assets)) {
+        for (var i = 0; i < data.assets.length; i++) {
+          var a = data.assets[i];
+          if (a && a.name === 'autofish.user.js' && a.browser_download_url) {
+            downloadUrl = a.browser_download_url;
+            break;
+          }
+        }
+      }
+      updateInfo = { tag: String(data.tag_name), url: downloadUrl, checkedAt: Date.now() };
+      writeJSON(UPDATE_CACHE_KEY, updateInfo);
+      renderVerBadge();
+    } catch (e) { /* network/CSP failures stay quiet */ } finally {
+      updateChecking = false;
+    }
+  }
+
+  /* ---------------------------------------------- Web Audio rare catch chime ---- */
+
+  function isTrophyCatchRow(row) {
+    if (!row) return false;
+    return row.rarity === 'Legendary' || row.rarity === 'Secret' || !!row.shiny || !!row.golden;
+  }
+
+  function unlockAudio() {
+    try {
+      var Ctx = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
+      if (!Ctx) return null;
+      if (!audioCtx) audioCtx = new Ctx();
+      if (audioCtx.state === 'suspended' && audioCtx.resume) audioCtx.resume().catch(function () {});
+      return audioCtx;
+    } catch (e) { return null; }
+  }
+
+  function playRareChime(row) {
+    if (!rareChimePref) return;
+    var ctx = unlockAudio();
+    if (!ctx) return;
+    try {
+      var notes = (row && row.rarity === 'Secret') ? [1046.5, 1318.5, 1567.98]
+        : (row && row.rarity === 'Legendary') ? [880, 1108.73, 1318.51]
+          : [783.99, 987.77];
+      var t = ctx.currentTime;
+      notes.forEach(function (freq, idx) {
+        var osc = ctx.createOscillator();
+        var gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, t + idx * 0.08);
+        gain.gain.setValueAtTime(0.0001, t + idx * 0.08);
+        gain.gain.exponentialRampToValueAtTime(0.08, t + idx * 0.08 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + idx * 0.08 + 0.38);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t + idx * 0.08);
+        osc.stop(t + idx * 0.08 + 0.4);
+      });
+    } catch (e) {}
+  }
+
+  /* --------------------------------------------------- ledger CSV download ---- */
+
+  function downloadLedgerCsv() {
+    var f = fish();
+    var csv = (f && f.logCsv) ? f.logCsv() : '';
+    if (!csv || csv.indexOf('\n') < 0) {
+      banner = 'no catch history to export yet';
+      render();
+      return;
+    }
+    try {
+      var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'autofish-' + profileName() + '-' + dayKey() + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 1000);
+      banner = 'downloaded ' + a.download;
+      render();
+    } catch (e) {
+      banner = 'CSV download unavailable in this browser';
+      render();
+    }
+  }
+
+  /* ----------------------------------------------- IndexedDB trophy viewer ---- */
+
+  /** @returns {Promise<IDBDatabase>} */
+  function openTrophyDb() {
+    return new Promise(function (resolve, reject) {
+      if (typeof indexedDB === 'undefined') return reject(new Error('no indexedDB'));
+      try {
+        var req = indexedDB.open(TROPHY_DB, 1);
+        req.onupgradeneeded = function () {
+          var db = req.result;
+          if (!db.objectStoreNames.contains(TROPHY_STORE)) {
+            var store = db.createObjectStore(TROPHY_STORE, { keyPath: 'id' });
+            store.createIndex('at', 'at', { unique: false });
+            store.createIndex('profile', 'profile', { unique: false });
+          }
+        };
+        req.onsuccess = function () { resolve(req.result); };
+        req.onerror = function () { reject(req.error || new Error('idb open error')); };
+      } catch (e) { reject(e); }
+    });
+  }
+
+  /**
+   * Run one IndexedDB readwrite operation against the trophy store and always close the DB handle.
+   * @template T
+   * @param {(store: IDBObjectStore, tx: IDBTransaction) => Promise<T>} work
+   * @param {T} fallback
+   * @returns {Promise<T>}
+   */
+  async function withTrophyStore(work, fallback) {
+    /** @type {IDBDatabase | null} */
+    var db = null;
+    try {
+      db = await openTrophyDb();
+      var tx = db.transaction(TROPHY_STORE, 'readwrite');
+      return await work(tx.objectStore(TROPHY_STORE), tx);
+    } catch (e) {
+      return fallback;
+    } finally {
+      if (db) try { db.close(); } catch (e) {}
+    }
+  }
+
+  function idbGetAll(store) {
+    return new Promise(function (res) {
+      var r = store.getAll();
+      r.onsuccess = function () { res(Array.isArray(r.result) ? r.result : []); };
+      r.onerror = function () { res([]); };
+    });
+  }
+
+  function pruneTrophiesInStore(store, prof, now) {
+    return idbGetAll(store).then(function (all) {
+      var cutoff = now - TROPHY_TTL_MS;
+      /** @type {any[]} */
+      var keptForProf = [];
+      all.forEach(function (rec) {
+        if (!rec || typeof rec.at !== 'number' || rec.at < cutoff) {
+          try { store.delete(rec.id); } catch (e) {}
+        } else if ((rec.profile || 'default') === prof) {
+          keptForProf.push(rec);
+        }
+      });
+      keptForProf.sort(function (a, b) { return a.at - b.at; });
+      while (keptForProf.length > TROPHY_CAP) {
+        var oldest = keptForProf.shift();
+        try { store.delete(oldest.id); } catch (e) {}
+      }
+    });
+  }
+
+  async function saveTrophyCard(row, blob) {
+    if (!row || !isTrophyCatchRow(row)) return;
+    await withTrophyStore(async function (store, tx) {
+      var at = typeof row.t === 'number' ? row.t : Date.now();
+      var prof = String(row.profile || profileName() || 'default');
+      store.put({
+        id: at + ':' + Math.random().toString(36).slice(2, 7),
+        at: at,
+        profile: prof,
+        species: String(row.species || 'Unknown'),
+        rarity: String(row.rarity || ''),
+        weight: String(row.weight || ''),
+        value: String(row.value || ''),
+        shiny: !!row.shiny,
+        golden: !!row.golden,
+        blob: blob || null,
+      });
+      await pruneTrophiesInStore(store, prof, Date.now());
+      await new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+    }, undefined);
+    await refreshTrophyCounts();
+    if (trophyPopOpen) renderTrophyPop();
+  }
+
+  async function listTrophyCards(prof) {
+    var target = String(prof || profileName() || 'default');
+    return withTrophyStore(async function (store) {
+      await pruneTrophiesInStore(store, target, Date.now());
+      var rows = await idbGetAll(store);
+      return rows
+        .filter(function (r) { return (r.profile || 'default') === target; })
+        .sort(function (a, b) { return b.at - a.at; });
+    }, []);
+  }
+
+  async function clearTrophyCards(prof) {
+    var target = String(prof || profileName() || 'default');
+    await withTrophyStore(async function (store, tx) {
+      var rows = await idbGetAll(store);
+      rows.forEach(function (rec) {
+        if ((rec.profile || 'default') === target) {
+          try { store.delete(rec.id); } catch (e) {}
+        }
+      });
+      await new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; });
+    }, undefined);
+    await refreshTrophyCounts();
+    if (trophyPopOpen) renderTrophyPop();
+  }
+
+  async function refreshTrophyCounts() {
+    var rows = await listTrophyCards(profileName());
+    var next = { total: rows.length, Legendary: 0, Secret: 0, variant: 0 };
+    rows.forEach(function (r) {
+      if (r.rarity === 'Legendary') next.Legendary++;
+      if (r.rarity === 'Secret') next.Secret++;
+      if (r.shiny || r.golden) next.variant++;
+    });
+    trophyCounts = next;
+    renderLog();
+  }
+
+  function revokeTrophyUrls() {
+    while (trophyUrls.length) {
+      var u = trophyUrls.pop();
+      try { if (u) URL.revokeObjectURL(u); } catch (e) {}
+    }
+  }
+
+  function closeTrophyPop() {
+    trophyPopOpen = false;
+    revokeTrophyUrls();
+    if (ui.trophyPop) ui.trophyPop.classList.add('hide');
+    if (ui.trophyList) ui.trophyList.textContent = '';
+  }
+
+  function matchesTrophyFilter(rec, filter) {
+    if (filter === 'Legendary') return rec.rarity === 'Legendary';
+    if (filter === 'Secret') return rec.rarity === 'Secret';
+    if (filter === 'variant') return !!(rec.shiny || rec.golden);
+    return true;
+  }
+
+  async function renderTrophyPop() {
+    if (!ui.trophyPop || !ui.trophyList || !trophyPopOpen) return;
+    revokeTrophyUrls();
+    if (ui.trophyTabs) {
+      ui.trophyTabs.forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.filter === trophyFilter);
+      });
+    }
+    ui.trophyList.textContent = '';
+    ui.trophyList.appendChild(el('div', 'trophy-empty', 'Loading trophy cards…'));
+    var rows = (await listTrophyCards(profileName())).filter(function (r) {
+      return matchesTrophyFilter(r, trophyFilter);
+    });
+    if (!trophyPopOpen || !ui.trophyList) return;
+    ui.trophyList.textContent = '';
+    if (!rows.length) {
+      ui.trophyList.appendChild(el('div', 'trophy-empty', 'No saved trophy cards in the last 24 hours.'));
+      return;
+    }
+    rows.forEach(function (rec) {
+      var item = el('div', 'trophy-item');
+      if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
+        var img = document.createElement('img');
+        img.className = 'trophy-img';
+        var objUrl = URL.createObjectURL(rec.blob);
+        trophyUrls.push(objUrl);
+        img.src = objUrl;
+        img.alt = rec.species;
+        item.appendChild(img);
+      }
+      var info = el('div', 'trophy-info');
+      var tags = [];
+      if (rec.rarity) tags.push(rec.rarity);
+      if (rec.shiny) tags.push('Shiny');
+      if (rec.golden) tags.push('Golden');
+      info.appendChild(el('div', 'trophy-name', rec.species + (tags.length ? ' · ' + tags.join(' · ') : '')));
+      var sub = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : ''].filter(Boolean).join(' · ');
+      info.appendChild(el('div', 'trophy-sub', sub || 'captured trophy'));
+      item.appendChild(info);
+      ui.trophyList.appendChild(item);
+    });
+  }
+
+  function openTrophyPop(filter) {
+    trophyFilter = filter || 'all';
+    trophyPopOpen = true;
+    if (ui.trophyPop) ui.trophyPop.classList.remove('hide');
+    renderTrophyPop();
+  }
+
+  /* ----------------------------------- bounded result-missing auto-reload ---- */
+
+  function maybeAutoReloadResultMissing(status) {
+    var missing = !!(status && status.resultMissing) || (state && state.pauseReason === 'result-missing');
+    if (!missing || state.phase !== 'paused') {
+      resultMissingSince = null;
+      return;
+    }
+    if (!window.__panel || !window.__panel.resumeAfterReload) return;
+    var now = Date.now();
+    if (!resultMissingSince) { resultMissingSince = now; return; }
+    if (now - resultMissingSince < RESULT_MISSING_RELOAD_GRACE_MS) return;
+    var gateFn = window.AutoFishSession && window.AutoFishSession.reloadGate;
+    var gate = gateFn ? gateFn(readJSON(RELOAD_GUARD_KEY, []), now) : { allow: false, times: [] };
+    if (!gate.allow) {
+      resultMissingSince = now; // quiet until window rolls over
+      banner = 'waiting-for-result reload cap (2/hour) reached — click Reload game manually';
+      return;
+    }
+    writeJSON(RELOAD_GUARD_KEY, gate.times);
+    postSessionRow(
+      'result-missing-reload',
+      Math.round((state.fishingMs || 0) / 60000),
+      state.catchCount || 0,
+      state.startedAt,
+      'auto-reload after waiting-for-result lock'
+    );
+    writeJSON(LIVE_KEY, {
+      startedAt: state.startedAt,
+      phase: state.phase,
+      pauseReason: 'result-missing',
+      autoReload: true,
+      minutes: Math.round((state.fishingMs || 0) / 60000),
+      catches: state.catchCount || 0,
+      at: now,
+    });
+    try { window.location.reload(); } catch (e) {
+      banner = 'reload the game tab to clear the waiting-for-result lock';
+    }
+  }
+
   /** The profile picker: every ledger or budget key that exists, plus the one in use. */
   function fillProfiles() {
     if (!ui.profile) return;
@@ -7167,6 +7647,8 @@ const SPECIES = [
     banner = '';
     syncBudget();
     fillProfiles();
+    refreshTrophyCounts();
+    if (trophyPopOpen) renderTrophyPop();
     renderLog();
     render();
     return true;
@@ -7269,8 +7751,9 @@ const SPECIES = [
     // a 110 minute night was counted against a 5.4 minute day.
     postSessionRow('reload', minutes, catches, startedAt);
     if (!loadPrefs().resumeAfterReload) return 'session interrupted by a reload — not resumed';
-    // A hold is explicit: a reload must not turn a paused session into a running one.
-    if (live.phase === 'paused') return 'paused session ended by the reload — start again when ready';
+    // A hold is explicit: a reload must not turn a paused session into a running one, except a
+    // bounded result-missing auto-reload where waiting-for-result forced the pause itself.
+    if (live.phase === 'paused' && !live.autoReload) return 'paused session ended by the reload — start again when ready';
     if (state.phase === 'cooldown') return 'session ended by the reload — cooling down';
     if (state.mode !== 'flow' && state.todayMs >= state.dailyCapMs) return 'session ended by the reload — daily cap reached';
     // start() itself honours the clock window: outside it the session waits instead of fishing.
@@ -7290,7 +7773,7 @@ const SPECIES = [
   var CSS = [
     ':host{all:initial}',
     '.wrap{position:relative;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
-    '.card{width:264px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.45);backdrop-filter:blur(10px);overflow:hidden}',
+    '.card{position:relative;width:264px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.45);backdrop-filter:blur(10px);overflow:hidden}',
     '.head{display:flex;align-items:center;gap:8px;padding:9px 10px;background:rgba(255,255,255,.04);cursor:grab}',
     '.head:active{cursor:grabbing}',
     '.dot{width:8px;height:8px;border-radius:50%;background:#5a6470;flex:none}',
@@ -7298,6 +7781,8 @@ const SPECIES = [
     '.dot.waiting{background:#f2c14e}.dot.paused{background:#f08a4b}.dot.cooldown{background:#7aa2f7}',
     '.title{font-weight:600;letter-spacing:.2px;flex:1}',
     '.ver{flex:none;font-size:9px;color:#6d7883;letter-spacing:.3px;font-variant-numeric:tabular-nums}',
+    '.ver.update{cursor:pointer;color:#5ad18b;background:rgba(90,209,139,.14);border:1px solid rgba(90,209,139,.35);border-radius:99px;padding:1px 6px}',
+    '.ver.update:hover{background:rgba(90,209,139,.24)}',
     '.ver:empty{display:none}',
     '.chip{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:#aab4bf;border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:1px 7px}',
     '.icon{border:0;background:transparent;color:#9aa4ae;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:6px}',
@@ -7333,8 +7818,11 @@ const SPECIES = [
     '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-top-color:rgba(255,145,80,.34)}',
     '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-top-color:rgba(255,120,60,.34)}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
-    '.loghead{display:flex;align-items:center;gap:6px}',
+    '.loghead{display:flex;align-items:center;gap:4px}',
     '.logmeta{font-size:10px;color:#8b95a0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.logmeta.clickable,.tier.clickable{cursor:pointer;border-radius:6px}',
+    '.logmeta.clickable:hover,.tier.clickable:hover{background:rgba(255,255,255,.08)}',
+    '.icon.csv{font-size:10px;font-weight:600;padding:2px 5px}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
     '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
@@ -7357,6 +7845,18 @@ const SPECIES = [
     '.sec.open .chev{transform:rotate(90deg)}',
     '.secbody{display:flex;flex-direction:column;gap:9px;padding-bottom:9px}',
     '.pill{width:48px;height:48px;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
+    '.trophy-pop{position:absolute;inset:0;z-index:10;background:rgba(18,22,28,.98);display:flex;flex-direction:column;gap:6px;padding:10px}',
+    '.trophy-head{display:flex;align-items:center;gap:6px}',
+    '.trophy-title{flex:1;font-weight:600;font-size:11.5px;color:#e8ecef}',
+    '.trophy-tabs{display:flex;gap:4px}',
+    '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:#9aa4ae;font:inherit;font-size:10px;padding:3px 7px;border-radius:99px;cursor:pointer}',
+    '.trophy-tab.active{background:rgba(90,209,139,.18);color:#5ad18b}',
+    '.trophy-list{flex:1;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px}',
+    '.trophy-item{display:flex;flex-direction:column;gap:4px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:6px}',
+    '.trophy-img{width:100%;height:auto;border-radius:6px;display:block}',
+    '.trophy-name{font-size:11px;font-weight:600;color:#e8ecef}',
+    '.trophy-sub{font-size:10px;color:#9aa4ae}',
+    '.trophy-empty{font-size:11px;color:#8b95a0;text-align:center;padding:24px 8px}',
     '.hide{display:none}'
   ].join('\n');
 
@@ -7459,9 +7959,16 @@ const SPECIES = [
     var reloadRow = el('div', 'row');
     var reloadLabel = el('div', 'label', 'Resume after reload');
     var reloadToggle = el('button', 'icon', (window.__panel && window.__panel.resumeAfterReload) ? 'on' : 'off');
-    reloadToggle.title = 'start a session again after a page reload; the interrupted run is logged first';
+    reloadToggle.title = 'start a session again after a page reload; also allows bounded (<=2/h) recovery from waiting-for-result locks';
     reloadRow.append(reloadLabel, reloadToggle);
     setSec.body.appendChild(reloadRow);
+
+    var chimeRow = el('div', 'row');
+    var chimeLabel = el('div', 'label', 'Rare catch chime');
+    var chimeToggle = el('button', 'icon', rareChimePref ? 'on' : 'off');
+    chimeToggle.title = 'play a gentle Web Audio chime on Legendary, Secret, Shiny, or Golden catches';
+    chimeRow.append(chimeLabel, chimeToggle);
+    setSec.body.appendChild(chimeRow);
 
     // Unified fishserve opt-in: streams catches to catches.csv and loads the 5-minute sampler.
     var captureRow = el('div', 'row');
@@ -7527,9 +8034,11 @@ const SPECIES = [
     tierCells.push({ name: 'Unknown', num: unknownNum, cell: unknownCell });
     var logHead = el('div', 'loghead');
     var logLabel = el('div', 'label', 'Catch history');
+    var logCsvBtn = el('button', 'icon csv', '↓ CSV');
+    logCsvBtn.title = 'download catch history as CSV';
     var logToggle = el('button', 'icon', 'all');
     logToggle.title = 'switch the rarity strip between all-time and today';
-    logHead.append(logLabel, logToggle);
+    logHead.append(logLabel, logCsvBtn, logToggle);
     var logTotal = el('div', 'last', 'all 0 · today 0');
     var logMeta = el('div', 'logmeta', '');
     var lastCatch = el('div', 'last', 'no catches yet');
@@ -7566,7 +8075,35 @@ const SPECIES = [
 
     var bannerEl = el('div', 'banner');
 
-    card.append(head, body, bannerEl);
+    var trophyPop = el('div', 'trophy-pop hide');
+    var trophyHead = el('div', 'trophy-head');
+    var trophyTitle = el('div', 'trophy-title', 'Trophy cards (24h)');
+    var trophyClear = el('button', 'icon csv', 'clear');
+    trophyClear.title = 'clear saved trophy cards for this profile';
+    var trophyClose = el('button', 'icon', '×');
+    trophyClose.title = 'close trophy viewer';
+    trophyHead.append(trophyTitle, trophyClear, trophyClose);
+    var trophyTabsWrap = el('div', 'trophy-tabs');
+    /** @type {HTMLButtonElement[]} */
+    var trophyTabs = [
+      { id: 'all', label: 'All' },
+      { id: 'Legendary', label: 'LEG' },
+      { id: 'Secret', label: 'SEC' },
+      { id: 'variant', label: 'Shiny/Gold' }
+    ].map(function (spec) {
+      var btn = /** @type {HTMLButtonElement} */ (el('button', 'trophy-tab', spec.label));
+      btn.dataset.filter = spec.id;
+      btn.addEventListener('click', function () {
+        trophyFilter = spec.id;
+        renderTrophyPop();
+      });
+      trophyTabsWrap.appendChild(btn);
+      return btn;
+    });
+    var trophyList = el('div', 'trophy-list');
+    trophyPop.append(trophyHead, trophyTabsWrap, trophyList);
+
+    card.append(head, body, bannerEl, trophyPop);
     var pill = el('div', 'pill hide', '🎣');
     wrap.append(card, pill);
     root.appendChild(wrap);
@@ -7576,16 +8113,17 @@ const SPECIES = [
     // stepperRow()/stepper()/meter() registered their pieces on ui as they built the DOM;
     // merge rather than replace, or every one of those references is lost.
     Object.assign(ui, {
-      wrap: wrap, card: card, head: head, dot: dot, chip: chip, minBtn: min,
+      wrap: wrap, card: card, head: head, dot: dot, ver: ver, chip: chip, minBtn: min,
       modeToggle: modeToggle, timedWrap: timedWrap,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
       focusToggle: focusToggle,
-      chainToggle: chainToggle, reloadToggle: reloadToggle,
+      chainToggle: chainToggle, reloadToggle: reloadToggle, chimeToggle: chimeToggle,
       captureToggle: captureToggle, captureLine: captureLine,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
-      logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
+      logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
+      trophyPop: trophyPop, trophyTabs: trophyTabs, trophyList: trophyList,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
@@ -7614,6 +8152,7 @@ const SPECIES = [
       place();
     });
     primary.addEventListener('click', function () {
+      unlockAudio();
       var at = Date.now();
       if (state.phase === 'running') dispatch({ type: 'pause', at: at });
       else if (state.phase === 'paused') {
@@ -7674,6 +8213,29 @@ const SPECIES = [
       savePrefs();
       render();
     });
+    chimeToggle.addEventListener('click', function () {
+      rareChimePref = !rareChimePref;
+      if (window.__panel) window.__panel.rareChime = rareChimePref;
+      savePrefs();
+      if (rareChimePref) {
+        unlockAudio();
+        playRareChime({ rarity: 'Legendary' });
+      }
+      render();
+    });
+    ver.addEventListener('click', function () {
+      var api = fish();
+      if (!BASE && updateInfo && isNewerVer(updateInfo.tag, (api && api.version) || '')) {
+        window.open(updateInfo.url || UPDATE_DOWNLOAD_URL, '_blank', 'noopener');
+      }
+    });
+    ver.addEventListener('keydown', function (e) {
+      var api = fish();
+      if ((e.key === 'Enter' || e.key === ' ') && !BASE && updateInfo && isNewerVer(updateInfo.tag, (api && api.version) || '')) {
+        e.preventDefault();
+        window.open(updateInfo.url || UPDATE_DOWNLOAD_URL, '_blank', 'noopener');
+      }
+    });
     captureRow.addEventListener('click', function () {
       var next = !overnightPref;
       // The inlined userscript was not served by fishserve, so it has no origin to fetch from.
@@ -7689,13 +8251,20 @@ const SPECIES = [
     });
     // An amber line is the one place that knows the address is the problem; clicking it asks for a
     // corrected origin without needing to turn the capture off first (or hand-edit the stored pref).
+    // A healthy green line opens the local fishserve dashboard in a new tab.
     captureLine.addEventListener('click', function () {
       if (captureEditReady) editCaptureAddress();
+      else if (captureDashReady && captureServer()) window.open(captureServer() + '/dashboard', '_blank', 'noopener');
     });
     captureLine.addEventListener('keydown', function (e) {
-      if (!captureEditReady || (e.key !== 'Enter' && e.key !== ' ')) return;
-      e.preventDefault();
-      editCaptureAddress();
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (captureEditReady) {
+        e.preventDefault();
+        editCaptureAddress();
+      } else if (captureDashReady && captureServer()) {
+        e.preventDefault();
+        window.open(captureServer() + '/dashboard', '_blank', 'noopener');
+      }
     });
     profSel.addEventListener('change', function () {
       if (!switchProfile(profSel.value)) {
@@ -7719,10 +8288,36 @@ const SPECIES = [
       renderLog();
       render();
     });
+    logCsvBtn.addEventListener('click', downloadLedgerCsv);
     logToggle.addEventListener('click', function () {
       logScope = logScope === 'today' ? 'all' : 'today';
       renderLog();
     });
+    tierCells.forEach(function (cell) {
+      if (cell.name !== 'Legendary' && cell.name !== 'Secret') return;
+      var box = cell.num.parentElement;
+      if (!box) return;
+      box.classList.add('clickable');
+      box.setAttribute('role', 'button');
+      box.tabIndex = 0;
+      box.addEventListener('click', function () { openTrophyPop(cell.name); });
+      box.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        openTrophyPop(cell.name);
+      });
+    });
+    logMeta.classList.add('clickable');
+    logMeta.setAttribute('role', 'button');
+    logMeta.tabIndex = 0;
+    logMeta.addEventListener('click', function () { openTrophyPop('variant'); });
+    logMeta.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      openTrophyPop('variant');
+    });
+    trophyClose.addEventListener('click', closeTrophyPop);
+    trophyClear.addEventListener('click', function () { clearTrophyCards(profileName()); });
     head.addEventListener('pointerdown', startDrag);
     fillProfiles();
 
@@ -8010,6 +8605,10 @@ const SPECIES = [
       cell.num.style.opacity = n ? '1' : '.35';
       // UNK only takes space when it has something to say
       if (cell.cell) cell.cell.style.display = n ? '' : 'none';
+      if ((cell.name === 'Legendary' || cell.name === 'Secret') && cell.num.parentElement) {
+        var saved = cell.name === 'Legendary' ? trophyCounts.Legendary : trophyCounts.Secret;
+        cell.num.parentElement.title = cell.name + ' caught · click to view saved cards (24h: ' + saved + ')';
+      }
     });
     if (ui.unknownCell) ui.unknownCell.title = unknownTitle(book && book.worklist);
     if (ui.logToggle) {
@@ -8026,8 +8625,9 @@ const SPECIES = [
     }
     if (ui.logMeta) {
       ui.logMeta.textContent = 'today ' + (today.shiny || 0) + ' shiny · ' + (today.golden || 0) + ' golden · ' +
-        ((book && book.days) || 0) + ' days kept';
-      ui.logMeta.title = 'profile ' + profileName() + ' · history is stored in this browser · 60 day buckets max';
+        ((book && book.days) || 0) + ' days kept' +
+        (trophyCounts.total ? ' · ' + trophyCounts.total + ' cards' : '');
+      ui.logMeta.title = 'profile ' + profileName() + ' · history is stored in this browser · click to view Shiny/Golden trophy cards (24h)';
     }
     var last = book && book.last;
     if (!last) {
@@ -8182,6 +8782,11 @@ const SPECIES = [
       ui.reloadToggle.textContent = reloadOn ? 'on' : 'off';
       ui.reloadToggle.style.color = reloadOn ? '#5ad18b' : '#9aa4ae';
     }
+    if (ui.chimeToggle) {
+      ui.chimeToggle.textContent = rareChimePref ? 'on' : 'off';
+      ui.chimeToggle.style.color = rareChimePref ? '#5ad18b' : '#9aa4ae';
+    }
+    renderVerBadge();
     if (!focused(ui.time_from.val)) ui.time_from.val.value = state.window.start;
     if (!focused(ui.time_to.val)) ui.time_to.val.value = state.window.stop;
 
@@ -8646,6 +9251,7 @@ const SPECIES = [
     if (Date.now() - budgetAt > 10000) { budgetAt = Date.now(); syncBudget(); }
     if (banner && state.phase === 'running' && banner.indexOf('offline') === -1) { /* keep guard text visible */ }
 
+    maybeAutoReloadResultMissing(status);
     renderWithStatus(status);
   }
 
@@ -8715,6 +9321,7 @@ const SPECIES = [
     // zero dial presses until the toggle was clicked. focusTick() engages the hold when a session
     // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
+    rareChimePref = !!prefs.rareChime;
     overnightPref = !!(prefs.localCapture || prefs.overnight || prefs.postCatches);
     syncCaptureUrl();
     captureClearBackoff();
@@ -8724,6 +9331,8 @@ const SPECIES = [
     if (overnightPref) armOvernight();
     mountAdoption();
     banner = checkInterrupted() || banner;
+    refreshTrophyCounts();
+    if (!BASE) setTimeout(function () { checkForUpdate(false); }, 1500);
 
     tickTimer = setInterval(tick, TICK_MS);
     guardTimer = setInterval(health, TICK_GUARD_MS);
@@ -8733,6 +9342,7 @@ const SPECIES = [
     document.addEventListener('visibilitychange', onVisible);
 
     window.__panel.mounted = true;
+    window.__panel.rareChime = rareChimePref;
     window.__panel.state = function () { return state; };
     window.__panel.dispatch = dispatch;
     window.__panel.unmount = unmount;
@@ -8741,7 +9351,17 @@ const SPECIES = [
     window.__panel.focusMode = focusOn;
     window.__panel.setFocusMode = setFocusMode;
     window.__panel.armOvernight = armOvernight;
-    if (fish()) fish().exportDiag = exportDiag;
+    window.__panel.openTrophies = openTrophyPop;
+    window.__panel.checkUpdate = checkForUpdate;
+    if (fish()) {
+      fish().exportDiag = exportDiag;
+      fish().onCatch = function (row) {
+        if (isTrophyCatchRow(row)) playRareChime(row);
+      };
+      fish().onTrophy = function (row, blob) {
+        saveTrophyCard(row, blob);
+      };
+    }
     window.__panel.guard = function () {
       return { lastTickAt: lastTickAt, tickErrors: tickErrors, lastTickError: lastTickError, zombieRevives: zombieRevives };
     };
@@ -8779,6 +9399,7 @@ const SPECIES = [
   }
 
   function unmount() {
+    closeTrophyPop();
     clearPromptMask();
     if (tickTimer) clearInterval(tickTimer);
     if (guardTimer) clearInterval(guardTimer);

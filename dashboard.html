@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AutoFish — Local Capture Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1318;
+    --card: #161b22;
+    --border: rgba(255,255,255,.09);
+    --text: #e8ecef;
+    --muted: #8b95a0;
+    --accent: #5ad18b;
+    --warn: #f2c14e;
+    --bad: #ff7b7b;
+    --pink: #ff8fa3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  .header {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 18px;
+  }
+  .title { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 99px;
+    border: 1px solid var(--border); color: var(--muted); text-transform: uppercase; letter-spacing: .4px;
+  }
+  .badge.ok { color: var(--accent); border-color: rgba(90,209,139,.35); background: rgba(90,209,139,.10); }
+  .badge.warn { color: var(--warn); border-color: rgba(242,193,78,.35); background: rgba(242,193,78,.10); }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button {
+    border: 1px solid var(--border); background: rgba(255,255,255,.05); color: var(--text);
+    font: inherit; font-size: 12px; padding: 6px 11px; border-radius: 8px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,.10); }
+  button.active { background: rgba(90,209,139,.16); border-color: rgba(90,209,139,.4); color: var(--accent); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .kpi, .panel {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px;
+  }
+  .kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .kpi-val { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .empty { color: var(--muted); padding: 16px 0; font-size: 12.5px; }
+  .tag {
+    display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px;
+    background: rgba(255,255,255,.07); color: var(--text); margin-right: 4px;
+  }
+  .tag.leg { color: var(--warn); background: rgba(242,193,78,.14); }
+  .tag.sec { color: var(--pink); background: rgba(255,143,163,.16); }
+  .tag.sh { color: #8be9fd; background: rgba(139,233,253,.14); }
+  .tag.go { color: #ffd970; background: rgba(255,217,112,.14); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; white-space: pre-wrap; color: #b9c2cb; }
+  @media (max-width: 640px) { body { padding: 12px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="title">
+      <span>AutoFish Local Dashboard</span>
+      <span id="covBadge" class="badge">loading…</span>
+    </div>
+    <div class="controls">
+      <button id="winNight" class="active" type="button">Last 12h</button>
+      <button id="winAll" type="button">All snapshots</button>
+      <button id="autoBtn" class="active" type="button">Auto 30s: on</button>
+      <button id="refreshBtn" type="button">Refresh</button>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="kpi-label">Catch rate</div><div id="kpiRate" class="kpi-val">—</div><div id="kpiRateSub" class="kpi-sub">no snapshots yet</div></div>
+    <div class="kpi"><div class="kpi-label">Press accept rate</div><div id="kpiPress" class="kpi-val">—</div><div id="kpiPressSub" class="kpi-sub">—</div></div>
+    <div class="kpi"><div class="kpi-label">Logged catches (CSV)</div><div id="kpiCatches" class="kpi-val">—</div><div id="kpiCatchesSub" class="kpi-sub">—</div></div>
+    <div class="kpi"><div class="kpi-label">Snapshot store</div><div id="kpiRuns" class="kpi-val">—</div><div id="kpiRunsSub" class="kpi-sub">—</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Dial width bands</h2>
+      <div id="bandsBody" class="empty">Waiting for snapshots…</div>
+    </div>
+    <div class="panel">
+      <h2>Losses, stalls &amp; guard verdicts</h2>
+      <div id="diagBody" class="empty">Waiting for snapshots…</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Recent rare &amp; variant catches</h2>
+      <div id="trophyBody" class="empty">No Legendary, Secret, Shiny, or Golden catches in recent CSV rows.</div>
+    </div>
+    <div class="panel">
+      <h2>Logged sessions in window</h2>
+      <div id="sessionsBody" class="empty">No session rows in this window.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent catches (catches.csv)</h2>
+    <div id="recentBody" class="empty">No catches recorded yet.</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var allMode = false;
+  var autoOn = true;
+  var timer = null;
+
+  var el = function (id) { return document.getElementById(id); };
+  var pct = function (v) { return v == null ? '—' : (v * 100).toFixed(1) + '%'; };
+  var dur = function (ms) {
+    if (ms == null) return '—';
+    var m = Math.round(ms / 60000);
+    return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm';
+  };
+  var fmtTime = function (isoOrMs) {
+    if (!isoOrMs) return '—';
+    var d = new Date(isoOrMs);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+  var esc = function (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+
+  function renderTable(headers, rows, emptyText) {
+    if (!rows.length) return '<div class="empty">' + esc(emptyText) + '</div>';
+    var h = '<table><thead><tr>' + headers.map(function (c) {
+      return '<th class="' + (c.num ? 'num' : '') + '">' + esc(c.label) + '</th>';
+    }).join('') + '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      h += '<tr>' + r.map(function (cell, i) {
+        return '<td class="' + (headers[i].num ? 'num' : '') + '">' + cell + '</td>';
+      }).join('') + '</tr>';
+    });
+    return h + '</tbody></table>';
+  }
+
+  async function refresh() {
+    try {
+      var repReq = fetch('/report' + (allMode ? '?all=1' : ''));
+      var recReq = fetch('/recent?n=200');
+      var res = await Promise.all([repReq, recReq]);
+      var rep = await res[0].json();
+      var rec = await res[1].json();
+
+      var badge = el('covBadge');
+      var cov = rep.coverage;
+      if (!cov) {
+        badge.textContent = 'no snapshots';
+        badge.className = 'badge';
+      } else {
+        badge.textContent = cov.verdict + ' · ' + cov.snapshots + ' snapshots';
+        badge.className = 'badge ' + (cov.verdict === 'complete' ? 'ok' : 'warn');
+      }
+
+      var s = rep.summary;
+      if (s && s.run) {
+        var r = s.run;
+        el('kpiRate').textContent = pct(r.catchRate);
+        el('kpiRateSub').textContent = r.caught + ' / ' + r.attempts + ' caught' +
+          (r.catchCi ? ' · 95% CI ' + pct(r.catchCi.lo) + '–' + pct(r.catchCi.hi) : '');
+        el('kpiPress').textContent = pct(r.pressAcceptRate);
+        el('kpiPressSub').textContent = r.accepted + ' / ' + r.presses + ' presses' +
+          (r.pressesPerCatch != null ? ' · ' + r.pressesPerCatch + '/catch' : '');
+      } else {
+        el('kpiRate').textContent = '—';
+        el('kpiRateSub').textContent = 'Enable Local capture in the AutoFish panel';
+        el('kpiPress').textContent = '—';
+        el('kpiPressSub').textContent = '—';
+      }
+
+      var recent = Array.isArray(rec.rows) ? rec.rows : [];
+      var rares = recent.filter(function (c) {
+        return c.rarity === 'Legendary' || c.rarity === 'Secret' || c.shiny || c.golden;
+      });
+      el('kpiCatches').textContent = String(rep.catchesCount != null ? rep.catchesCount : recent.length);
+      el('kpiCatchesSub').textContent = rares.length + ' rare/variant in last ' + recent.length + ' rows';
+
+      el('kpiRuns').textContent = String(rep.runsFiles || 0) + ' files';
+      el('kpiRunsSub').textContent = cov ? ('captured ' + fmtTime(cov.firstPostAt) + ' → ' + fmtTime(cov.lastPostAt)) : 'data/runs/';
+
+      if (s && Array.isArray(s.widths)) {
+        el('bandsBody').innerHTML = renderTable(
+          [{ label: 'Band' }, { label: 'Attempts', num: true }, { label: 'Caught', num: true }, { label: 'Lost', num: true }, { label: 'Rate', num: true }],
+          s.widths.map(function (b) {
+            return [esc(b.band), b.attempts, b.caught, b.lost, pct(b.attempts ? b.caught / b.attempts : null)];
+          }),
+          'No dial attempts in window.'
+        );
+      } else {
+        el('bandsBody').innerHTML = '<div class="empty">No snapshots yet.</div>';
+      }
+
+      if (s) {
+        var diagLines = [];
+        var lossKeys = Object.keys(s.losses || {});
+        diagLines.push('Losses: ' + (lossKeys.length ? lossKeys.map(function (k) { return k + ' × ' + s.losses[k]; }).join(', ') : 'none'));
+        diagLines.push('Stall gaps (>10m): ' + ((s.gaps && s.gaps.length) ? s.gaps.map(function (g) {
+          return fmtTime(g.from) + '–' + fmtTime(g.to) + ' (' + dur(g.ms) + ')';
+        }).join(', ') : 'none'));
+        var docKeys = Object.keys(s.doctors || {});
+        diagLines.push('Doctor verdicts: ' + (docKeys.length ? docKeys.map(function (k) { return k + ' × ' + s.doctors[k]; }).join(', ') : 'none'));
+        if (s.guard) {
+          diagLines.push('Blind max: ' + (s.guard.maxBlindMs != null ? (s.guard.maxBlindMs / 60000).toFixed(1) + 'm' : '—') +
+            ' · guard revives peak: ' + (s.guard.revives != null ? s.guard.revives : '—'));
+        }
+        el('diagBody').innerHTML = '<div class="mono">' + esc(diagLines.join('\n')) + '</div>';
+      } else {
+        el('diagBody').innerHTML = '<div class="empty">No diagnostic summary yet.</div>';
+      }
+
+      el('trophyBody').innerHTML = renderTable(
+        [{ label: 'Time' }, { label: 'Species' }, { label: 'Tags' }, { label: 'Weight' }],
+        rares.slice().reverse().slice(0, 30).map(function (c) {
+          var tags = '';
+          if (c.rarity === 'Legendary') tags += '<span class="tag leg">Legendary</span>';
+          else if (c.rarity === 'Secret') tags += '<span class="tag sec">Secret</span>';
+          if (c.shiny) tags += '<span class="tag sh">Shiny</span>';
+          if (c.golden) tags += '<span class="tag go">Golden</span>';
+          return [fmtTime(c.time), esc(c.species), tags, esc(c.weight || '—')];
+        }),
+        'No Legendary, Secret, Shiny, or Golden catches in recent CSV rows.'
+      );
+
+      var sess = (s && Array.isArray(s.sessions)) ? s.sessions : [];
+      el('sessionsBody').innerHTML = renderTable(
+        [{ label: 'Ended' }, { label: 'Profile' }, { label: 'Min', num: true }, { label: 'Catches', num: true }, { label: 'Reason' }],
+        sess.slice(-20).reverse().map(function (row) {
+          return [fmtTime(row.time), esc(row.profile), row.minutes, row.catches, esc(row.reason + (row.note ? ' (' + row.note + ')' : ''))];
+        }),
+        'No session rows in this window.'
+      );
+
+      el('recentBody').innerHTML = renderTable(
+        [{ label: 'Time' }, { label: 'Profile' }, { label: 'Species' }, { label: 'Rarity' }, { label: 'Variants' }, { label: 'Weight' }, { label: 'Value' }],
+        recent.slice().reverse().slice(0, 50).map(function (c) {
+          var v = [];
+          if (c.shiny) v.push('Shiny');
+          if (c.golden) v.push('Golden');
+          return [fmtTime(c.time), esc(c.profile || 'default'), esc(c.species), esc(c.rarity || '—'), esc(v.join(', ') || '—'), esc(c.weight || '—'), esc(c.value || '—')];
+        }),
+        'No catches recorded yet.'
+      );
+    } catch (e) {
+      el('covBadge').textContent = 'offline';
+      el('covBadge').className = 'badge warn';
+    }
+  }
+
+  function syncTimer() {
+    if (timer) clearInterval(timer);
+    timer = autoOn ? setInterval(refresh, 30000) : null;
+  }
+
+  el('winNight').addEventListener('click', function () {
+    allMode = false;
+    el('winNight').classList.add('active');
+    el('winAll').classList.remove('active');
+    refresh();
+  });
+  el('winAll').addEventListener('click', function () {
+    allMode = true;
+    el('winAll').classList.add('active');
+    el('winNight').classList.remove('active');
+    refresh();
+  });
+  el('autoBtn').addEventListener('click', function () {
+    autoOn = !autoOn;
+    el('autoBtn').textContent = 'Auto 30s: ' + (autoOn ? 'on' : 'off');
+    el('autoBtn').classList.toggle('active', autoOn);
+    syncTimer();
+  });
+  el('refreshBtn').addEventListener('click', refresh);
+
+  syncTimer();
+  refresh();
+})();
+</script>
+</body>
+</html>

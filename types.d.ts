@@ -205,9 +205,24 @@ interface Rect {
     parseClock(hhmm: string): number;
     coreGuard(state: SessionState | null | undefined, status: CoreStatusLike | null | undefined): 'revive' | null;
     reviveGate(times: number[] | null | undefined, now: number): ReviveGateResult;
+    reloadGate(times: number[] | null | undefined, now: number): ReviveGateResult;
     blindSilence(s: BlindFacts | null | undefined): number | null;
     blindWarning(s: BlindFacts | null | undefined): number | null;
     clearBlindPause(s: SessionState): SessionState;
+  }
+
+  interface FishRow {
+    t: number;
+    species: string;
+    rarity: string;
+    raritySource?: 'card' | 'catalogue';
+    shiny: boolean;
+    golden?: boolean;
+    profile?: string;
+    quality?: string;
+    weight?: string;
+    value?: string;
+    [key: string]: any;
   }
 
   interface FishStatus {
@@ -260,6 +275,7 @@ interface Rect {
     accuracy(): Record<string, unknown>;
     perf(): Record<string, any>;
     log(n?: number): { entries?: unknown[]; unknown?: unknown[]; profile?: string; [key: string]: unknown };
+    logCsv?(): string;
     logProfile(name?: string): string;
     logProfiles?(): string[];
     logReset?(): void;
@@ -297,6 +313,7 @@ interface Rect {
     postCatches?: boolean;
     hideUpsell?: boolean;
     focusMode?: boolean;
+    rareChime?: boolean;
     fastFirstPress?: boolean;
     overnight?: boolean;
     dispatch?(fact: SessionFact): ReduceResult;

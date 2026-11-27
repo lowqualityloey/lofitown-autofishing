@@ -244,6 +244,7 @@ function analyze(snapshots, opts) {
       text: 'no readable snapshots' + (o.night ? ' in the night window; use --all to merge every file' : '') + '\n',
       coverage: null,
       snapshots: picked,
+      summary: null,
     };
   }
   const merged = mergeAttempts(good);
@@ -432,7 +433,41 @@ function analyze(snapshots, opts) {
     for (const s of noted) lines.push('- ' + dayClock(s.time) + ' · ' + s.profile + ' · ' + s.reason + ' · ' + s.note);
   }
   lines.push('');
-  return { text: lines.join('\n'), coverage: cov, snapshots: picked };
+  return {
+    text: lines.join('\n'),
+    coverage: cov,
+    snapshots: picked,
+    summary: {
+      window: window ? { from: window.from, to: window.to, ignored } : null,
+      run: {
+        attempts: run.attempts,
+        caught: run.caught,
+        lost: run.lost,
+        catchRate: run.catchRate,
+        catchCi: run.catchCi,
+        presses: run.presses,
+        accepted: run.accepted,
+        rejected: run.rejected,
+        pressAcceptRate: run.pressAcceptRate,
+        pressesPerCatch: run.pressesPerCatch,
+        meanAttemptMs: run.meanAttemptMs,
+        from,
+        to,
+        repeated: merged.repeated,
+        outside,
+        storeErrors,
+      },
+      widths: run.widths,
+      losses,
+      gaps: found,
+      hours,
+      cuts,
+      doctors,
+      guard: { maxBlindMs, maxBlindAt, blindWarnings, revives: guardRevives },
+      perf: last.perf || null,
+      sessions,
+    },
+  };
 }
 
 /** The page itself, for callers and tests that only want the text. */

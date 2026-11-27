@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createState, reduce } = require('../session.js');
+const { createState, reduce, reloadGate } = require('../session.js');
 
 const T0 = 1_800_000_000_000;
 
@@ -712,4 +712,24 @@ test('flow mode runs nonstop past duration, cap, and window, skips cooldown on s
   ({ state } = reduce(timed, { type: 'config', at: T0, patch: { mode: 'flow' } }));
   assert.equal(state.phase, 'idle');
   assert.equal(state.cooldownUntil, null);
+});
+
+test('reloadGate allows at most two auto-reloads per rolling 60-minute window', () => {
+  const g1 = reloadGate([], T0);
+  assert.equal(g1.allow, true);
+  assert.equal(g1.times.length, 1);
+
+  const g2 = reloadGate(g1.times, T0 + 10 * 60_000);
+  assert.equal(g2.allow, true);
+  assert.equal(g2.times.length, 2);
+
+  // 3rd reload inside 60 minutes is refused
+  const g3 = reloadGate(g2.times, T0 + 20 * 60_000);
+  assert.equal(g3.allow, false);
+  assert.equal(g3.times.length, 2);
+
+  // Once the oldest reload drops past 60 minutes, a new reload is permitted again
+  const g4 = reloadGate(g2.times, T0 + 61 * 60_000);
+  assert.equal(g4.allow, true);
+  assert.equal(g4.times.length, 2);
 });

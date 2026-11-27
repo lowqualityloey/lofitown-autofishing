@@ -823,6 +823,27 @@
 
   var REVIVE_WINDOW_MS = 10 * 60 * 1000;   // rolling window for crash-loop accounting
   var REVIVE_CAP = 3;                      // restarts allowed inside it before the session stops
+  var RELOAD_WINDOW_MS = 60 * 60 * 1000;   // rolling window for result-missing auto-reloads
+  var RELOAD_CAP = 2;                      // page reloads allowed per hour before falling back manual
+
+  /**
+   * Prune timestamps older than `windowMs` and allow up to `cap` events per window.
+   * @param {number[] | null | undefined} times
+   * @param {number} now
+   * @param {number} windowMs
+   * @param {number} cap
+   * @returns {ReviveGateResult}
+   */
+  function rollingGate(times, now, windowMs, cap) {
+    /** @type {number[]} */
+    var kept = [];
+    (times || []).forEach(function (t) {
+      if (typeof t === 'number' && now - t < windowMs) kept.push(t);
+    });
+    if (kept.length >= cap) return { allow: false, times: kept };
+    kept.push(now);
+    return { allow: true, times: kept };
+  }
 
   /**
    * A core that keeps dying is not a liveness problem any more. Three restarts in ten minutes means
@@ -834,14 +855,17 @@
    * @returns {ReviveGateResult}
    */
   function reviveGate(times, now) {
-    /** @type {number[]} */
-    var kept = [];
-    (times || []).forEach(function (t) {
-      if (typeof t === 'number' && now - t < REVIVE_WINDOW_MS) kept.push(t);
-    });
-    if (kept.length >= REVIVE_CAP) return { allow: false, times: kept };
-    kept.push(now);
-    return { allow: true, times: kept };
+    return rollingGate(times, now, REVIVE_WINDOW_MS, REVIVE_CAP);
+  }
+
+  /**
+   * Cap automatic `result-missing` reloads (2/hour) so an upstream outage never loops forever.
+   * @param {number[] | null | undefined} times
+   * @param {number} now
+   * @returns {ReviveGateResult}
+   */
+  function reloadGate(times, now) {
+    return rollingGate(times, now, RELOAD_WINDOW_MS, RELOAD_CAP);
   }
 
   var BLIND_WARN_MS = 3 * 60 * 1000;   // a detector this blind is not waiting for a bite
@@ -890,5 +914,5 @@
     return blindMs != null && blindMs >= BLIND_WARN_MS ? blindMs : null;
   }
 
-  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, blindSilence: blindSilence, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
+  return { DEFAULTS: DEFAULTS, createState: createState, reduce: reduce, withinWindow: withinWindow, parseClock: parseClock, coreGuard: coreGuard, reviveGate: reviveGate, reloadGate: reloadGate, blindSilence: blindSilence, blindWarning: blindWarning, clearBlindPause: clearBlindPause };
 });

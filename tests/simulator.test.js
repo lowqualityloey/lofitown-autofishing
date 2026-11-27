@@ -394,3 +394,22 @@ test('simulator 5: maxMinutes 0 (Flow mode) runs past 15h without timeout while 
   assert.equal(timedSim.F.running, false, 'maxMinutes > 0 stops once elapsed');
   assert.ok(timedSim.logs.some((l) => l.msg === 'maxMinutes'));
 });
+
+test('simulator 6: unconfirmed cast-prompt flash while awaitingCard does not trigger a false loss', () => {
+  const sim = createHarness();
+  sim.F.startedAt = 1000;
+  sim.F.attempt = { n: 1, startedAt: 1000, touched: 1000, presses: 1, dials: 1, dialHits: 1 };
+  sim.F.pendingWin = { closedAt: 1000, presses: 1, verdict: 'hit' };
+
+  // First sighting of a false bubble on frame t=1800 while awaitingCard is true: confirmed is false
+  sim.state.bubbleResult = { cx: 810, cy: 358, n: 60, via: 'box', glyph: true };
+  sim.stepAt(1800);
+  assert.equal(sim.F.attempt.pendingLoss, undefined, 'unconfirmed 1-frame flash does not arm pendingLoss');
+  assert.equal(sim.F.stats.lost, 0, 'no false cast-prompt loss counted');
+
+  // When a persistent bubble IS confirmed within 2s and past lossGraceMs (2500ms from touched=1000), it resolves lost
+  sim.stepAt(3600);
+  assert.equal(sim.F.attempt, null, 'confirmed persistent bubble still resolves lost');
+  assert.equal(sim.F.stats.lost, 1);
+  assert.equal(sim.F.attempts[0].why, 'cast prompt');
+});
