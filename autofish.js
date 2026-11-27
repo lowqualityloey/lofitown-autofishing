@@ -1742,6 +1742,32 @@
     return !kd.defaultPrevented;
   }
 
+  /**
+   * D2 (TASK-2026-11-28-missions-claim-d2): press one DOM element — the only new input path.
+   * Same PointerEvent trust as tap() above, aimed at an element (the Quests claim control)
+   * instead of canvas pixels. It decides nothing: whether to press is autoClaimPass()'s job,
+   * and a hidden tab is refused here too, same rule as the rest of the bot.
+   */
+  F.pressElement = function (el) {
+    if (!el || !el.dispatchEvent) return false;
+    if (document.visibilityState !== 'visible') return false;
+    /** @type {DOMRect | null} */
+    let r = null;
+    try { r = el.getBoundingClientRect(); } catch (e) { r = null; }
+    const x = r ? r.left + r.width / 2 : 0;
+    const y = r ? r.top + r.height / 2 : 0;
+    const b = {
+      bubbles: true, cancelable: true, composed: true,
+      clientX: x, clientY: y, screenX: x, screenY: y,
+      pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1,
+    };
+    el.dispatchEvent(new PointerEvent('pointerover', Object.assign({}, b, { buttons: 0 })));
+    el.dispatchEvent(new PointerEvent('pointermove', Object.assign({}, b, { buttons: 0 })));
+    el.dispatchEvent(new PointerEvent('pointerdown', Object.assign({}, b, { buttons: 1, pressure: 0.5 })));
+    el.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, b, { buttons: 0, pressure: 0 })));
+    return true;
+  };
+
   /* No movement keys are synthesised anywhere: a walk stands the character up out of the fishing
    * seat, and the seat is the only thing that produces a cast prompt (see castRecovery above). */
 
@@ -2874,6 +2900,12 @@
       // never fail the export, which is the night's only record.
       missions: (function () {
         try { return typeof F.exportMissions === 'function' ? F.exportMissions() : null; }
+        catch (e) { return { error: String((e && e.message) || e) }; }
+      })(),
+      // D2 claim-handling state (additive, same contract as missions above): what the guarded
+      // claim pass did last, or null when the panel has none.
+      claims: (function () {
+        try { return typeof F.exportClaimState === 'function' ? F.exportClaimState() : null; }
         catch (e) { return { error: String((e && e.message) || e) }; }
       })(),
       presses: pressAcceptSummary(F.pressLog),

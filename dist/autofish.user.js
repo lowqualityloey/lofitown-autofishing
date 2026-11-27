@@ -2341,8 +2341,9 @@ const SPECIES = [
  * UMD: browser global AutoFishMissions, CommonJS require('./src/missions.js').
  *
  * Read-only by contract (TASK-2026-11-28-missions-awareness-d1): nothing here clicks, and
- * `.cozy-missions-claim` is observed for presence only, never activated — claiming is D2, a
- * separate task. Scope comes from the countdown format (HH:MM:SS daily vs D:HH:MM:SS weekly),
+ * `.cozy-missions-claim` stays observed-only here. Activation lives outside this module, in the
+ * panel's guarded autoClaimPass() -> core pressElement() path (TASK-2026-11-28-missions-claim-d2).
+ * Scope comes from the countdown format (HH:MM:SS daily vs D:HH:MM:SS weekly),
  * so the reader never needs to switch the game's own tabs.
  *
  * Evidence shapes come from the live M0 spike (2026-11-28): rows read as objective text,
@@ -2377,6 +2378,35 @@ const SPECIES = [
     if (WEEKLY_RE.test(t)) return 'weekly';
     if (DAILY_RE.test(t)) return 'daily';
     return null;
+  }
+
+  /**
+   * Pure: decide which completed missions may be claimed, and say why. The only safe plan is an
+   * exact one: the number of claim controls visible must equal the number of completed missions,
+   * pairing them in row order. Zero controls with completed rows is the normal auto-grant shape
+   * (M0 evidence), never a claim plan; any other combination is ambiguous and plans nothing.
+   * @param {{ missions?: Array<{ complete?: boolean }>, claimCount?: number }} read
+   * @returns {{ count: number, planned: number[], ambiguous: boolean, reason: string }}
+   */
+  function planClaims(read) {
+    var missions = read && Array.isArray(read.missions) ? read.missions : [];
+    var claimCount = read && typeof read.claimCount === 'number' && read.claimCount > 0 ? read.claimCount : 0;
+    var completeIdx = [];
+    for (var i = 0; i < missions.length; i++) {
+      if (missions[i] && missions[i].complete) completeIdx.push(i);
+    }
+    if (!claimCount && !completeIdx.length) {
+      return { count: 0, planned: [], ambiguous: false, reason: 'nothing to claim' };
+    }
+    if (!claimCount) {
+      return { count: 0, planned: [], ambiguous: false, reason: 'auto-grant: completed quests show no claim controls' };
+    }
+    if (claimCount !== completeIdx.length) {
+      return { count: claimCount, planned: [], ambiguous: true,
+        reason: claimCount + ' claim control(s) vs ' + completeIdx.length + ' completed mission(s) - pairing unknown' };
+    }
+    return { count: claimCount, planned: completeIdx.slice(), ambiguous: false,
+      reason: 'claim controls match completed missions in row order' };
   }
 
   /**
@@ -2438,8 +2468,8 @@ const SPECIES = [
 
   /**
    * DOM walk (thin): read whatever the Quests panel shows right now, without clicking anything.
-   * Returns null when the panel is not open or shows no readable rows. The claim control is
-   * observed for presence only.
+   * Returns null when the panel is not open or shows no readable rows. Claim controls are
+   * counted and planned (pure planClaims); activation never happens here.
    * @param {Document} doc
    * @returns {Record<string, any> | null}
    */
@@ -2454,12 +2484,17 @@ const SPECIES = [
     }
     var parsed = parseLines(lines);
     if (!parsed.length) return null;
+    /** @type {any} */
     var read = shapeRead(parsed, countdown);
-    try { read.claimVisible = !!doc.querySelector('.' + CLAIM_CLASS); } catch (e) { read.claimVisible = false; }
+    var claimCount = 0;
+    try { claimCount = doc.querySelectorAll('.' + CLAIM_CLASS).length; } catch (e) { claimCount = 0; }
+    read.claimCount = claimCount;
+    read.claimVisible = claimCount > 0; // D1 field, kept for existing consumers
+    read.claims = planClaims({ missions: read.missions, claimCount: claimCount });
     return read;
   }
 
-  return { readQuests: readQuests, parseLines: parseLines, shapeRead: shapeRead, countdownScope: countdownScope };
+  return { readQuests: readQuests, parseLines: parseLines, shapeRead: shapeRead, countdownScope: countdownScope, planClaims: planClaims };
 });
 
 // @ts-check
@@ -4206,6 +4241,32 @@ const SPECIES = [
     return !kd.defaultPrevented;
   }
 
+  /**
+   * D2 (TASK-2026-11-28-missions-claim-d2): press one DOM element — the only new input path.
+   * Same PointerEvent trust as tap() above, aimed at an element (the Quests claim control)
+   * instead of canvas pixels. It decides nothing: whether to press is autoClaimPass()'s job,
+   * and a hidden tab is refused here too, same rule as the rest of the bot.
+   */
+  F.pressElement = function (el) {
+    if (!el || !el.dispatchEvent) return false;
+    if (document.visibilityState !== 'visible') return false;
+    /** @type {DOMRect | null} */
+    let r = null;
+    try { r = el.getBoundingClientRect(); } catch (e) { r = null; }
+    const x = r ? r.left + r.width / 2 : 0;
+    const y = r ? r.top + r.height / 2 : 0;
+    const b = {
+      bubbles: true, cancelable: true, composed: true,
+      clientX: x, clientY: y, screenX: x, screenY: y,
+      pointerId: 1, pointerType: 'mouse', isPrimary: true, width: 1, height: 1,
+    };
+    el.dispatchEvent(new PointerEvent('pointerover', Object.assign({}, b, { buttons: 0 })));
+    el.dispatchEvent(new PointerEvent('pointermove', Object.assign({}, b, { buttons: 0 })));
+    el.dispatchEvent(new PointerEvent('pointerdown', Object.assign({}, b, { buttons: 1, pressure: 0.5 })));
+    el.dispatchEvent(new PointerEvent('pointerup', Object.assign({}, b, { buttons: 0, pressure: 0 })));
+    return true;
+  };
+
   /* No movement keys are synthesised anywhere: a walk stands the character up out of the fishing
    * seat, and the seat is the only thing that produces a cast prompt (see castRecovery above). */
 
@@ -5338,6 +5399,12 @@ const SPECIES = [
       // never fail the export, which is the night's only record.
       missions: (function () {
         try { return typeof F.exportMissions === 'function' ? F.exportMissions() : null; }
+        catch (e) { return { error: String((e && e.message) || e) }; }
+      })(),
+      // D2 claim-handling state (additive, same contract as missions above): what the guarded
+      // claim pass did last, or null when the panel has none.
+      claims: (function () {
+        try { return typeof F.exportClaimState === 'function' ? F.exportClaimState() : null; }
         catch (e) { return { error: String((e && e.message) || e) }; }
       })(),
       presses: pressAcceptSummary(F.pressLog),
@@ -6742,6 +6809,7 @@ const SPECIES = [
     prefs.hideUpsell = !!p.hideUpsell;
     prefs.focusMode = !!p.focusMode;
     prefs.rareChime = !!p.rareChime;
+    prefs.autoClaim = !!p.autoClaim;
     if (typeof p.overnightBase === 'string') prefs.overnightBase = p.overnightBase;
     if (typeof p.hiddenStopMs === 'number') prefs.hiddenStopMs = p.hiddenStopMs;
     prefs.chain = !!p.chain;
@@ -6767,6 +6835,7 @@ const SPECIES = [
       hideUpsell: !!window.__panel.hideUpsell,
       focusMode: !!focusPref,
       rareChime: !!rareChimePref,
+      autoClaim: !!autoClaimPref,
       overnightBase: captureBase || '',
       profile: (window.__fish && window.__fish.logProfile) ? window.__fish.logProfile() : 'default'
     });
@@ -6930,6 +6999,13 @@ const SPECIES = [
    * visual extra that can be dropped without touching the pause.
    */
   var focusOn = false;       // the hold is engaged right now
+  var autoClaimPref = false; // D2: opt-in auto-claim of completed quests - off until the owner turns it on
+  /** @type {Record<string, boolean>} */
+  var claimDone = {};        // objectives already claimed this page-load (dedupe)
+  /** @type {{ lastPass: any, log: any[] }} */
+  var claimState = { lastPass: null, log: [] };
+  /** @type {number | null} */
+  var claimTimer = null;     // the 60 s claim scheduler, armed only while the pref is on
   var focusPref = false;     // the user's setting: pause in focus sessions. A session ending releases
                              // the hold; it must never change this, or the next session never engages.
   var focusSawSession = false;
@@ -8040,6 +8116,7 @@ const SPECIES = [
     '.missions-objective{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#dfe5ea}',
     '.missions-status{flex:none;color:#aab4bf}',
     '.missions-status.done{color:#5ad18b}',
+    '.missions-status.claimable{color:#5ad18b;font-weight:700}',
     '.missions-reward{flex:none;color:#e8c766}',
     '.missions-empty{font-size:11px;color:#8b95a0}',
     '.pill{width:48px;height:48px;padding:0;color:#e8ecef;border-radius:14px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 24px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}',
@@ -8173,6 +8250,16 @@ const SPECIES = [
     focusRow.append(focusLabel, focusToggle);
     setSec.body.appendChild(focusRow);
 
+    // D2: claiming is a real game input, so it is opt-in and stays off until the owner turns it
+    // on. The pass it arms stands down in focus sessions and Cozier upsells (HARD-1).
+    var claimRow = el('div', 'row');
+    var claimLabel = el('div', 'label', 'Auto-claim missions');
+    var claimToggle = el('button', 'icon', autoClaimPref ? 'on' : 'off');
+    claimToggle.type = 'button';
+    claimToggle.title = 'claim completed quests via their own claim buttons (off by default; stands down in focus sessions and Cozier upsells)';
+    claimRow.append(claimLabel, claimToggle);
+    setSec.body.appendChild(claimRow);
+
     var reloadRow = el('div', 'row');
     var reloadLabel = el('div', 'label', 'Resume after reload');
     var reloadToggle = el('button', 'icon', (window.__panel && window.__panel.resumeAfterReload) ? 'on' : 'off');
@@ -8227,6 +8314,7 @@ const SPECIES = [
       [chainLabel, chainToggle],
       [upsellLabel, upsellToggle],
       [focusLabel, focusToggle],
+      [claimLabel, claimToggle],
       [reloadLabel, reloadToggle],
       [chimeLabel, chimeToggle],
       [captureLabel, captureToggle]
@@ -8393,6 +8481,7 @@ const SPECIES = [
       modeToggle: modeToggle, timedWrap: timedWrap,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
       focusToggle: focusToggle,
+      claimToggle: claimToggle,
       chainToggle: chainToggle, reloadToggle: reloadToggle, chimeToggle: chimeToggle,
       captureToggle: captureToggle, captureLine: captureLine,
       profile: profSel, profileAdd: profAdd, profileReset: profReset,
@@ -8486,6 +8575,12 @@ const SPECIES = [
       focusPref = !focusOn;   // the setting, not the live hold
       setFocusMode(focusPref);
       savePrefs();
+    });
+    claimToggle.addEventListener('click', function () {
+      autoClaimPref = !autoClaimPref;
+      if (autoClaimPref) armClaimPasses(); else disarmClaimPasses();
+      savePrefs();
+      renderClaimToggle();
     });
     chainToggle.addEventListener('click', function () {
       dispatch({ type: 'config', at: Date.now(), patch: { chain: !state.chain } });
@@ -9541,7 +9636,9 @@ const SPECIES = [
       var q = list[i] || {};
       var row = el('div', 'missions-row');
       row.append(el('span', 'missions-objective', String(q.objective || '')));
-      row.append(el('span', 'missions-status' + (q.complete ? ' done' : ''), q.complete ? '\u2713 Complete' : String(q.progress || '\u2014')));
+      var claimable = !!(read.claims && read.claims.planned && read.claims.planned.indexOf(i) !== -1);
+      row.append(el('span', 'missions-status' + (q.complete ? ' done' : '') + (claimable ? ' claimable' : ''),
+        q.complete ? (claimable ? '\u2713 claimable' : '\u2713 Complete') : String(q.progress || '\u2014')));
       row.append(el('span', 'missions-reward', q.reward ? String(q.reward) + 'c' : '\u2014'));
       box.append(row);
     }
@@ -9555,6 +9652,88 @@ const SPECIES = [
     var read = null;
     try { read = window.AutoFishMissions.readQuests(document); } catch (e) { return null; }
     return read || null;
+  }
+
+  /* ------ D2 claim handling (TASK-2026-11-28-missions-claim-d2) ------
+   * The one place that ever presses a claim control. Every decision lives here; the core only
+   * knows how to press one element (F.pressElement). HARD-1: the pass stands down while a focus
+   * session runs or the Cozier upsell overlay is on screen, and it never presses anything
+   * outside the Quests panel's own .cozy-missions-claim controls. Off by default (autoClaimPref).
+   */
+  var CLAIM_CHECK_MS = 60000;
+
+  function renderClaimToggle() {
+    if (!ui.claimToggle) return;
+    ui.claimToggle.textContent = autoClaimPref ? 'on' : 'off';
+    ui.claimToggle.style.color = autoClaimPref ? '#5ad18b' : '#9aa4ae';
+    ui.claimToggle.setAttribute('aria-pressed', autoClaimPref ? 'true' : 'false');
+  }
+
+  function armClaimPasses() {
+    if (claimTimer) return;
+    claimTimer = setInterval(function () {
+      try { autoClaimPass(); } catch (e) { /* a claim problem must never reach the session */ }
+    }, CLAIM_CHECK_MS);
+  }
+
+  function disarmClaimPasses() {
+    if (!claimTimer) return;
+    clearInterval(claimTimer);
+    claimTimer = null;
+  }
+
+  /** Record a pass result in claimState (capped log) and return it. */
+  function finishClaimPass(res) {
+    claimState.lastPass = res;
+    claimState.log.push(res);
+    if (claimState.log.length > 20) claimState.log = claimState.log.slice(-20);
+    return res;
+  }
+
+  /**
+   * One guarded claim pass; records an honest reason and clicks nothing unless every guard
+   * holds: pref on, tab visible, no focus-session hold (HARD-1), no Cozier upsell overlay
+   * (HARD-1), a fresh non-ambiguous plan, and controls that are still present, inside the
+   * Quests panel, rendered and not disabled. One click per objective per page-load.
+   */
+  function autoClaimPass() {
+    var base = { at: new Date().toISOString(), planned: 0, clicked: 0, ok: false, reason: '' };
+    if (!autoClaimPref) { base.reason = 'auto-claim off'; return finishClaimPass(base); }
+    if (document.visibilityState !== 'visible') { base.reason = 'tab hidden'; return finishClaimPass(base); }
+    if (focusOn) { base.reason = 'focus session active - HARD-1 stand-down'; return finishClaimPass(base); }
+    if (upsellRoot()) { base.reason = 'Cozier upsell overlay on screen - HARD-1 stand-down'; return finishClaimPass(base); }
+    /** @type {any} */
+    var read = null;
+    try { if (window.AutoFishMissions) read = window.AutoFishMissions.readQuests(document); } catch (e) { read = null; }
+    if (!read || !read.claims || !read.claims.count) {
+      base.reason = read && read.claims ? read.claims.reason : 'no quests read';
+      return finishClaimPass(base);
+    }
+    if (read.claims.ambiguous) { base.reason = 'ambiguous: ' + read.claims.reason; return finishClaimPass(base); }
+    var btns = document.querySelectorAll('.cozy-missions-claim');
+    if (!btns.length || btns.length !== read.claims.count) { base.reason = 'claim controls changed since read'; return finishClaimPass(base); }
+    var press = fish().pressElement;
+    if (typeof press !== 'function') { base.reason = 'core lacks pressElement'; return finishClaimPass(base); }
+    base.planned = read.claims.planned.length;
+    for (var i = 0; i < read.claims.planned.length; i++) {
+      var q = read.missions[read.claims.planned[i]];
+      var btn = /** @type {HTMLElement | null} */ (btns[i] || null);
+      if (!q || !q.objective || claimDone[q.objective] || !btn) continue;
+      if (!btn.closest('.cozy-missions-panel')) continue;
+      if (btn.getClientRects && !btn.getClientRects().length) continue;
+      var bbtn = /** @type {any} */ (btn);
+      if (bbtn.disabled) continue;
+      claimDone[q.objective] = true;
+      if (press.call(fish(), btn)) base.clicked++;
+    }
+    base.ok = true;
+    base.reason = base.clicked ? 'claimed ' + base.clicked + ' mission(s)' : 'nothing eligible this pass';
+    return finishClaimPass(base);
+  }
+
+  /** D2 claim state for __fish.exportRun(); additive and null-safe. */
+  function exportClaimState() {
+    return { pref: !!autoClaimPref, lastPass: claimState.lastPass, log: claimState.log.slice(-20) };
   }
 
   /** What exportRun() adds when the panel is mounted; null fields when it is not. */
@@ -9742,6 +9921,9 @@ const SPECIES = [
     // actually exists, which is what "pause in focus sessions" means.
     focusPref = !!prefs.focusMode;
     rareChimePref = !!prefs.rareChime;
+    autoClaimPref = !!prefs.autoClaim;
+    if (autoClaimPref) armClaimPasses();
+    renderClaimToggle();
     overnightPref = !!(prefs.localCapture || prefs.overnight || prefs.postCatches);
     syncCaptureUrl();
     captureClearBackoff();
@@ -9776,6 +9958,7 @@ const SPECIES = [
     if (fish()) {
       fish().exportDiag = exportDiag;
       fish().exportMissions = exportMissions;
+      fish().exportClaimState = exportClaimState;
       fish().onCatch = function (row) {
         if (isTrophyCatchRow(row)) playRareChime(row);
       };

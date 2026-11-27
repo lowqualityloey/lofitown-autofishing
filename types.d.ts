@@ -289,6 +289,8 @@ interface Rect {
     exportRun(opts?: { reset?: boolean }): string;
     exportDiag?(): Record<string, unknown>;
     exportMissions?(): Record<string, unknown> | null;
+    pressElement?(el: Element | null): boolean;
+    exportClaimState?(): Record<string, unknown> | null;
     [key: string]: any;
   }
 

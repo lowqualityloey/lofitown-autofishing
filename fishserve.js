@@ -180,8 +180,8 @@ function splitRow(line) {
 const readRows = (file) => fs.readFileSync(file, 'utf8').split('\n').filter((l) => l.length > 0);
 
 /**
- * Newest data/runs snapshot carrying a mission payload (additive D1 field, optional in every
- * export). A torn or pre-D1 snapshot is skipped; a missing runs dir yields null.
+ * Newest data/runs snapshot carrying a mission payload (additive D1/D2 fields, optional in
+ * every export). A torn or pre-D1 snapshot is skipped; a missing runs dir yields null.
  */
 function latestMissions(dir) {
   try {
@@ -192,7 +192,7 @@ function latestMissions(dir) {
     for (const f of entries) {
       try {
         const rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-        if (rec && rec.missions) return { file: f, missions: rec.missions };
+        if (rec && rec.missions) return { file: f, missions: rec.missions, claims: rec.claims || null };
       } catch (e) { /* skip unreadable snapshots */ }
     }
   } catch (e) { /* no runs dir yet */ }

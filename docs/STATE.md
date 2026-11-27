@@ -20,8 +20,8 @@
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: None - implementation task in flight at L2 Minimal depth (M0 spike evidence folded into the record per owner instruction); `PLAN-trophy-alerts-dashboard` spec remains implemented & verified.
-- **Active Task Spec**: `docs/tasks/TASK-2026-11-28-missions-awareness-d1.md` (Level 2)
+- **Active RFC / Spec**: None - implementation task in flight at L2 Lite depth under `preset: solo-fast` (M0 claim evidence + the D1 record are the folded evidence base); `PLAN-trophy-alerts-dashboard` spec remains implemented & verified.
+- **Active Task Spec**: `docs/tasks/TASK-2026-11-28-missions-claim-d2.md` (Level 2)
 - **Key Source Files in Flight**: `src/loop.js`, `autofish.js`, `session.js`, `panel.js`, `fishserve.js`, `dashboard.html`, `scripts/overnight-report.js`, `types.d.ts`, `dist/autofish.user.js`, `tests/*.test.js`, `README.md`, `AUTOFISH.md`, `docs/*`.
 - **Verification Commands (Scoped)**:
   - Typecheck: `npm run typecheck` (`tsc --noEmit` via `typescript@7.0.2`, `checkJs: true`, `strictNullChecks: true`; `devDependencies` only)
@@ -36,18 +36,18 @@
 ---
 ## 3A. Execution-Control Projection (Optional)
 > `docs/tasks/<task-id>.md` is authoritative; escape `|` as `\|` in tables.
-- **Task ID**: `TASK-2026-11-28-missions-awareness-d1`
-- **Task Record**: `docs/tasks/TASK-2026-11-28-missions-awareness-d1.md`
+- **Task ID**: `TASK-2026-11-28-missions-claim-d2`
+- **Task Record**: `docs/tasks/TASK-2026-11-28-missions-claim-d2.md`
 - **Ceremony Level**: `2`
-- **Specification**: `None - L2 Minimal planning; M0 spike evidence folded below (owner instruction 2026-11-28)`
-- **Execution Scope**: `src/missions.js` (new), `panel.js`, `fishserve.js`, `dashboard.html`, `types.d.ts`, `tests/missions.test.js` (new), `docs/STATE.md`, `docs/README.md` (one index row for this record), `docs/tasks/TASK-2026-11-28-missions-awareness-d1.md` (this record)
+- **Specification**: `None - L2 Lite planning under preset solo-fast; M0 claim evidence (TASK-2026-11-28-missions-awareness-d1) and the D1 implementation are the folded evidence base`
+- **Execution Scope**: `src/missions.js`, `autofish.js`, `panel.js`, `fishserve.js`, `dashboard.html`, `types.d.ts`, `tests/missions.test.js`, `dist/autofish.user.js` (rebuild), `docs/STATE.md`, `docs/README.md` (one index row for this record), `docs/tasks/TASK-2026-11-28-missions-claim-d2.md` (this record)
 - **Execution State**: `completed`
 - **Mapped `pk:tasks` Status**: `Done`
-- **Active Task Pointer**: `TASK-2026-11-28-missions-awareness-d1`
+- **Active Task Pointer**: `TASK-2026-11-28-missions-claim-d2`
 - **Owner / Current Actor**: ZCode session (GLM-5.3-Flash)
-- **Start Time**: `2026-11-28 08:22 (UTC+13)`
+- **Start Time**: `2026-11-28 09:01 (UTC+13)`
 - **Current Revision**: `main` (`v3.9.66`)
-- **Next Action**: Owner sign-off received ('sign-off commit') at 2026-11-28 08:37 (UTC+13); D2 (claim affordance) parked per owner instruction - not started.
+- **Next Action**: Owner sign-off received ('sign-off D2 commit') at 2026-11-28 09:21 (UTC+13); local atomic commit authorized (pre-existing dirt, `.pkab/`, and the scratch #607 log excluded). A live claim smoke against the real Quests panel remains an owner-assisted follow-up - the game has shown zero live claim controls so far (auto-grant), so first live behavior is expected to be honest "nothing to claim" reports.
 
 ---
 
@@ -124,7 +124,7 @@ Older decisions (2026-10-27–2026-11-17) are archived in `docs/STATE-ARCHIVE.md
 3. **Measure the Zen frame budget.** Use `__fish.perf()` on Gecko before changing any scan throttle.
 4. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat bubbles) at untested window sizes.
 5. **Run the `v3.9.66` live in-game smoke test** and monitor local `fishserve` `/dashboard` metrics (carried from the closed trophy task's Next Action).
-6. **Missions-bot follow-up (`TASK-2026-11-28-daily-missions-scoping`, signed off 2026-11-28 - D1 selected).** M0 spike done (A1-A4 resolved; daily reset ≈08:00 UTC read from the DOM countdown, decoupled from local midnight); D1 implemented and signed off as `TASK-2026-11-28-missions-awareness-d1` (read-only Quests parser + panel fold + `/dashboard` display). **D2 (claim affordance) parked per owner instruction 2026-11-28 - not started.** The Cozier focus-fishing paywall stays a hard constraint (detect + report, never bypass); the owner's Cozy/Cozier status and post-spike panel-restart fact remain unknown (recorded as unanswered in the D1 record).
+6. **Missions-bot follow-up (`TASK-2026-11-28-daily-missions-scoping`, signed off 2026-11-28 - D1 then D2).** M0 spike done (A1-A4 resolved; daily reset ≈08:00 UTC read from the DOM countdown, decoupled from local midnight); D1 implemented and signed off as `TASK-2026-11-28-missions-awareness-d1`; D2 auto-claim awareness/handling implemented under a fresh owner go as `TASK-2026-11-28-missions-claim-d2` (L2 Lite, `preset: solo-fast`): pure exact-match claim planner, opt-in (default off) guarded claim pass with HARD-1 stand-downs (focus session, Cozier upsell), additive panel/dashboard/capture claim state - signed off and committed locally 2026-11-28 (owner reply 'sign-off D2 commit'). A live claim smoke needs an owner-assisted session. The Cozier focus-fishing paywall stays a hard constraint (detect + report, never bypass); the owner's Cozy/Cozier status and post-spike panel-restart fact remain unknown (recorded as unanswered in the D1 record).
 
 ---
 
@@ -140,6 +140,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-28 | Antigravity (pk:plan) | Rare alerts, 24h Trophy Viewer, Local Dashboard & 12h soak fixes | Fixed false `lost (cast prompt)` on unconfirmed sightings during `awaitingCard`, added `row.golden` propagation, Web Audio `Rare catch chime`, 24h `IndexedDB` cropped catch-card viewer (`LEG`/`SEC`/`shiny·golden`), 6h-cached clickable update pill, 1-click `↓ CSV` export, `fishserve.js` `GET /report` + `GET /dashboard` (`dashboard.html`), expanded `catches.csv` (`+profile,+shiny,+golden`), `data/runs/` pruning (`14d`/`1000`), and bounded `result-missing` auto-reload (`<=2/h`). `tsc --noEmit` 0 errors; `node --test` `446/446` pass; `check-doctor.sh` exit `0`. | `src/loop.js`; `autofish.js`; `session.js`; `panel.js`; `fishserve.js`; `dashboard.html`; `scripts/overnight-report.js`; `types.d.ts`; `dist/autofish.user.js`; `tests/*.test.js`; `docs/specs/2026-11-28-trophy-alerts-and-local-dashboard.md`; `docs/tasks/TASK-2026-11-28-trophy-alerts-and-local-dashboard.md` |
 | 2026-11-28 | ZCode (GLM-5.3-Flash, pk:plan Minimal) | Daily-missions bot scoping block (#607 dogfood) | Created `docs/tasks/TASK-2026-11-28-daily-missions-scoping.md` (L2 Minimal: directions D1-D3, Cozier paywall as hard constraint HARD-1, `ASSUMPTION-1`..`4`, M0-M2 sketch) plus its scope-1 record after `tests/docs.test.js:32` demanded docs indexing; synced this tracker (§3/§3A/§7/§8/§9) and indexed both records in `docs/README.md`. `npm run typecheck` exit 0; `node --test` 448/448; no code changes; owner sign-off 2026-11-28 ('sign-off D1 commit' - D1 selected); closed with an owner-authorized atomic docs-only commit. | `docs/tasks/TASK-2026-11-28-daily-missions-scoping.md`; `docs/tasks/TASK-2026-11-28-daily-missions-scoping.scope-1.md`; `docs/README.md`; `docs/STATE.md` |
 | 2026-11-28 | ZCode (GLM-5.3-Flash, pk:spike + pk:plan Minimal) | M0 live DOM spike & D1 mission awareness (#607 dogfood Runs #2-#3) | Live ego-browser spike resolved `ASSUMPTION-1..4` (Quests DOM readable; reset ≈08:00 UTC via DOM countdown; rewards auto-granted; claim CSS observed, never clicked) with 0 casts/0 presses. Implemented D1: new `src/missions.js` (thin DOM walk + pure parser, 125 ln), `tests/missions.test.js` (8 tests, 94 ln), panel `Missions` fold (read-only, ≤264px budget), additive `exportRun.missions`, fishserve `/report` `missions` field from newest snapshot, dashboard Missions section; dist rebuilt. `npm run typecheck` exit 0; `node build-userscript.js` exit 0; `node --test` 456/456. | `src/missions.js`; `tests/missions.test.js`; `panel.js`; `fishserve.js`; `dashboard.html`; `autofish.js`; `build-userscript.js`; `types.d.ts`; `dist/autofish.user.js`; `docs/tasks/TASK-2026-11-28-missions-awareness-d1.md`; `docs/README.md`; `docs/STATE.md` |
+| 2026-11-28 | ZCode (GLM-5.3-Flash, pk:plan Lite, solo-fast) | D2 mission auto-claim awareness & handling (#607 dogfood Run #4) | Preset switched to `solo-fast` via `./.promptkit/init.sh --solo-fast` (verified `preset: solo-fast`; installer degraded the Engine Version stamp to `unknown @ unknown` — restored to `v2.6.1 @ unknown`; doctor exit 0). D2 implemented under a fresh owner go lifting the 08:37 parking: pure `planClaims` exact-match planner + claim-aware `readQuests` (`src/missions.js` +35 ln), `F.pressElement` PointerEvent primitive + additive `exportRun.claims` (`autofish.js` +32 ln), opt-in `Auto-claim missions` toggle (default off) + guarded 60 s `autoClaimPass` with HARD-1 stand-downs (focus session, Cozier upsell) + claimable annotations + `exportClaimState` hook (`panel.js` +118 ln), additive `claims` in `latestMissions` + dashboard, 2 FishApi declarations, 10 new tests (`tests/missions.test.js` +103 ln). `npm run typecheck` exit 0; `node build-userscript.js` exit 0; `node --test` 466/466 (456+10) — all first-run green, zero repair cycles. Owner sign-off 'sign-off D2 commit' 2026-11-28 09:21; committed locally per the two-commit pattern; dist rebuilt; `src/loop.js` untouched. | `src/missions.js`; `autofish.js`; `panel.js`; `fishserve.js`; `dashboard.html`; `types.d.ts`; `dist/autofish.user.js`; `tests/missions.test.js`; `docs/tasks/TASK-2026-11-28-missions-claim-d2.md`; `docs/README.md`; `docs/STATE.md` |
 
 ---
 
@@ -152,6 +153,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-27 (PromptKit 2.6.1 upgrade & checkpoint) | ~5 | host telemetry unavailable | not measured | duration=not tracked; repairs=0; interventions=3; verification=`node --test` 428/428, `check-doctor.sh` exit 0; outcome=accepted |
 | 2026-11-28 (pk:plan missions scoping, #607 dogfood) | ~15 | host telemetry unavailable | not measured | duration=not tracked; repairs=1 (docs-index test failure fixed via scope change 1); interventions=1 (completion/sign-off gate); verification=`npm run typecheck` exit 0, `node --test` 448/448, `check-doctor.sh` exit 0; outcome=accepted (owner sign-off 'sign-off D1 commit') |
 | 2026-11-28 (D1 missions awareness, #607 Run #3) | ~22 | host telemetry unavailable | not measured | duration=not tracked; repairs=1 (4 tsc errors in new module fixed with `@type` annotations) + 1 state-guard archival repair; interventions=1 (completion/sign-off gate); verification=`npm run typecheck` exit 0, `node build-userscript.js` exit 0, `node --test` 456/456, `check-doctor.sh` exit 0; outcome=accepted (owner sign-off 'sign-off commit') |
+| 2026-11-28 (D2 missions auto-claim, #607 Run #4, solo-fast) | ~35 hand-tallied | host telemetry unavailable | not measured | duration=not tracked; repairs=0 (typecheck, build and tests all first-run green; 1 STATE.md Engine Version stamp restore after the preset installer degraded it); interventions=1 (completion/sign-off gate); verification=`npm run typecheck` exit 0, `node build-userscript.js` exit 0, `node --test` 466/466, `check-doctor.sh` exit 0; outcome=accepted (owner sign-off 'sign-off D2 commit') |
 
 - **Running total**: `not measured` on current session (host telemetry unavailable); 128k–240k heuristic context payload preserved on the 2026-11-22 historical row. Refreshed by `pk:checkpoint`; one row per real work session.
 - **Note evidence**: use `duration=<value>; repairs=<count or not tracked>; interventions=<count or not tracked>; verification=<result or not tracked>; outcome=<accepted | rejected | incomplete | blocked | not tracked>`. Never infer `0`, `passed`, or `accepted` from missing evidence.

@@ -3,8 +3,9 @@
  * UMD: browser global AutoFishMissions, CommonJS require('./src/missions.js').
  *
  * Read-only by contract (TASK-2026-11-28-missions-awareness-d1): nothing here clicks, and
- * `.cozy-missions-claim` is observed for presence only, never activated — claiming is D2, a
- * separate task. Scope comes from the countdown format (HH:MM:SS daily vs D:HH:MM:SS weekly),
+ * `.cozy-missions-claim` stays observed-only here. Activation lives outside this module, in the
+ * panel's guarded autoClaimPass() -> core pressElement() path (TASK-2026-11-28-missions-claim-d2).
+ * Scope comes from the countdown format (HH:MM:SS daily vs D:HH:MM:SS weekly),
  * so the reader never needs to switch the game's own tabs.
  *
  * Evidence shapes come from the live M0 spike (2026-11-28): rows read as objective text,
@@ -39,6 +40,35 @@
     if (WEEKLY_RE.test(t)) return 'weekly';
     if (DAILY_RE.test(t)) return 'daily';
     return null;
+  }
+
+  /**
+   * Pure: decide which completed missions may be claimed, and say why. The only safe plan is an
+   * exact one: the number of claim controls visible must equal the number of completed missions,
+   * pairing them in row order. Zero controls with completed rows is the normal auto-grant shape
+   * (M0 evidence), never a claim plan; any other combination is ambiguous and plans nothing.
+   * @param {{ missions?: Array<{ complete?: boolean }>, claimCount?: number }} read
+   * @returns {{ count: number, planned: number[], ambiguous: boolean, reason: string }}
+   */
+  function planClaims(read) {
+    var missions = read && Array.isArray(read.missions) ? read.missions : [];
+    var claimCount = read && typeof read.claimCount === 'number' && read.claimCount > 0 ? read.claimCount : 0;
+    var completeIdx = [];
+    for (var i = 0; i < missions.length; i++) {
+      if (missions[i] && missions[i].complete) completeIdx.push(i);
+    }
+    if (!claimCount && !completeIdx.length) {
+      return { count: 0, planned: [], ambiguous: false, reason: 'nothing to claim' };
+    }
+    if (!claimCount) {
+      return { count: 0, planned: [], ambiguous: false, reason: 'auto-grant: completed quests show no claim controls' };
+    }
+    if (claimCount !== completeIdx.length) {
+      return { count: claimCount, planned: [], ambiguous: true,
+        reason: claimCount + ' claim control(s) vs ' + completeIdx.length + ' completed mission(s) - pairing unknown' };
+    }
+    return { count: claimCount, planned: completeIdx.slice(), ambiguous: false,
+      reason: 'claim controls match completed missions in row order' };
   }
 
   /**
@@ -100,8 +130,8 @@
 
   /**
    * DOM walk (thin): read whatever the Quests panel shows right now, without clicking anything.
-   * Returns null when the panel is not open or shows no readable rows. The claim control is
-   * observed for presence only.
+   * Returns null when the panel is not open or shows no readable rows. Claim controls are
+   * counted and planned (pure planClaims); activation never happens here.
    * @param {Document} doc
    * @returns {Record<string, any> | null}
    */
@@ -116,10 +146,15 @@
     }
     var parsed = parseLines(lines);
     if (!parsed.length) return null;
+    /** @type {any} */
     var read = shapeRead(parsed, countdown);
-    try { read.claimVisible = !!doc.querySelector('.' + CLAIM_CLASS); } catch (e) { read.claimVisible = false; }
+    var claimCount = 0;
+    try { claimCount = doc.querySelectorAll('.' + CLAIM_CLASS).length; } catch (e) { claimCount = 0; }
+    read.claimCount = claimCount;
+    read.claimVisible = claimCount > 0; // D1 field, kept for existing consumers
+    read.claims = planClaims({ missions: read.missions, claimCount: claimCount });
     return read;
   }
 
-  return { readQuests: readQuests, parseLines: parseLines, shapeRead: shapeRead, countdownScope: countdownScope };
+  return { readQuests: readQuests, parseLines: parseLines, shapeRead: shapeRead, countdownScope: countdownScope, planClaims: planClaims };
 });
