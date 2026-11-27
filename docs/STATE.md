@@ -20,9 +20,9 @@
 
 ## 3. Active Working Set
 - **Target Workspace / Package (if Monorepo)**: standalone repo, no bundler, plain CommonJS + browser globals
-- **Active RFC / Spec**: `docs/specs/2026-11-27-jsdoc-typecheck-and-architecture.md` (`PLAN-jsdoc-typecheck`, M1–M3 + M5 implemented; M4 deferred)
-- **Active Task Spec**: `docs/tasks/TASK-2026-11-27-jsdoc-typecheck.md` (Level 2)
-- **Key Source Files in Flight**: `tsconfig.json`, `types.d.ts`, `package.json`, `package-lock.json`, `layout.js`, `session.js`, `panel.js`, `autofish.js`, `fishserve.js`, `build-userscript.js`, `scripts/*.js`, `.github/workflows/test.yml`, `README.md`, `AUTOFISH.md`, `PROMPTKIT.md`, `docs/STATE.md`, `docs/README.md`, `dist/autofish.user.js`. Prior `v3.9.64` release + live evidence in `AUTOFISH.md` & `docs/releases/3.9.64.md`.
+- **Active RFC / Spec**: `docs/specs/2026-11-27-m4-modular-core-and-simulator.md` (`PLAN-m4-modular-core` — Implemented & committed (`0c71e6e`); prior `PLAN-jsdoc-typecheck` M1–M3+M5 shipped in `00c52dc`/`c5c28cb`)
+- **Active Task Spec**: `docs/tasks/TASK-2026-11-27-m4-modular-core.md` (Level 2)
+- **Key Source Files in Flight**: `src/{diagnostics,ledger,vision,timing,loop}.js`, `autofish.js`, `build-userscript.js`, `fishserve.js`, `tsconfig.json`, `types.d.ts`, `scripts/{gen-catalogue,overnight-report,release}.js`, `tests/{simulator,timing,coords,cardtext,profile-guard,dial,perf,doctor,stats,status,result-missing,player-block,catchlog,fishserve,watchdog}.test.js`, `dist/autofish.user.js`, `AUTOFISH.md`, `docs/*`. Prior `v3.9.64` release + live evidence in `AUTOFISH.md` & `docs/releases/3.9.64.md`.
 - **Verification Commands (Scoped)**:
   - Typecheck: `npm run typecheck` (`tsc --noEmit` via `typescript@7.0.2`, `checkJs: true`, `strictNullChecks: true`; `devDependencies` only)
   - Unit Tests: `node --test` (never `node --test tests/` — fails on Node v24.22.1)
@@ -36,18 +36,18 @@
 ---
 ## 3A. Execution-Control Projection (Optional)
 > `docs/tasks/<task-id>.md` is authoritative; escape `|` as `\|` in tables.
-- **Task ID**: `TASK-2026-11-27-jsdoc-typecheck`
-- **Task Record**: `docs/tasks/TASK-2026-11-27-jsdoc-typecheck.md`
+- **Task ID**: `TASK-2026-11-27-m4-modular-core`
+- **Task Record**: `docs/tasks/TASK-2026-11-27-m4-modular-core.md`
 - **Ceremony Level**: `2`
-- **Specification**: `docs/specs/2026-11-27-jsdoc-typecheck-and-architecture.md`
-- **Execution Scope**: M1–M3 + M5 (JSDoc typechecking, CI `typecheck` job, docs sync; M4 deferred)
-- **Execution State**: `completed`
+- **Specification**: `docs/specs/2026-11-27-m4-modular-core-and-simulator.md`
+- **Execution Scope**: M4 (`src/` UMD modules, shared `build`/`fishserve` assembly, sentinel test migration, headless `step()` simulator)
+- **Execution State**: `done`
 - **Mapped `pk:tasks` Status**: `Done`
-- **Active Task Pointer**: `TASK-2026-11-27-jsdoc-typecheck`
+- **Active Task Pointer**: `TASK-2026-11-27-m4-modular-core`
 - **Owner / Current Actor**: lead / Antigravity
 - **Start Time**: `2026-11-27`
-- **Current Revision**: `00c52dc`
-- **Next Action**: Optional future M4 (`src/` module extraction & headless `step()` simulator).
+- **Current Revision**: `0c71e6e`
+- **Next Action**: Run live BrowserOS Neo soak on next field session (optional); no open M4 items.
 
 ---
 
@@ -138,6 +138,7 @@ Compact record of pairing sessions (older rows archived in `docs/STATE-ARCHIVE.m
 | 2026-11-27 | Antigravity (pk:checkpoint) | PromptKit OS 2.6.1 upgrade & STATE.md slimming | Upgraded `.promptkit/` courier from v2.5.0 to v2.6.1 (`node --test` 428/428); archived historical Section 1/2/6/7/8 entries and slimmed v2.5.0 Section 3A/3B boilerplate to `docs/STATE-ARCHIVE.md`. | `docs/STATE.md`; `docs/STATE-ARCHIVE.md`; `PROMPTKIT.md`; `AGENTS.md` |
 | 2026-11-27 | Antigravity (pk:debug / pk:ship prep) | 3.9.64 dial continuity & off-center seat fix | Fixed >90° post-press lock drops (`doPress` `_mid` reset), moved re-arm before `planPress`, raised `maxPressPerDial` to 30 (`maxRejectedPerDial: 5`), added `seatPromptBox`, dial-lock `F.hint` sync, `glyphMetrics` on `bubbleAnywhere`, and 3-strike `downscaleGl` recovery. Live BrowserOS Neo: `0/9` multi-lock (was `61.5%`), `46/46` presses accepted, `82.6%` settled, `(609,578)` promoted to `box`; `431/431` tests green. | `autofish.js`; `dist/autofish.user.js`; `package.json`; `docs/releases/3.9.64.md`; `docs/tasks/TASK-2026-11-27-dial-continuity-and-seat-prompt.md` |
 | 2026-11-27 | Antigravity (pk:plan / M1–M3+M5) | Dev-only JSDoc static type-checking (`tsc --noEmit`) | Installed `typescript@7.0.2` in `devDependencies`; added `tsconfig.json` (`checkJs: true`, `strictNullChecks: true`, `noEmit: true`) and `types.d.ts`; typed `layout.js`, `session.js`, `panel.js`, `autofish.js`, `fishserve.js`, `build-userscript.js`, and `scripts/*.js` with `@satisfies` on `PAUSE_WHY`, `RUNNERS`, and `DIAL_COUNTER`; added CI `typecheck` job and synced docs (`DECISION-jsdoc-typecheck-001`; M4 deferred). | `tsconfig.json`; `types.d.ts`; `package.json`; `layout.js`; `session.js`; `panel.js`; `autofish.js`; `fishserve.js`; `build-userscript.js`; `scripts/*.js`; `.github/workflows/test.yml`; `docs/specs/2026-11-27-jsdoc-typecheck-and-architecture.md`; `docs/tasks/TASK-2026-11-27-jsdoc-typecheck.md` |
+| 2026-11-27 | Antigravity (pk:plan / M4) | Modular core extraction (`src/`) & headless simulator | Extracted `src/{diagnostics,ledger,vision,timing,loop}.js` (`// @ts-check` UMD modules), shared `assembleCore()` across `build-userscript.js` + `fishserve.js` (`GET /autofish.js`), migrated sentinel tests & `scripts/{gen-catalogue,overnight-report}.js` to `require('../src/...')`, and added `tests/simulator.test.js` (`PLAN-m4-modular-core`, committed `0c71e6e`; `436/436` tests, `tsc --noEmit` exit `0`). | `src/*.js`; `autofish.js`; `build-userscript.js`; `fishserve.js`; `types.d.ts`; `tsconfig.json`; `scripts/*.js`; `tests/*.test.js`; `dist/autofish.user.js`; `AUTOFISH.md`; `docs/specs/2026-11-27-m4-modular-core-and-simulator.md`; `docs/tasks/TASK-2026-11-27-m4-modular-core.md`; `docs/STATE.md` |
 
 ---
 

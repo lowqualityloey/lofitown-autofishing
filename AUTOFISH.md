@@ -49,6 +49,22 @@ Live snapshot audit (`225` snapshots, `1,778` attempts, `172` losses) exposed fo
 3. **Off-center pier seats (`y ≈ 580`)**: `promptBox()` missed `CAST!`, `dialAnywhere()` did not update `F.hint`, and `bubbleAnywhere()` lacked `glyphMetrics`. Added `seatPromptBox(F.lastGeo, cw, ch)`, dial-lock `F.hint` sync, and glyph-verified rung-1 `Space`.
 4. **WebGL snapshot fallback**: `downscaleGl()` now retries up to 3 context/FBO failures before falling back to 2D `getImageData`.
 
+## 2026-11-27 Modular Core Extraction (`src/`) & Headless Simulator (M4)
+
+Extracted all 12 pure/semi-pure sentinel blocks and the `step()` frame-loop driver out of
+[autofish.js](autofish.js) into 5 type-checked UMD modules under `src/`:
+- `src/diagnostics.js` (`AutoFishDiagnostics`): doctor verdict, stats summaries, result-missing latch
+- `src/ledger.js` (`AutoFishLedger`): species catalogue (`// <species-catalogue>`), catch ledger, dial memory
+- `src/vision.js` (`AutoFishVision`): CSS coordinate mapping, GL row flip, prompt boxes, connected components, glyph metrics, catch-card parser
+- `src/timing.js` (`AutoFishTiming`): least-squares spin regression, press crossing planner, ghost/stall gates, recovery ladder
+- `src/loop.js` (`AutoFishLoop`): headless `stepFrame(F, t, io)` driver + dial/press transition controls
+
+`build-userscript.js` exports `assembleCore(version)` and `CORE_MODULES` so `dist/autofish.user.js`
+and `fishserve.js` (`GET /autofish.js`) stay byte-identical for the shared core. Sentinel-slicing
+unit tests and `scripts/overnight-report.js` import `src/*.js` directly, `scripts/gen-catalogue.js`
+writes to `src/ledger.js`, and `tests/simulator.test.js` runs multi-frame `stepFrame` regression
+timelines in Node without DOM/WebGL mocks (RFC `PLAN-m4-modular-core`).
+
 ## 2026-11-27 Dev-only JSDoc static type-checking (`tsc --noEmit`)
 
 Added zero-emit JSDoc static type-checking (`typescript@7.0.2` devDependency, `tsconfig.json` with `checkJs: true`, `strictNullChecks: true`, `noEmit: true`, and shared contracts in `types.d.ts`) across all runtime scripts (`layout.js`, `session.js`, `panel.js`, `autofish.js`) and Node tooling (`fishserve.js`, `build-userscript.js`, `scripts/*.js`). `@satisfies` exhaustiveness checks protect `PAUSE_WHY`, `RUNNERS`, and `DIAL_COUNTER` from drift while keeping `coarseScan` untouched, preserving zero runtime dependencies and leaving Tampermonkey's single-file `dist/autofish.user.js` install unchanged (RFC `PLAN-jsdoc-typecheck`; M1–M3 + M5 implemented, M4 deferred).
@@ -227,8 +243,8 @@ Two operational traps that cost a whole evening:
 
 - **A second server on the same port serves a stale build.** If an old `node fishserve.js` is still
   alive on 8731 (Windows side or a forgotten WSL job), the browser reaches *that* one and keeps
-  loading old code no matter how often the bookmarklet is reinstalled. Check with
-  `curl -s localhost:8731/autofish.js | wc -c` and compare against `wc -c autofish.js`.
+  loading old code no matter how often the bookmarklet is reinstalled. Check `GET /autofish.js`
+  length (`curl -s localhost:8731/autofish.js | wc -c`) against the assembled `src/*.js + autofish.js`.
 - **Nothing warns you that the server died.** The panel is just a DOM script that stops being able to
   reach anything; the game keeps running and clicks do nothing.
 
