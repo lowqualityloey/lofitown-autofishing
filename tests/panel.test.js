@@ -439,6 +439,7 @@ test('a stale capture address can be corrected from the amber line', () => {
   // address at all, so the pref sat on a dead origin forever and heal retried the same one.
   const ask = src.slice(src.indexOf('function askCaptureAddress'), src.indexOf('function editCaptureAddress'));
   assert.ok(ask.length > 0 && ask.includes('window.prompt('), 'the address is asked for in one place');
+  assert.ok(ask.includes('node fishserve.js') && ask.includes('Click Cancel'), 'first-time capture prompt explains fishserve is optional');
   assert.ok(ask.includes('captureBase = base'), 'the answer is kept with the pref');
   assert.ok(ask.includes('capture needs an address like'), 'a malformed answer says why');
 

@@ -80,15 +80,17 @@ The local ledger tracks per-species counts and best weights, rarity totals, 60 d
 - **Automation can violate the game's terms.** This is not affiliated with lofi.town. Your account, your risk.
 - **Desktop is the supported setup.** Phones are not supported or tested.
 
-## Optional: overnight capture
+## Optional: local capture (no server needed to fish)
 
-The page keeps only the last 250 attempts, so a long run needs a local sampler. Fishserve stores snapshots; the morning report reads them. It never controls the bot.
+**Skip this section if you just want to fish** — leave **Local capture** `off`. Your **Catch history**, rarity counts, and daily totals already save locally in your browser.
+
+Only turn **Local capture** on if you run the optional local Node server (`fishserve.js`) to stream raw `catches.csv` rows and 5-minute `data/runs/` snapshots (since the page ring only keeps the last 250 attempts):
 
 ```bash
 node fishserve.js
 ```
 
-Open **Session & guards**, turn on **Local capture**, and enter the fishserve origin, usually `http://127.0.0.1:8731`. Catches stream to `catches.csv` and the first run snapshot posts immediately and repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
+Open **Session & guards**, turn on **Local capture**, and enter the fishserve origin (`http://127.0.0.1:8731` by default; or click **Cancel** anytime to fish without a server). If Chromium asks to allow **local network access** for `app.lofi.town`, click **Allow**. Catches stream to `catches.csv` and the first run snapshot posts immediately and repeats every five minutes. The line is the truth: green means it is writing, amber means the post failed or the address moved. Click the amber line to correct the address.
 
 In the morning:
 

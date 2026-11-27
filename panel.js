@@ -463,7 +463,7 @@
         await loadScriptFrom(server + '/overnight.js?t=' + Date.now());
       } catch (e) {
         captureState = 'error';
-        captureError = 'no answer — click to change the address';
+        captureError = 'no answer (start "node fishserve.js" or click to edit address)';
         return false;
       }
       if (!captureStatus()) {
@@ -495,7 +495,10 @@
    * again. A cancelled answer returns '' and changes nothing; a malformed one also says why.
    */
   function askCaptureAddress() {
-    var typed = window.prompt('fishserve address for local capture (http://host:port)', captureBase || '');
+    var msg = 'Optional — only needed if you run "node fishserve.js" on your PC for catches.csv and 5-minute run snapshots.\n' +
+      'Click Cancel to fish normally (Catch history already saves in your browser).\n\n' +
+      'Enter fishserve URL (default http://127.0.0.1:8731):';
+    var typed = window.prompt(msg, captureBase || '');
     var base = String(typed == null ? '' : typed).trim().replace(/\/+$/, '');
     if (!/^https?:\/\/[^/]+:\d+$/.test(base)) {
       banner = base ? 'capture needs an address like http://127.0.0.1:PORT' : '';
@@ -1076,7 +1079,7 @@
     var captureRow = el('div', 'row');
     var captureLabel = el('div', 'label', 'Local capture');
     var captureToggle = el('button', 'icon', overnightPref ? 'on' : 'off');
-    captureToggle.title = 'send catches to fishserve CSV and post run snapshots every five minutes';
+    captureToggle.title = 'optional (needs "node fishserve.js"): stream catches.csv & 5m snapshots; Catch history already saves in your browser';
     // The row is the control, not the 14 px switch: the status line tells the owner to click
     // capture, and that has to work wherever on the row they click.
     captureRow.style.cursor = 'pointer';
