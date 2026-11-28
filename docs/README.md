@@ -42,6 +42,7 @@
 
 | File | What it is |
 | :--- | :--- |
+| [releases/3.9.74.md](releases/3.9.74.md) | 3.9.74: Self-contained dashboard taste pass (system fonts, no Google Fonts) and `FISHSERVE_DASHBOARD` live override with a labelled amber fallback; userscript rebuild is version-only. |
 | [releases/3.9.73.md](releases/3.9.73.md) | 3.9.73: Full-stamp catch framing (`lastCardRect` exact bbox + `pb: 0.26`) and Phase 2 `$impeccable` HUD, Lightbox nav/pill, Dashboard profile filter, and Install polish. |
 | [releases/3.9.72.md](releases/3.9.72.md) | 3.9.72: Viewport-flexible centered `cardBox()`, DPR scaling, `maxInk: 0.46` rare-card acceptance, `fallbackCatchCard()` text backstop, and `castRetry` card guard. |
 | [releases/3.9.71.md](releases/3.9.71.md) | 3.9.71: Transparent scrim-stripped PNG trophy capture (`uiCanvas`-locked settle gating, post-flash hold, post-trim core verification, and stale-text catch sync). |
