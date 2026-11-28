@@ -8474,6 +8474,10 @@ const SPECIES = [
   async function setTrophyKeep(rec, keep) {
     if (!rec || !rec.id) return;
     var next = !!keep;
+    // Keep is also available inside a grouped lightbox. The list re-render below resets
+    // trophyCurrentRows to the whole filtered set, so hold the open sequence and its index.
+    var lightboxRows = trophyLightboxOpen ? trophyCurrentRows.slice() : null;
+    var lightboxIdx = trophyLightboxIdx;
     await withTrophyStore(async function (store, tx) {
       var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
       store.put(Object.assign({}, rec, { keep: next }));
@@ -8482,6 +8486,14 @@ const SPECIES = [
     rec.keep = next;
     await refreshTrophyCounts();
     if (trophyPopOpen) await renderTrophyPop();
+    if (trophyLightboxOpen && lightboxRows) {
+      trophyCurrentRows = lightboxRows;
+      var at = -1;
+      for (var i = 0; i < lightboxRows.length; i++) {
+        if (lightboxRows[i] && lightboxRows[i].id === rec.id) { at = i; break; }
+      }
+      trophyLightboxIdx = at >= 0 ? at : Math.max(0, Math.min(lightboxIdx, lightboxRows.length - 1));
+    }
     if (trophyLightboxOpen) renderTrophyLightbox();
     showTrophyStatus(next ? 'Kept — survives 24h expiry; the 40-card cap still applies.' : 'Kept card released to 24h expiry.', 5000);
   }

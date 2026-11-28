@@ -251,3 +251,14 @@ test('unreadable cards fall back instead of showing a broken image', () => {
   assert.ok(src.includes('trophy-lb-missing-why'), 'the stored failure reason remains visible');
   assert.ok(!src.includes('Download PNG'), 'Phase 5B export remains deferred');
 });
+
+test('Keep preserves the open group and its current card', () => {
+  const start = src.indexOf('async function setTrophyKeep(');
+  const end = src.indexOf('function revokeTrophyUrls(');
+  assert.ok(start > 0 && end > start, 'Keep handler has a stable boundary');
+  const keep = src.slice(start, end);
+  assert.match(keep, /lightboxRows = trophyLightboxOpen \? trophyCurrentRows\.slice\(\)/, 'the grouped sequence is captured before the list rerenders');
+  assert.match(keep, /trophyCurrentRows = lightboxRows/, 'the lightbox gets its group back');
+  assert.match(keep, /trophyLightboxIdx = at >= 0/, 'the lightbox returns to the card that was kept');
+  assert.match(keep, /renderTrophyLightbox\(\)/, 'the kept state is repainted in place');
+});
