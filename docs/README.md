@@ -42,6 +42,7 @@
 
 | File | What it is |
 | :--- | :--- |
+| [releases/3.9.70.md](releases/3.9.70.md) | 3.9.70: Dual-surface non-white trophy screen capture (`uiCanvas` + `gameCanvas`) and clean card-only floating Lightbox overlay. |
 | [releases/3.9.69.md](releases/3.9.69.md) | 3.9.69: Authentic lofi.town catch card Lightbox renderer (`Fish-Tier-*` pixel badges, rarity frames, PNG export) and removal of white `uiCanvas` captures. |
 | [releases/3.9.68.md](releases/3.9.68.md) | 3.9.68: Game sprite-atlas thumbnails (`Base`/`Shiny` + `Golden`) in Trophy list with captured-card Lightbox, Epic trophy capture (`EPI`) with priority eviction, wider rare-art crop, and stale banner fixes. |
 | [releases/3.9.67.md](releases/3.9.67.md) | 3.9.67: Settled trophy card capture (padded transparent WebP), compact rarity rows, centered lightbox preview, dark scrollbars, and Chromium IDB fix. |

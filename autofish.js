@@ -1125,10 +1125,121 @@
     return !!(row && (row.rarity === 'Epic' || row.rarity === 'Legendary' || row.rarity === 'Secret' || row.shiny || row.golden));
   }
 
+  /**
+   * Read an arbitrary canvas region (used for trophy card capture on gameCanvas when uiCanvas
+   * only holds a white silhouette/mask). Runs at most once per trophy catch.
+   */
+  function readCanvasPixels(c, x, y, w, h) {
+    if (!c || !c.width || !c.height) return null;
+    if (c === uiCanvas) return readUI(x, y, w, h);
+    x = Math.max(0, Math.round(x)); y = Math.max(0, Math.round(y));
+    w = Math.min(c.width - x, Math.round(w));
+    h = Math.min(c.height - y, Math.round(h));
+    if (w <= 0 || h <= 0) return null;
+    try {
+      const app = window.__PIXI_DEVTOOLS__ && window.__PIXI_DEVTOOLS__.app;
+      let g = app && app.renderer && app.renderer.gl;
+      if (!g || g.canvas !== c) {
+        try { g = c.getContext('webgl2'); } catch (e) { g = null; }
+        if (!g) { try { g = c.getContext('webgl'); } catch (e) { g = null; } }
+      }
+      if (g && g.canvas === c && typeof g.readPixels === 'function' && !(g.isContextLost && g.isContextLost())) {
+        const bw = g.drawingBufferWidth, bh = g.drawingBufferHeight;
+        if (x + w <= bw && y + h <= bh) {
+          const buf = new Uint8Array(w * h * 4);
+          const row = new Uint8Array(w * 4);
+          let prev = null, ok = false;
+          try {
+            prev = g.getParameter(g.FRAMEBUFFER_BINDING);
+            if (prev) g.bindFramebuffer(g.FRAMEBUFFER, null);
+            g.pixelStorei(g.PACK_ALIGNMENT, 1);
+            g.readPixels(x, glRowY(bh, y, h), w, h, g.RGBA, g.UNSIGNED_BYTE, buf);
+            ok = g.getError() === g.NO_ERROR;
+          } catch (e) { ok = false; }
+          finally { if (prev) { try { g.bindFramebuffer(g.FRAMEBUFFER, prev); } catch (e) {} } }
+          if (ok) {
+            flipRows(buf, w, h, row);
+            return { d: buf, w, h, x, y };
+          }
+        }
+      }
+      const scratch = document.createElement('canvas');
+      scratch.width = w; scratch.height = h;
+      const sctx = scratch.getContext('2d', { willReadFrequently: true });
+      if (!sctx) return null;
+      sctx.drawImage(c, x, y, w, h, 0, 0, w, h);
+      return { d: sctx.getImageData(0, 0, w, h).data, w, h, x, y };
+    } catch (e) { return null; }
+  }
+
+  /** Pick whichever surface currently displays settled colored card pixels (never pure white). */
+  function pickSettledCardSurface(box) {
+    if (!box) return null;
+    const uiRaw = uiCanvas ? readUI(box.x, box.y, box.w, box.h) : null;
+    if (isCardSettled(uiRaw)) return uiCanvas;
+    const gameRaw = gameCanvas && gameCanvas !== uiCanvas ? readCanvasPixels(gameCanvas, box.x, box.y, box.w, box.h) : null;
+    if (isCardSettled(gameRaw)) return gameCanvas;
+    return null;
+  }
+
+  /**
+   * Capture the visible catch card from whichever surface holds the settled artwork, padding
+   * for overflowing rare art and encoding as transparent WebP (PNG fallback). Never returns a
+   * white silhouette blob.
+   */
+  function captureCardBlob(card, targetCanvas, cb) {
+    const c = targetCanvas || uiCanvas;
+    if (!c || typeof document === 'undefined' || !card) return cb(null);
+    const base = F.lastCardRect || cardBox(c.width, c.height);
+    const box = padCardBox(base, c.width, c.height) || base;
+    const r = readCanvasPixels(c, box.x, box.y, box.w, box.h);
+    if (!r || !r.d || !r.w || !r.h || !isCardSettled(r)) return cb(null);
+    try {
+      const src = document.createElement('canvas');
+      src.width = r.w; src.height = r.h;
+      const sctx = src.getContext('2d');
+      if (!sctx) return cb(null);
+      const img = sctx.createImageData(r.w, r.h);
+      img.data.set(r.d.subarray(0, r.w * r.h * 4));
+      sctx.putImageData(img, 0, 0);
+      const maxW = 480;
+      const scale = r.w > maxW ? maxW / r.w : 1;
+      const dw = Math.max(1, Math.round(r.w * scale));
+      const dh = Math.max(1, Math.round(r.h * scale));
+      const out = document.createElement('canvas');
+      out.width = dw; out.height = dh;
+      const octx = out.getContext('2d');
+      if (!octx) return cb(null);
+      octx.drawImage(src, 0, 0, dw, dh);
+      if (out.toBlob) {
+        out.toBlob((blob) => {
+          if (blob && blob.size) return cb(blob);
+          out.toBlob((png) => cb(png || null), 'image/png');
+        }, 'image/webp', 0.86);
+      } else {
+        cb(null);
+      }
+    } catch (e) { cb(null); }
+  }
+
   F.recordCatch = function (card) {
     const rec = F.parseCatch();
     if (!rec) return 'pending';
     const info = describeCatch(rec);
+    /** @type {HTMLCanvasElement | null} */
+    let cardSurface = null;
+    if (isTrophyCatch({ rarity: info.rarity, shiny: info.shiny, golden: info.golden })) {
+      const settleMs = F.opts && F.opts.trophySettleMs != null ? F.opts.trophySettleMs : 900;
+      const ref = uiCanvas || gameCanvas;
+      const box = F.lastCardRect || (ref ? cardBox(ref.width, ref.height) : null);
+      cardSurface = pickSettledCardSurface(box);
+      if (!cardSurface) {
+        const at = now();
+        if (!F.trophyWaitAt) F.trophyWaitAt = at;
+        if (at - F.trophyWaitAt < settleMs) return 'trophy-wait';
+        L('trophy settle timeout', { species: rec.species, elapsedMs: Math.round(at - F.trophyWaitAt) });
+      }
+    }
     F.trophyWaitAt = 0;
     clearResultMissing('catch card');
     F.txtAt = now();
@@ -1176,7 +1287,7 @@
     }
     if (typeof F.onCatch === 'function') { try { F.onCatch(row); } catch (e) {} }
     if (isTrophyCatch(row) && typeof F.onTrophy === 'function') {
-      try { F.onTrophy(row, null); } catch (e) {}
+      try { captureCardBlob(card, cardSurface, (blob) => { try { F.onTrophy(row, blob); } catch (e) {} }); } catch (e) {}
     }
     return 'logged';
   };

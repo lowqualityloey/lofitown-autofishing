@@ -1290,30 +1290,6 @@
     if (rec.golden) addBadge('Golden', '#ffd970');
   }
 
-  function formatCardDate(ms) {
-    if (!ms) return '';
-    var d = new Date(ms);
-    var mm = String(d.getMonth() + 1).padStart(2, '0');
-    var dd = String(d.getDate()).padStart(2, '0');
-    var yy = String(d.getFullYear()).slice(-2);
-    return mm + '/' + dd + '/' + yy;
-  }
-
-  var CARD_THEMES = {
-    Common: { frame: '#d5c394', edge: '#9e8755', accent: '#efe2be', pill: '#b8aa8f' },
-    Uncommon: { frame: '#b4c14e', edge: '#6d7728', accent: '#d8e37c', pill: '#a6b348' },
-    Rare: { frame: '#59a7ea', edge: '#2a659e', accent: '#9cd2ff', pill: '#4e96d6' },
-    Epic: { frame: '#9b6ae6', edge: '#5a3299', accent: '#c9a6ff', pill: '#8959d1' },
-    Legendary: { frame: '#ffca3a', edge: '#b56e12', accent: '#ffe680', pill: '#f2a93b' },
-    Secret: { frame: '#9ee8ff', edge: '#4697bd', accent: '#e0f8ff', pill: '#8da9c4' },
-    Halloween: { frame: '#f28c38', edge: '#9e4710', accent: '#ffc085', pill: '#e07a2b' },
-    Christmas: { frame: '#7fd6d2', edge: '#2f7f7d', accent: '#c7f5f2', pill: '#5cbcb8' }
-  };
-
-  function cardThemeFor(rarity) {
-    return CARD_THEMES[rarity] || CARD_THEMES.Common;
-  }
-
   function renderTrophyLightbox() {
     if (!ui.trophyLightbox || !trophyLightboxOpen) return;
     var rows = trophyCurrentRows;
@@ -1324,116 +1300,32 @@
     revokeLightboxUrl();
     if (ui.trophyLbStage) {
       ui.trophyLbStage.textContent = '';
-      var rarityKey = normRarityKey(rec.rarity) || 'Common';
-      var theme = cardThemeFor(rarityKey);
-      var cardEl = el('div', 'lofi-card tier-' + rarityKey.toLowerCase() + (rec.golden ? ' golden' : '') + (rec.shiny ? ' shiny' : ''));
-      cardEl.style.setProperty('--lc-frame', theme.frame);
-      cardEl.style.setProperty('--lc-edge', theme.edge);
-      cardEl.style.setProperty('--lc-accent', theme.accent);
-      cardEl.style.setProperty('--lc-pill', theme.pill);
-
-      var topBar = el('div', 'lofi-card-top');
-      cardEl.appendChild(topBar);
-      var inner = el('div', 'lofi-card-inner');
-      var artBox = el('div', 'lofi-card-art');
-      var artPlaceholder = el('span', 'lofi-card-loading', '🐟');
-      artBox.appendChild(artPlaceholder);
-      inner.appendChild(artBox);
-
-      var namePlate = el('div', 'lofi-card-name', rec.species);
-      inner.appendChild(namePlate);
-
-      var tierRow = el('div', 'lofi-card-tier-row');
-      var tierIcon = el('span', 'lofi-card-ico', '🏆');
-      var tierBadge = el('span', 'lofi-card-tier-pill', rarityKey === 'Secret' ? '???' : rarityKey);
-      tierRow.append(tierIcon, tierBadge);
-      inner.appendChild(tierRow);
-
-      var pairRow = el('div', 'lofi-card-pair');
-      var wPill = el('div', 'lofi-card-stat');
-      wPill.append(el('span', 'lofi-card-stat-k', '⚖'), el('span', null, rec.weight || '—'));
-      var dPill = el('div', 'lofi-card-stat');
-      dPill.append(el('span', 'lofi-card-stat-k', '📅'), el('span', null, formatCardDate(rec.at) || '—'));
-      pairRow.append(wPill, dPill);
-      inner.appendChild(pairRow);
-
-      if (rec.quality) {
-        var qRow = el('div', 'lofi-card-stat wide');
-        qRow.append(el('span', 'lofi-card-stat-k', '🎖'), el('span', null, rec.quality));
-        inner.appendChild(qRow);
-      }
-
-      var vRow = el('div', 'lofi-card-stat wide');
-      vRow.append(el('span', 'lofi-card-stat-k', '$'), el('span', null, rec.value || '—'));
-      inner.appendChild(vRow);
-
-      cardEl.appendChild(inner);
-      ui.trophyLbStage.appendChild(cardEl);
-
-      var activeIdx = trophyLightboxIdx;
-      resolveTrophySprite(rec).then(function (spriteUrl) {
-        if (!trophyLightboxOpen || trophyLightboxIdx !== activeIdx || !artBox.isConnected || !spriteUrl) return;
-        artBox.textContent = '';
-        var spImg = document.createElement('img');
-        spImg.className = 'lofi-card-fish trophy-sprite';
-        spImg.src = spriteUrl;
-        spImg.alt = rec.species;
-        artBox.appendChild(spImg);
-        if (rec.shiny) {
-          resolveUiSprite('ui:shiny-star').then(function (starUrl) {
-            if (!starUrl || !artBox.isConnected) return;
-            var star = document.createElement('img');
-            star.className = 'lofi-card-star trophy-sprite';
-            star.src = starUrl;
-            star.alt = '';
-            artBox.appendChild(star);
-          });
-        }
-      });
-
-      var tierSpriteKey = rarityKey === 'Rare' ? 'ui:tier-rare'
-        : rarityKey === 'Epic' ? 'ui:tier-epic'
-          : rarityKey === 'Legendary' ? 'ui:tier-legendary'
-            : rarityKey === 'Secret' ? 'ui:tier-secret' : '';
-      if (tierSpriteKey) {
-        resolveUiSprite(tierSpriteKey).then(function (tUrl) {
-          if (!tUrl || !trophyLightboxOpen || trophyLightboxIdx !== activeIdx || !tierBadge.isConnected) return;
-          tierBadge.textContent = '';
-          tierBadge.classList.add('img-badge');
-          var tImg = document.createElement('img');
-          tImg.className = 'lofi-card-tier-img trophy-sprite';
-          tImg.src = tUrl;
-          tImg.alt = rarityKey;
-          tierBadge.appendChild(tImg);
+      if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
+        var img = document.createElement('img');
+        img.className = 'trophy-lb-img';
+        trophyLightboxUrl = URL.createObjectURL(rec.blob);
+        img.src = trophyLightboxUrl;
+        img.alt = rec.species + ' catch card';
+        ui.trophyLbStage.appendChild(img);
+      } else {
+        var fallbackEl = el('div', 'trophy-lb-missing', rec.species);
+        ui.trophyLbStage.appendChild(fallbackEl);
+        var activeIdx = trophyLightboxIdx;
+        resolveTrophySprite(rec).then(function (spriteUrl) {
+          if (!trophyLightboxOpen || trophyLightboxIdx !== activeIdx || !ui.trophyLbStage) return;
+          if (!spriteUrl) {
+            fallbackEl.textContent = 'No card screenshot saved';
+            return;
+          }
+          ui.trophyLbStage.textContent = '';
+          var spImg = document.createElement('img');
+          spImg.className = 'trophy-lb-img trophy-sprite';
+          spImg.src = spriteUrl;
+          spImg.alt = rec.species;
+          ui.trophyLbStage.appendChild(spImg);
         });
       }
     }
-    if (ui.trophyLbName) ui.trophyLbName.textContent = rec.species;
-    if (ui.trophyLbBadges) {
-      ui.trophyLbBadges.textContent = '';
-      buildTrophyBadges(rec, ui.trophyLbBadges);
-    }
-    if (ui.trophyLbMeta) {
-      var parts = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : ''].filter(Boolean);
-      if (rows.length > 1) parts.push((trophyLightboxIdx + 1) + ' of ' + rows.length);
-      ui.trophyLbMeta.textContent = parts.join(' · ') || 'captured trophy';
-    }
-    if (ui.trophyLbPrev) ui.trophyLbPrev.disabled = rows.length <= 1;
-    if (ui.trophyLbNext) ui.trophyLbNext.disabled = rows.length <= 1;
-    if (ui.trophyLbSave) ui.trophyLbSave.disabled = false;
-  }
-
-  function normRarityKey(r) {
-    var s = String(r || '').trim().toLowerCase();
-    if (s === 'common') return 'Common';
-    if (s === 'uncommon') return 'Uncommon';
-    if (s === 'rare') return 'Rare';
-    if (s === 'epic') return 'Epic';
-    if (s === 'legendary') return 'Legendary';
-    if (s === 'secret') return 'Secret';
-    if (s === 'halloween') return 'Halloween';
-    if (s === 'christmas') return 'Christmas';
-    return '';
   }
 
   /**
@@ -1448,73 +1340,6 @@
     ui.trophyLightbox.classList.remove('hide');
     renderTrophyLightbox();
     try { ui.trophyLightbox.focus(); } catch (e) {}
-  }
-
-  async function downloadTrophyRec(rec) {
-    if (!rec || typeof document === 'undefined') return;
-    try {
-      var rk = normRarityKey(rec.rarity) || 'Common';
-      var theme = cardThemeFor(rk);
-      var W = 320, H = 390;
-      var c = document.createElement('canvas');
-      c.width = W; c.height = H;
-      var rawCtx = c.getContext('2d');
-      if (!rawCtx) return;
-      /** @type {CanvasRenderingContext2D} */
-      var g = rawCtx;
-      g.imageSmoothingEnabled = false;
-      function rrect(x, y, w, h, r, fill, stroke, lw) {
-        g.beginPath(); g.roundRect(x, y, w, h, r);
-        if (fill) { g.fillStyle = fill; g.fill(); }
-        if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw || 3; g.stroke(); }
-      }
-      rrect(6, 6, W - 12, H - 12, 16, theme.frame, theme.edge, 4);
-      rrect(16, 12, W - 32, 22, 6, theme.accent, theme.edge, 2);
-      rrect(16, 32, W - 32, H - 46, 10, '#f9eed0', theme.edge, 3);
-      var spUrl = await resolveTrophySprite(rec);
-      if (spUrl) {
-        var spSrc = spUrl;
-        /** @type {HTMLImageElement | null} */
-        var spImg = await new Promise(function (res) {
-          var im = new Image(); im.onload = function () { res(im); }; im.onerror = function () { res(null); }; im.src = spSrc;
-        });
-        if (spImg && spImg.width && spImg.height) {
-          var scale = Math.min(180 / spImg.width, 110 / spImg.height);
-          var dw = Math.max(1, Math.round(spImg.width * scale));
-          var dh = Math.max(1, Math.round(spImg.height * scale));
-          g.drawImage(spImg, Math.round((W - dw) / 2), Math.round(44 + (112 - dh) / 2), dw, dh);
-        }
-      }
-      rrect(28, 164, W - 56, 38, 6, '#cac4b7');
-      g.fillStyle = '#3f3830'; g.font = 'bold 16px ui-monospace, Menlo, monospace'; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText(String(rec.species || 'Unknown'), W / 2, 183, W - 70);
-      rrect(28, 210, W - 56, 26, 8, '#a6b1be');
-      rrect(108, 213, 104, 20, 6, theme.pill);
-      g.fillStyle = '#fff'; g.font = 'bold 12px ui-monospace, Menlo, monospace';
-      g.fillText(rk === 'Secret' ? '???' : rk, W / 2, 223);
-      rrect(28, 244, 126, 26, 8, '#f2c69b');
-      rrect(166, 244, 126, 26, 8, '#f2c69b');
-      g.fillStyle = '#4b3828'; g.font = 'bold 13px ui-monospace, Menlo, monospace';
-      g.fillText(rec.weight || '—', 91, 257, 114);
-      g.fillText(formatCardDate(rec.at) || '—', 229, 257, 114);
-      var nextY = 278;
-      if (rec.quality) {
-        rrect(28, nextY, W - 56, 26, 8, '#f2c69b');
-        g.fillText(rec.quality, W / 2, nextY + 13, W - 70);
-        nextY += 34;
-      }
-      rrect(28, nextY, W - 56, 26, 8, '#f2c69b');
-      g.fillText(rec.value || '—', W / 2, nextY + 13, W - 70);
-
-      var href = c.toDataURL('image/png');
-      var slug = String(rec.species || 'trophy').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      var a = document.createElement('a');
-      a.href = href;
-      a.download = 'autofish-' + (slug || 'trophy') + '.png';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    } catch (e) {}
   }
 
   function closeTrophyPop() {
@@ -1976,36 +1801,11 @@
     '.trophy-badge{font-size:9px;font-weight:600;letter-spacing:.2px;padding:0 5px;border-radius:99px;border:1px solid;background:rgba(255,255,255,.04);line-height:1.45}',
     '.trophy-sub{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.trophy-empty{font-size:11px;color:#8b95a0;text-align:center;padding:24px 8px}',
-    '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.78);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:24px;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
-    '.trophy-lb-panel{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:min(92vw,500px);max-height:92vh;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.12);border-radius:16px;padding:14px 16px;box-shadow:0 24px 64px rgba(0,0,0,.65)}',
-    '.trophy-lb-head{width:100%;display:flex;align-items:center;gap:8px}',
-    '.trophy-lb-title{flex:1;min-width:0;font-size:14px;font-weight:600;color:#e8ecef;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;min-height:220px;max-height:72vh;width:100%;overflow:visible;padding:6px 0}',
-    '.lofi-card{position:relative;width:276px;background:var(--lc-frame,#d5c394);border:3px solid var(--lc-edge,#9e8755);border-radius:14px;padding:6px;box-shadow:0 18px 40px rgba(0,0,0,.65);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}',
-    '.lofi-card.golden{box-shadow:0 0 0 2px #ffd970,0 18px 42px rgba(255,217,112,.35)}',
-    '.lofi-card-top{height:16px;margin:0 8px 4px;background:linear-gradient(90deg,var(--lc-accent,#efe2be),var(--lc-frame,#d5c394),var(--lc-accent,#efe2be));border:2px solid var(--lc-edge,#9e8755);border-radius:6px}',
-    '.lofi-card-inner{background:#f9eed0;border:2px solid var(--lc-edge,#9e8755);border-radius:9px;padding:10px 10px 12px;display:flex;flex-direction:column;align-items:center;gap:6px}',
-    '.lofi-card-art{position:relative;width:100%;height:106px;display:flex;align-items:center;justify-content:center}',
-    '.lofi-card-fish{max-width:190px;max-height:104px;width:auto;height:auto;object-fit:contain;filter:drop-shadow(0 3px 0 rgba(0,0,0,.22))}',
-    '.lofi-card-loading{font-size:32px;opacity:.5}',
-    '.lofi-card-star{position:absolute;top:2px;right:12px;width:28px;height:22px}',
-    '.lofi-card-name{width:100%;background:#cac4b7;border-radius:5px;padding:7px 8px;text-align:center;font-size:13px;font-weight:700;color:#4a4035;letter-spacing:.2px}',
-    '.lofi-card-tier-row{width:100%;background:#99a8b8;border-radius:7px;padding:3px 6px;display:flex;align-items:center;justify-content:center;position:relative}',
-    '.lofi-card-ico{position:absolute;left:8px;font-size:11px;opacity:.85}',
-    '.lofi-card-tier-pill{background:var(--lc-pill,#b8aa8f);color:#fff;font-size:11px;font-weight:700;padding:1px 12px;border-radius:6px;text-shadow:0 1px 0 rgba(0,0,0,.35)}',
-    '.lofi-card-tier-pill.img-badge{background:transparent;padding:0;display:flex;align-items:center}',
-    '.lofi-card-tier-img{height:18px;width:auto;display:block}',
-    '.lofi-card-pair{width:100%;display:grid;grid-template-columns:1fr 1fr;gap:6px}',
-    '.lofi-card-stat{background:#f2c69b;border-radius:7px;padding:4px 8px;display:flex;align-items:center;justify-content:center;gap:5px;font-size:12px;font-weight:700;color:#4f3a27;font-variant-numeric:tabular-nums}',
-    '.lofi-card-stat.wide{width:100%}',
-    '.lofi-card-stat-k{font-size:11px;opacity:.65}',
-    '.trophy-lb-meta{width:100%;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 10px;font-size:11.5px;color:#aab4bf;font-variant-numeric:tabular-nums}',
-    '.trophy-lb-actions{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
-    '.trophy-lb-btn{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.07);color:#dfe5ea;font:inherit;font-size:11px;font-weight:600;padding:5px 10px;border-radius:8px;cursor:pointer}',
-    '.trophy-lb-btn:hover:not(:disabled){background:rgba(255,255,255,.14)}',
-    '.trophy-lb-btn:disabled{opacity:.35;cursor:default}',
-    '.trophy-lb-btn.save{background:rgba(90,209,139,.16);border-color:rgba(90,209,139,.4);color:#5ad18b}',
-    '.trophy-lb-btn.save:hover:not(:disabled){background:rgba(90,209,139,.26)}',
+    '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.74);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:24px;cursor:pointer;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
+    '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;max-width:90vw;max-height:86vh}',
+    '.trophy-lb-img{max-width:min(86vw,480px);max-height:80vh;width:auto;height:auto;object-fit:contain;display:block;border-radius:12px;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lb-img.trophy-sprite{min-width:160px;min-height:160px}',
+    '.trophy-lb-missing{font-size:12px;color:#cfd6dd;background:rgba(18,22,28,.9);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:18px 24px}',
     '.trophy-lightbox.hide{display:none}',
     '.hide{display:none}'
   ].join('\n');
@@ -2348,30 +2148,8 @@
     trophyLightbox.setAttribute('aria-modal', 'true');
     trophyLightbox.setAttribute('aria-label', 'Trophy catch card preview');
     trophyLightbox.tabIndex = -1;
-    var trophyLbPanel = el('div', 'trophy-lb-panel');
-    var trophyLbHead = el('div', 'trophy-lb-head');
-    var trophyLbName = el('div', 'trophy-lb-title', '');
-    var trophyLbBadges = el('div', 'trophy-badges');
-    var trophyLbClose = el('button', 'icon', '×');
-    trophyLbClose.type = 'button';
-    trophyLbClose.setAttribute('aria-label', 'Close card preview');
-    trophyLbClose.title = 'Close preview (Esc)';
-    trophyLbHead.append(trophyLbName, trophyLbBadges, trophyLbClose);
     var trophyLbStage = el('div', 'trophy-lb-stage');
-    var trophyLbMeta = el('div', 'trophy-lb-meta', '');
-    var trophyLbActions = el('div', 'trophy-lb-actions');
-    var trophyLbPrev = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-btn', '← Prev'));
-    trophyLbPrev.type = 'button';
-    trophyLbPrev.setAttribute('aria-label', 'Previous trophy card');
-    var trophyLbSave = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-btn save', 'Save image'));
-    trophyLbSave.type = 'button';
-    trophyLbSave.setAttribute('aria-label', 'Save catch card image');
-    var trophyLbNext = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-btn', 'Next →'));
-    trophyLbNext.type = 'button';
-    trophyLbNext.setAttribute('aria-label', 'Next trophy card');
-    trophyLbActions.append(trophyLbPrev, trophyLbSave, trophyLbNext);
-    trophyLbPanel.append(trophyLbHead, trophyLbStage, trophyLbMeta, trophyLbActions);
-    trophyLightbox.appendChild(trophyLbPanel);
+    trophyLightbox.appendChild(trophyLbStage);
 
     root.append(wrap, trophyLightbox);
 
@@ -2392,9 +2170,7 @@
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
       trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyClear: trophyClear,
-      trophyLightbox: trophyLightbox, trophyLbName: trophyLbName, trophyLbBadges: trophyLbBadges,
-      trophyLbStage: trophyLbStage, trophyLbMeta: trophyLbMeta,
-      trophyLbPrev: trophyLbPrev, trophyLbSave: trophyLbSave, trophyLbNext: trophyLbNext,
+      trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
@@ -2609,63 +2385,15 @@
       try { if (ui.logTrophiesBtn) ui.logTrophiesBtn.focus(); } catch (e) {}
     }
     trophyClose.addEventListener('click', closePopWithFocus);
-    trophyLbClose.addEventListener('click', closeTrophyLightbox);
-    trophyLightbox.addEventListener('click', function (e) {
-      if (e.target === trophyLightbox) closeTrophyLightbox();
-    });
-    trophyLbPrev.addEventListener('click', function () {
-      if (trophyCurrentRows.length <= 1) return;
-      trophyLightboxIdx--;
-      renderTrophyLightbox();
-    });
-    trophyLbNext.addEventListener('click', function () {
-      if (trophyCurrentRows.length <= 1) return;
-      trophyLightboxIdx++;
-      renderTrophyLightbox();
-    });
-    trophyLbSave.addEventListener('click', function () {
-      downloadTrophyRec(trophyCurrentRows[trophyLightboxIdx]);
+    trophyLightbox.addEventListener('click', function () {
+      closeTrophyLightbox();
     });
     trophyLightbox.addEventListener('keydown', function (e) {
       if (!trophyLightboxOpen) return;
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         e.stopPropagation();
         closeTrophyLightbox();
-        return;
-      }
-      if (e.key === 'ArrowLeft' && trophyCurrentRows.length > 1) {
-        e.preventDefault();
-        trophyLightboxIdx--;
-        renderTrophyLightbox();
-        return;
-      }
-      if (e.key === 'ArrowRight' && trophyCurrentRows.length > 1) {
-        e.preventDefault();
-        trophyLightboxIdx++;
-        renderTrophyLightbox();
-        return;
-      }
-      if (e.key === 'Tab') {
-        var lbFocusables = Array.prototype.filter.call(
-          trophyLbPanel.querySelectorAll('button:not(:disabled)'),
-          function (b) { return b.offsetParent !== null; }
-        );
-        if (!lbFocusables.length) {
-          e.preventDefault();
-          trophyLightbox.focus();
-          return;
-        }
-        var lbFirst = lbFocusables[0];
-        var lbLast = lbFocusables[lbFocusables.length - 1];
-        var lbActive = (root && root.activeElement) || document.activeElement;
-        if (e.shiftKey && (lbActive === lbFirst || !trophyLbPanel.contains(lbActive))) {
-          e.preventDefault();
-          lbLast.focus();
-        } else if (!e.shiftKey && (lbActive === lbLast || !trophyLbPanel.contains(lbActive))) {
-          e.preventDefault();
-          lbFirst.focus();
-        }
       }
     });
     wrap.addEventListener('keydown', function (e) {

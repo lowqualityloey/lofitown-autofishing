@@ -564,8 +564,8 @@ test('panel trophy lightbox preview, compact rarity rows, modern dark scrollbars
   assert.ok(src.includes('scrollbar-width:thin') && src.includes('::-webkit-scrollbar-thumb') && src.includes('::-webkit-scrollbar-button{display:none'), 'panel Shadow DOM styles custom dark scrollbars without OS white bars or arrows');
   assert.ok(src.includes('max-height:calc(100vh - 70px);overflow-y:auto'), 'panel body caps height cleanly on shorter screens');
   assert.ok(src.includes("el('button', 'trophy-item')") && src.includes('trophy-badges') && src.includes('TIER_COLORS[rec.rarity]'), 'trophy rows are compact semantic buttons with color-coded rarity/variant pills');
-  assert.ok(src.includes('function openTrophyLightbox(') && src.includes('trophy-lightbox') && src.includes('Save image'), 'clicking a trophy row opens a centered full-res lightbox preview with save support');
-  assert.ok(src.includes("e.key === 'ArrowLeft'") && src.includes("e.key === 'ArrowRight'") && src.includes('trophyLightboxUrl'), 'lightbox supports keyboard prev/next navigation and keeps its own object URL');
+  assert.ok(src.includes('function openTrophyLightbox(') && src.includes('trophy-lightbox') && src.includes('trophy-lb-stage'), 'clicking a trophy row opens a clean card-only lightbox overlay');
+  assert.ok(src.includes('trophyLightboxUrl'), 'lightbox tracks its own object URL separately from list thumbnails');
 });
 
 test('panel clears stale reload/info banners on start, resume, user stop, and session recovery', () => {
@@ -576,6 +576,6 @@ test('panel clears stale reload/info banners on start, resume, user stop, and se
   const p = src.slice(src.indexOf('function postSessionRow'), src.indexOf('function captureDiag'));
   assert.ok(p.includes("else if (banner === 'session log offline"), 'successful session POST clears a prior session-log-offline banner');
   assert.ok(src.includes("{ id: 'Epic', label: 'EPI' }") && src.includes('function isRareChimeRow('), 'Epic cards are saved and filterable without triggering the rare catch chime');
-  assert.ok(src.includes('FISH_ATLAS_PACKS') && src.includes('function resolveTrophySprite(') && src.includes('image-rendering:pixelated'), 'trophy rows resolve crisp Base/Shiny pixel-art sprites from lofi.town texture packs with captured-card lightbox intact');
-  assert.ok(src.includes('lofi-card') && src.includes('UI_ATLAS_FRAMES') && src.includes('cardThemeFor('), 'lightbox renders authentic lofi.town catch cards with game tier badges and PNG export');
+  assert.ok(src.includes('FISH_ATLAS_PACKS') && src.includes('function resolveTrophySprite(') && src.includes('image-rendering:pixelated'), 'trophy rows resolve crisp Base/Shiny pixel-art sprites from lofi.town texture packs with clean lightbox preview');
+  assert.ok(!src.includes('Save image') && !src.includes('lofi-card'), 'lightbox keeps Photo-3 card-only preview without Next/Save buttons or HTML mock cards');
 });
