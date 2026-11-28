@@ -102,3 +102,24 @@ test('the trophy viewer exposes retention, a reversible Keep control and shared 
   assert.match(src, /trophyCounts = \{ total: 0, missing: 0, Legendary: 0, Secret: 0, variant: 0, kept: 0/, 'the HUD count carries kept metadata');
   assert.match(src, /ui\.trophyHint\.textContent = trophyRetentionText\(info, Date\.now\(\)\)/, 'the footer uses the pure retention formatter');
 });
+
+test('saved-card cleanup is opt-in, backed up and reversible', () => {
+  assert.ok(src.includes("el('button', 'icon csv trophy-clean', 'clean')"), 'cleanup is a visible viewer action');
+  assert.ok(src.includes("'clean?'") && src.includes('cleanConfirmUntil'), 'cleanup needs the same two-step confirmation');
+  const fn = src.slice(src.indexOf('async function cleanSavedTrophies'), src.indexOf('async function restoreTrophyOriginals'));
+  assert.ok(fn.includes('trophyCleanBusy'), 'one cleanup run at a time');
+  assert.ok(fn.includes('cleaning ') && fn.includes('targets.length'), 'progress names each card');
+  assert.ok(fn.includes('if (!result) { failed++; continue; }'), 'a failed decode leaves the saved blob untouched');
+  assert.ok(fn.includes('backupBlob: rec.backupBlob || rec.blob'), 'the original PNG is retained before replacement');
+  assert.ok(fn.includes('cleanedAt: Date.now()'), 'cleaned cards are not reprocessed');
+  assert.ok(fn.includes('cleanStats: finished.stats'), 'the cleanup stats are retained with the record');
+  const imageFn = src.slice(src.indexOf('async function cleanTrophyBlob'), src.indexOf('async function cleanSavedTrophies'));
+  assert.match(imageFn, /stripCardSpecks\(\{ d: frame\.data, w: w, h: h \}, \{ pad: 8, minFrac: 0\.01 \}\)/, 'the saved-card pass uses the capture cleanup');
+  assert.ok(fn.includes('already clean'), 'clean cards are reported separately');
+  const restore = src.slice(src.indexOf('async function restoreTrophyOriginals'), src.indexOf('async function refreshTrophyCounts'));
+  assert.ok(restore.includes('r.backupBlob'), 'restore selects only backed-up cards');
+  assert.ok(restore.includes('blob: rec.backupBlob') && restore.includes('backupBlob: null'), 'restore swaps the original back');
+  assert.ok(restore.includes('cleanedAt: null'), 'restored cards can be cleaned again');
+  assert.ok(src.includes("trophyRestore.addEventListener('click'"), 'the restore control is wired');
+  assert.ok(src.includes('No original card images to restore.'), 'an empty restore is explained');
+});

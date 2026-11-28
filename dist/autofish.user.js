@@ -8285,16 +8285,172 @@ const SPECIES = [
     if (trophyPopOpen) renderTrophyPop();
   }
 
+  async   function resetCleanConfirm() {
+    cleanConfirmUntil = 0;
+    if (cleanConfirmTimer) { clearTimeout(cleanConfirmTimer); cleanConfirmTimer = null; }
+    if (ui.trophyClean) {
+      ui.trophyClean.textContent = 'clean';
+      ui.trophyClean.classList.remove('armed');
+    }
+  }
+
+  /** Decode a stored PNG without assuming createImageBitmap exists in every browser. */
+  function decodeTrophyImage(blob) {
+    return new Promise(function (resolve) {
+      function fromElement() {
+        if (typeof Image === 'undefined' || typeof URL === 'undefined') return resolve(null);
+        var url = URL.createObjectURL(blob);
+        var img = new Image();
+        img.onload = function () { try { URL.revokeObjectURL(url); } catch (e) {} resolve(img); };
+        img.onerror = function () { try { URL.revokeObjectURL(url); } catch (e) {} resolve(null); };
+        img.src = url;
+      }
+      try {
+        if (typeof createImageBitmap === 'function') {
+          createImageBitmap(blob).then(resolve, fromElement);
+        } else {
+          fromElement();
+        }
+      } catch (e) {
+        fromElement();
+      }
+    });
+  }
+
+  /** Run the same speck cleanup used at capture time over one already-saved PNG. */
+  async function cleanTrophyBlob(blob) {
+    var timing = window.AutoFishTiming;
+    if (!timing || typeof timing.stripCardSpecks !== 'function') return null;
+    var img = await decodeTrophyImage(blob);
+    if (!img) return null;
+    try {
+      var source = /** @type {any} */ (img);
+      var w = source.width || source.naturalWidth || 0;
+      var h = source.height || source.naturalHeight || 0;
+      if (!w || !h) return null;
+      var canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      var ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(source, 0, 0, w, h);
+      var frame = ctx.getImageData(0, 0, w, h);
+      var cleaned = timing.stripCardSpecks({ d: frame.data, w: w, h: h }, { pad: 8, minFrac: 0.01 });
+      if (!cleaned || !cleaned.d || !cleaned.w || !cleaned.h) return null;
+      if (!cleaned.stats || !cleaned.stats.removed) return { skipped: true, stats: cleaned.stats || null };
+      var out = document.createElement('canvas');
+      out.width = cleaned.w;
+      out.height = cleaned.h;
+      var outCtx = out.getContext('2d');
+      if (!outCtx) return null;
+      var image = outCtx.createImageData(cleaned.w, cleaned.h);
+      image.data.set(cleaned.d);
+      outCtx.putImageData(image, 0, 0);
+      var nextBlob = await new Promise(function (resolve) {
+        try { out.toBlob(resolve, 'image/png'); } catch (e) { resolve(null); }
+      });
+      if (!nextBlob) return null;
+      return { blob: nextBlob, stats: cleaned.stats, w: cleaned.w, h: cleaned.h };
+    } catch (e) {
+      return null;
+    } finally {
+      if (img && typeof img.close === 'function') { try { img.close(); } catch (e) {} }
+    }
+  }
+
+  async function cleanSavedTrophies(prof) {
+    if (trophyCleanBusy) return;
+    trophyCleanBusy = true;
+    if (ui.trophyClean) ui.trophyClean.disabled = true;
+    try {
+      var rows = await listTrophyCards(prof);
+      var targets = rows.filter(function (r) { return r.blob && !r.cleanedAt; });
+      if (!targets.length) {
+        showTrophyStatus('No saved cards need cleaning.', 4000);
+        return;
+      }
+      var cleaned = 0, already = 0, failed = 0;
+      for (var i = 0; i < targets.length; i++) {
+        var rec = targets[i];
+        showTrophyStatus('cleaning ' + (i + 1) + '/' + targets.length + '…', 0);
+        var result = await cleanTrophyBlob(rec.blob);
+        if (!result) { failed++; continue; }
+        var finished = result;
+        if (finished.skipped) {
+          await withTrophyStore(async function (store, tx) {
+            var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+            store.put(Object.assign({}, rec, { cleanedAt: Date.now(), cleanStats: finished.stats }));
+            await txDone;
+          }, undefined);
+          already++;
+          continue;
+        }
+        await withTrophyStore(async function (store, tx) {
+          var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+          store.put(Object.assign({}, rec, {
+            backupBlob: rec.backupBlob || rec.blob,
+            blob: finished.blob,
+            cleanedAt: Date.now(),
+            cleanStats: finished.stats,
+            captureError: null,
+          }));
+          await txDone;
+        }, undefined);
+        cleaned++;
+      }
+      showTrophyStatus('cleaned ' + cleaned + ' · ' + already + ' already clean · ' + failed + ' failed', 7000);
+      await refreshTrophyCounts();
+    } finally {
+      trophyCleanBusy = false;
+      if (ui.trophyClean) ui.trophyClean.disabled = false;
+      resetCleanConfirm();
+      if (trophyPopOpen) await renderTrophyPop();
+    }
+  }
+
+  async function restoreTrophyOriginals(prof) {
+    if (trophyCleanBusy) return;
+    trophyCleanBusy = true;
+    if (ui.trophyRestore) ui.trophyRestore.disabled = true;
+    try {
+      var rows = await listTrophyCards(prof);
+      var targets = rows.filter(function (r) { return r.backupBlob; });
+      if (!targets.length) {
+        showTrophyStatus('No original card images to restore.', 4000);
+        return;
+      }
+      await withTrophyStore(async function (store, tx) {
+        var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+        targets.forEach(function (rec) {
+          store.put(Object.assign({}, rec, {
+            blob: rec.backupBlob,
+            backupBlob: null,
+            cleanedAt: null,
+            cleanStats: null,
+          }));
+        });
+        await txDone;
+      }, undefined);
+      showTrophyStatus('restored ' + targets.length + ' original card image' + (targets.length === 1 ? '' : 's') + '.', 6000);
+      await refreshTrophyCounts();
+    } finally {
+      trophyCleanBusy = false;
+      if (ui.trophyRestore) ui.trophyRestore.disabled = false;
+      if (trophyPopOpen) await renderTrophyPop();
+    }
+  }
+
   async function refreshTrophyCounts() {
     var rows = await listTrophyCards(profileName());
     var info = trophyRetention(rows, Date.now());
     var next = { total: rows.length, missing: info.missing, Legendary: 0, Secret: 0, variant: 0,
       kept: info.kept, cap: info.cap, slots: info.slots, oldestAt: info.oldestAt,
-      nextExpiryAt: info.nextExpiryAt, evictAt: info.evictAt };
+      nextExpiryAt: info.nextExpiryAt, evictAt: info.evictAt, backups: 0 };
     rows.forEach(function (r) {
       if (r.rarity === 'Legendary') next.Legendary++;
       if (r.rarity === 'Secret') next.Secret++;
       if (r.shiny || r.golden) next.variant++;
+      if (r.backupBlob) next.backups++;
     });
     trophyCounts = next;
     renderLog();
@@ -8593,6 +8749,7 @@ const SPECIES = [
     trophyPopOpen = false;
     trophyCurrentRows = [];
     resetClearConfirm();
+    resetCleanConfirm();
     revokeTrophyUrls();
     if (ui.card) ui.card.classList.remove('pop-open');
     if (ui.trophyPop) ui.trophyPop.classList.add('hide');
@@ -8630,6 +8787,20 @@ const SPECIES = [
       ui.trophyHint.textContent = trophyRetentionText(info, Date.now());
       ui.trophyHint.title = 'Auto-expires after 24h. Kept cards survive expiry; the 40-card cap still applies.' +
         (info.missing ? ' · ' + info.missing + ' missing screenshot' + (info.missing === 1 ? '' : 's') : '');
+    }
+    if (ui.trophyClean) {
+      var cleanable = allForProf.filter(function (r) { return r.blob && !r.cleanedAt; }).length;
+      ui.trophyClean.disabled = trophyCleanBusy || !cleanable;
+      ui.trophyClean.title = cleanable
+        ? 'clean ' + cleanable + ' saved card image' + (cleanable === 1 ? '' : 's') + '; originals are kept for restore'
+        : 'all saved card images are already clean';
+    }
+    if (ui.trophyRestore) {
+      var backups = allForProf.filter(function (r) { return r.backupBlob; }).length;
+      ui.trophyRestore.disabled = trophyCleanBusy || !backups;
+      ui.trophyRestore.title = backups
+        ? 'restore ' + backups + ' original card image' + (backups === 1 ? '' : 's')
+        : 'no original card images to restore';
     }
     var rows = allForProf.filter(function (r) {
       return matchesTrophyFilter(r, trophyFilter);
@@ -9062,6 +9233,9 @@ const SPECIES = [
     '.trophy-list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:5px;padding-right:4px}',
     '.trophy-foot{display:flex;align-items:center;justify-content:space-between;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:#8b95a0}',
     '.trophy-hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.trophy-actions{display:flex;align-items:center;gap:1px;flex:none}',
+    '.trophy-actions .icon{font-size:9px;padding:2px 4px}',
+    '.trophy-actions .icon:disabled{opacity:.3;cursor:default}',
     '.trophy-item{width:100%;font:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:6px;color:inherit}',
     '.trophy-item:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18)}',
     '.trophy-thumb{width:46px;height:52px;flex:none;border-radius:6px;background:rgba(0,0,0,.32);border:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;overflow:hidden}',
@@ -9441,11 +9615,22 @@ const SPECIES = [
     trophyStatus.setAttribute('aria-live', 'polite');
     var trophyFoot = el('div', 'trophy-foot');
     var trophyHint = el('span', 'trophy-hint', 'Auto-expires after 24h');
+    var trophyActions = el('div', 'trophy-actions');
+    var trophyClean = el('button', 'icon csv trophy-clean', 'clean');
+    trophyClean.type = 'button';
+    trophyClean.setAttribute('aria-label', 'Clean saved trophy card images');
+    trophyClean.title = 'remove detached sparkles from saved cards; originals are kept for restore';
+    var trophyRestore = el('button', 'icon csv trophy-restore', 'restore');
+    trophyRestore.type = 'button';
+    trophyRestore.setAttribute('aria-label', 'Restore original saved trophy card images');
+    trophyRestore.title = 'restore the original PNGs saved before cleanup';
+    trophyRestore.disabled = true;
     var trophyClear = el('button', 'icon csv danger', 'clear');
     trophyClear.type = 'button';
     trophyClear.setAttribute('aria-label', 'Clear saved trophy cards for this profile');
     trophyClear.title = 'click twice to clear saved trophy cards for this profile';
-    trophyFoot.append(trophyHint, trophyClear);
+    trophyActions.append(trophyClean, trophyRestore, trophyClear);
+    trophyFoot.append(trophyHint, trophyActions);
     trophyPop.append(trophyHead, trophyTabsWrap, trophyStatus, trophyList, trophyFoot);
 
     var inlinePrompt = el('div', 'inline-prompt hide');
@@ -9520,7 +9705,8 @@ const SPECIES = [
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
-      trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyHint: trophyHint, trophyClear: trophyClear,
+      trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyHint: trophyHint,
+      trophyClear: trophyClear, trophyClean: trophyClean, trophyRestore: trophyRestore,
       trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage, trophyLbPrev: trophyLbPrev, trophyLbNext: trophyLbNext, trophyLbMeta: trophyLbMeta, trophyLbKeep: trophyLbKeep, trophyLbClose: trophyLbClose,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
@@ -9870,6 +10056,23 @@ const SPECIES = [
           first.focus();
         }
       }
+    });
+    trophyClean.addEventListener('click', function () {
+      if (trophyCleanBusy) return;
+      if (Date.now() > cleanConfirmUntil) {
+        cleanConfirmUntil = Date.now() + 3000;
+        trophyClean.textContent = 'clean?';
+        trophyClean.classList.add('armed');
+        if (cleanConfirmTimer) clearTimeout(cleanConfirmTimer);
+        cleanConfirmTimer = setTimeout(resetCleanConfirm, 3000);
+        return;
+      }
+      resetCleanConfirm();
+      cleanSavedTrophies(profileName());
+    });
+    trophyRestore.addEventListener('click', function () {
+      if (trophyCleanBusy) return;
+      restoreTrophyOriginals(profileName());
     });
     trophyClear.addEventListener('click', function () {
       if (Date.now() > clearConfirmUntil) {
