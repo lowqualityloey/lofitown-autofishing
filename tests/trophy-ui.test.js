@@ -170,3 +170,52 @@ test('the Event empty state and tab counts are wired into the viewer', () => {
   assert.ok(src.includes('All-time ledger: '), 'ledger context is explicitly all-time');
   assert.ok(src.includes("btn.dataset.label = spec.label"), 'tabs keep a stable label when counts update');
 });
+
+function listHelpers() {
+  const start = src.indexOf('function trophyWeightKg(');
+  const end = src.indexOf('async function renderTrophyPop(');
+  assert.ok(start > 0 && end > start, 'list helpers have stable boundaries');
+  const sandbox = {
+    window: { AutoFishLedger: { parseWeightKg: (text) => {
+      const m = /([0-9]+(?:\.[0-9]+)?)\s*(kg|g|t|lb)\b/i.exec(text);
+      if (!m) return null;
+      const n = Number(m[1]);
+      return m[2].toLowerCase() === 'g' ? n / 1000 : m[2].toLowerCase() === 't' ? n * 1000 : n;
+    } } },
+  };
+  vm.runInNewContext(src.slice(start, end) + '\nthis.api = { trophyWeightKg, sortTrophyRows, groupTrophyRows };', sandbox);
+  return sandbox.api;
+}
+
+test('trophy sort and grouping keep every record reachable', () => {
+  const { trophyWeightKg, sortTrophyRows, groupTrophyRows } = listHelpers();
+  const rows = [
+    { id: 'a', species: 'Tuna', rarity: 'Epic', weight: '2 kg', at: 10, blob: {} },
+    { id: 'b', species: 'Tuna', rarity: 'Epic', weight: '5 kg', at: 20, blob: null },
+    { id: 'c', species: 'Sardine', rarity: 'Legendary', weight: '850 g', at: 30, blob: {} },
+    { id: 'd', species: 'Tuna', rarity: 'Epic', weight: '5 kg', at: 20, shiny: true, blob: {} },
+  ];
+  assert.equal(trophyWeightKg(rows[0]), 2);
+  assert.equal(trophyWeightKg(rows[2]), 0.85);
+  assert.equal(sortTrophyRows(rows, 'newest').map((r) => r.id).join(','), 'c,b,d,a');
+  assert.equal(sortTrophyRows(rows, 'weight').map((r) => r.id).join(','), 'b,d,a,c');
+  assert.equal(sortTrophyRows(rows, 'rarity')[0].id, 'c', 'Legendary sorts ahead of Epic');
+  const groups = groupTrophyRows(sortTrophyRows(rows, 'newest'));
+  assert.equal(groups.length, 3, 'same species + rarity + variant is one group');
+  assert.equal(groups[0].species, 'Sardine');
+  const tuna = groups.find((g) => g.species === 'Tuna' && !g.rec.shiny);
+  assert.equal(tuna.count, 2);
+  assert.equal(tuna.records.map((r) => r.id).join(','), 'b,a', 'group records stay in visible order');
+  assert.equal(groups.find((g) => g.species === 'Tuna' && g.rec.shiny).count, 1);
+});
+
+test('the trophy list exposes search, sort, and grouped navigation', () => {
+  assert.ok(src.includes("el('input', 'trophy-search')"), 'the search field exists');
+  assert.ok(src.includes("el('select', 'sel trophy-sort')"), 'the sort control exists');
+  assert.ok(src.includes("trophyToolbar.append(trophySearch, trophySortSel)"), 'the toolbar is compact and ordered');
+  assert.ok(src.includes("trophySearch.addEventListener('input'"), 'typing re-renders the list');
+  assert.ok(src.includes("trophySortSel.addEventListener('change'"), 'sort changes re-render the list');
+  assert.match(src, /groupTrophyRows\(rows\)/, 'render groups duplicate cards');
+  assert.match(src, /trophyCurrentRows = group\.records\.slice\(\)/, 'a group opens its complete card sequence');
+  assert.match(src, /'×' \+ group\.count/, 'the row exposes the group size');
+});

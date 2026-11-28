@@ -63,6 +63,8 @@
   var trophyCounts = { total: 0, missing: 0, Legendary: 0, Secret: 0, variant: 0, kept: 0, cap: TROPHY_CAP, slots: TROPHY_CAP, oldestAt: null, nextExpiryAt: null, evictAt: null };
   var trophyPopOpen = false;
   var trophyFilter = 'all';
+  var trophyQuery = '';
+  var trophySort = 'newest';
   /** @type {string[]} */
   var trophyUrls = [];
   /** @type {any[]} */
@@ -1719,6 +1721,66 @@
     return 'No saved trophy cards in the last 24h.';
   }
 
+  function trophyWeightKg(rec) {
+    var text = String(rec && rec.weight || '');
+    try {
+      var ledger = window.AutoFishLedger;
+      if (ledger && typeof ledger.parseWeightKg === 'function') {
+        var parsed = ledger.parseWeightKg(text);
+        if (typeof parsed === 'number' && isFinite(parsed)) return parsed;
+      }
+    } catch (e) {}
+    var m = /([0-9]+(?:\.[0-9]+)?)\s*(kg|g|t|lb)\b/i.exec(text);
+    if (!m) return -1;
+    var n = Number(m[1]);
+    var unit = String(m[2]).toLowerCase();
+    if (!isFinite(n)) return -1;
+    if (unit === 'g') return n / 1000;
+    if (unit === 't') return n * 1000;
+    if (unit === 'lb') return n * 0.45359237;
+    return n;
+  }
+
+  function trophyRarityRank(rec) {
+    var order = { Common: 0, Uncommon: 1, Rare: 2, Epic: 3, Legendary: 4, Secret: 5, Halloween: 6, Christmas: 7 };
+    return order[rec && rec.rarity] != null ? order[rec.rarity] : -1;
+  }
+
+  function sortTrophyRows(rows, sort) {
+    var copy = (Array.isArray(rows) ? rows : []).slice();
+    copy.sort(function (a, b) {
+      var diff = 0;
+      if (sort === 'rarity') diff = trophyRarityRank(b) - trophyRarityRank(a);
+      else if (sort === 'weight') diff = trophyWeightKg(b) - trophyWeightKg(a);
+      else diff = (Number(b && b.at) || 0) - (Number(a && a.at) || 0);
+      if (diff) return diff;
+      return (Number(b && b.at) || 0) - (Number(a && a.at) || 0);
+    });
+    return copy;
+  }
+
+  function groupTrophyRows(rows) {
+    /** @type {any[]} */
+    var groups = [];
+    var seen = {};
+    (Array.isArray(rows) ? rows : []).forEach(function (rec) {
+      if (!rec) return;
+      var key = String(rec.species || '') + '|' + String(rec.rarity || '') +
+        '|' + (rec.shiny ? 'shiny' : '') + '|' + (rec.golden ? 'golden' : '');
+      if (!seen[key]) {
+        seen[key] = { key: key, records: [], species: rec.species || 'Unknown' };
+        groups.push(seen[key]);
+      }
+      seen[key].records.push(rec);
+    });
+    groups.forEach(function (group) {
+      group.records.sort(function (a, b) { return (Number(b.at) || 0) - (Number(a.at) || 0); });
+      group.count = group.records.length;
+      group.rec = group.records[0];
+    });
+    return groups;
+  }
+
   async function renderTrophyPop() {
     if (!ui.trophyPop || !ui.trophyList || !trophyPopOpen) return;
     revokeTrophyUrls();
@@ -1762,19 +1824,27 @@
     var rows = allForProf.filter(function (r) {
       return matchesTrophyFilter(r, trophyFilter);
     });
+    var query = String(trophyQuery || '').trim().toLowerCase();
+    if (query) rows = rows.filter(function (r) { return String(r.species || '').toLowerCase().indexOf(query) >= 0; });
+    rows = sortTrophyRows(rows, trophySort);
+    var groups = groupTrophyRows(rows);
     if (!trophyPopOpen || !ui.trophyList) return;
     trophyCurrentRows = rows;
     ui.trophyList.textContent = '';
     if (!rows.length) {
-      ui.trophyList.appendChild(el('div', 'trophy-empty', trophyEmptyText(trophyFilter, eventLedgerCounts())));
+      var empty = query
+        ? 'No saved trophy cards match “' + String(trophyQuery || '').trim() + '”.'
+        : trophyEmptyText(trophyFilter, eventLedgerCounts());
+      ui.trophyList.appendChild(el('div', 'trophy-empty', empty));
       place();
       return;
     }
-    rows.forEach(function (rec, idx) {
+    groups.forEach(function (group) {
+      var rec = group.rec;
       var item = /** @type {HTMLButtonElement} */ (el('button', 'trophy-item'));
       item.type = 'button';
-      item.setAttribute('aria-label', 'Preview ' + rec.species + (rec.rarity ? ' (' + rec.rarity + ')' : '') + ' catch card');
-      item.title = 'Click to view full card preview';
+      item.setAttribute('aria-label', 'Preview ' + rec.species + (rec.rarity ? ' (' + rec.rarity + ')' : '') + ' catch card' + (group.count > 1 ? '; ' + group.count + ' in this group' : ''));
+      item.title = 'Click to view full card preview' + (group.count > 1 ? ' · ' + group.count + ' cards in this group' : '');
       var thumb = el('div', rec.golden ? 'trophy-thumb golden' : 'trophy-thumb');
       if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
         var img = document.createElement('img');
@@ -1804,12 +1874,14 @@
       info.appendChild(el('div', 'trophy-name', rec.species));
       var badges = el('div', 'trophy-badges');
       buildTrophyBadges(rec, badges);
+      if (group.count > 1) badges.appendChild(el('span', 'trophy-badge trophy-count', '×' + group.count));
       if (badges.childNodes.length) info.appendChild(badges);
       var sub = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : ''].filter(Boolean).join(' · ');
       info.appendChild(el('div', 'trophy-sub', sub || 'captured trophy'));
       item.appendChild(info);
       item.addEventListener('click', function () {
-        openTrophyLightbox(idx, item);
+        trophyCurrentRows = group.records.slice();
+        openTrophyLightbox(0, item);
       });
       ui.trophyList.appendChild(item);
     });
@@ -2185,8 +2257,14 @@
     '.trophy-head{display:flex;align-items:center;gap:6px}',
     '.trophy-title{flex:1;font-weight:600;font-size:11.5px;color:#e8ecef}',
     '.trophy-tabs{display:flex;flex-wrap:wrap;gap:4px}',
-    '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:var(--af-muted);font:inherit;font-size:10px;padding:4px 8px;min-height:24px;border-radius:99px;cursor:pointer}',
+    '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:var(--af-muted);font:inherit;font-size:9.5px;padding:4px 7px;min-height:24px;border-radius:99px;cursor:pointer}',
     '.trophy-tab.active{background:rgba(90,209,139,.18);color:#5ad18b}',
+    '.trophy-toolbar{display:flex;align-items:center;gap:4px}',
+    '.trophy-search{flex:1;min-width:0;box-sizing:border-box;background:rgba(12,16,20,.92);border:1px solid rgba(255,255,255,.14);border-radius:7px;color:var(--af-text);font:inherit;font-size:10.5px;padding:4px 7px;min-height:24px;outline:none}',
+    '.trophy-search:focus{border-color:var(--af-accent)}',
+    '.trophy-search::placeholder{color:#6f7983}',
+    '.trophy-sort{flex:none;max-width:78px;font-size:10px}',
+    '.trophy-count{color:#cfd6dd;border-color:rgba(255,255,255,.18)}',
     '.trophy-list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:5px;padding-right:4px}',
     '.trophy-foot{display:flex;align-items:center;justify-content:space-between;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:#8b95a0}',
     '.trophy-hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -2568,6 +2646,23 @@
       trophyTabsWrap.appendChild(btn);
       return btn;
     });
+    var trophyToolbar = el('div', 'trophy-toolbar');
+    var trophySearch = /** @type {HTMLInputElement} */ (el('input', 'trophy-search'));
+    trophySearch.type = 'search';
+    trophySearch.placeholder = 'find species';
+    trophySearch.autocomplete = 'off';
+    trophySearch.spellcheck = false;
+    trophySearch.setAttribute('aria-label', 'Find trophy cards by species');
+    var trophySortSel = /** @type {HTMLSelectElement} */ (el('select', 'sel trophy-sort'));
+    trophySortSel.setAttribute('aria-label', 'Sort trophy cards');
+    [['newest', 'Newest'], ['rarity', 'Rarity'], ['weight', 'Weight']].forEach(function (opt) {
+      var o = document.createElement('option');
+      o.value = opt[0];
+      o.textContent = opt[1];
+      trophySortSel.appendChild(o);
+    });
+    trophySortSel.value = trophySort;
+    trophyToolbar.append(trophySearch, trophySortSel);
     var trophyList = el('div', 'trophy-list');
     var trophyStatus = el('div', 'trophy-status hide', '');
     trophyStatus.setAttribute('role', 'status');
@@ -2590,7 +2685,7 @@
     trophyClear.title = 'click twice to clear saved trophy cards for this profile';
     trophyActions.append(trophyClean, trophyRestore, trophyClear);
     trophyFoot.append(trophyHint, trophyActions);
-    trophyPop.append(trophyHead, trophyTabsWrap, trophyStatus, trophyList, trophyFoot);
+    trophyPop.append(trophyHead, trophyTabsWrap, trophyToolbar, trophyStatus, trophyList, trophyFoot);
 
     var inlinePrompt = el('div', 'inline-prompt hide');
     var inlinePromptMsg = el('div', 'inline-prompt-msg', '');
@@ -2665,6 +2760,7 @@
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
       trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyHint: trophyHint,
+      trophySearch: trophySearch, trophySortSel: trophySortSel,
       trophyClear: trophyClear, trophyClean: trophyClean, trophyRestore: trophyRestore,
       trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage, trophyLbPrev: trophyLbPrev, trophyLbNext: trophyLbNext, trophyLbMeta: trophyLbMeta, trophyLbKeep: trophyLbKeep, trophyLbClose: trophyLbClose,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
@@ -2920,6 +3016,14 @@
       try { if (ui.logTrophiesBtn) ui.logTrophiesBtn.focus(); } catch (e) {}
     }
     trophyClose.addEventListener('click', closePopWithFocus);
+    trophySearch.addEventListener('input', function () {
+      trophyQuery = trophySearch.value;
+      renderTrophyPop();
+    });
+    trophySortSel.addEventListener('change', function () {
+      trophySort = trophySortSel.value || 'newest';
+      renderTrophyPop();
+    });
     trophyLbMeta.addEventListener('click', function (e) { e.stopPropagation(); });
     trophyLbKeep.addEventListener('click', function (e) {
       e.stopPropagation();
