@@ -1565,6 +1565,32 @@
     } catch (e) {}
   }
 
+  function trophyMissingDetails(rec, note) {
+    var normalized = rec && typeof rec === 'object' ? rec : {};
+    var why = normalized.captureError
+      ? String(normalized.captureError)
+      : (!normalized.blob ? 'Captured before failure reasons were recorded.' : '');
+    return { note: note || 'No card screenshot saved', why: why };
+  }
+
+  function trophyMissingNode(rec, note) {
+    var detail = trophyMissingDetails(rec, note);
+    var fallbackEl = el('div', 'trophy-lb-missing');
+    fallbackEl.setAttribute('role', 'img');
+    fallbackEl.setAttribute('aria-label', (rec && rec.species ? rec.species : 'Trophy') + ' catch card unavailable');
+    fallbackEl.appendChild(el('div', 'trophy-lb-missing-label', (rec && rec.species) || 'Trophy'));
+    fallbackEl.appendChild(el('div', 'trophy-lb-missing-note', detail.note));
+    if (detail.why) fallbackEl.appendChild(el('div', 'trophy-lb-missing-why', detail.why));
+    return fallbackEl;
+  }
+
+  function trophyMissingThumb(thumb, rec, note) {
+    var detail = trophyMissingDetails(rec, note);
+    thumb.textContent = '';
+    thumb.appendChild(el('span', 'trophy-none', '▧'));
+    thumb.title = detail.note + (detail.why ? ' · ' + detail.why : '');
+  }
+
   function buildTrophyBadges(rec, container) {
     /** @param {string} text @param {string} color */
     function addBadge(text, color) {
@@ -1619,15 +1645,16 @@
         trophyLightboxUrl = URL.createObjectURL(rec.blob);
         img.src = trophyLightboxUrl;
         img.alt = rec.species + ' catch card';
+        img.onerror = function () {
+          revokeLightboxUrl();
+          if (trophyLightboxOpen && ui.trophyLbStage) {
+            ui.trophyLbStage.textContent = '';
+            ui.trophyLbStage.appendChild(trophyMissingNode(rec, 'Card screenshot could not be read.'));
+          }
+        };
         ui.trophyLbStage.appendChild(img);
       } else {
-        var fallbackEl = el('div', 'trophy-lb-missing');
-        fallbackEl.setAttribute('role', 'img');
-        fallbackEl.setAttribute('aria-label', rec.species + ' catch card unavailable');
-        fallbackEl.appendChild(el('div', 'trophy-lb-missing-label', rec.species));
-        fallbackEl.appendChild(el('div', 'trophy-lb-missing-note', 'No card screenshot saved'));
-        if (rec.captureError) fallbackEl.appendChild(el('div', 'trophy-lb-missing-why', String(rec.captureError)));
-        ui.trophyLbStage.appendChild(fallbackEl);
+        ui.trophyLbStage.appendChild(trophyMissingNode(rec, 'No card screenshot saved'));
       }
     }
   }
@@ -1846,6 +1873,7 @@
       item.setAttribute('aria-label', 'Preview ' + rec.species + (rec.rarity ? ' (' + rec.rarity + ')' : '') + ' catch card' + (group.count > 1 ? '; ' + group.count + ' in this group' : ''));
       item.title = 'Click to view full card preview' + (group.count > 1 ? ' · ' + group.count + ' cards in this group' : '');
       var thumb = el('div', rec.golden ? 'trophy-thumb golden' : 'trophy-thumb');
+      var thumbBroken = false;
       if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
         var img = document.createElement('img');
         img.className = 'trophy-img';
@@ -1853,14 +1881,20 @@
         trophyUrls.push(objUrl);
         img.src = objUrl;
         img.alt = '';
+        img.onerror = function () {
+          thumbBroken = true;
+          try { URL.revokeObjectURL(objUrl); } catch (e) {}
+          var at = trophyUrls.indexOf(objUrl);
+          if (at >= 0) trophyUrls.splice(at, 1);
+          if (thumb.isConnected) trophyMissingThumb(thumb, rec, 'Card screenshot could not be read.');
+        };
         thumb.appendChild(img);
       } else {
-        thumb.title = 'No card screenshot saved';
-        thumb.appendChild(el('span', 'trophy-none', '▧'));
+        trophyMissingThumb(thumb, rec, 'No card screenshot saved');
       }
       if (rec.blob) {
         resolveTrophySprite(rec).then(function (spriteUrl) {
-          if (!spriteUrl || !trophyPopOpen || !thumb.isConnected) return;
+          if (!spriteUrl || thumbBroken || !trophyPopOpen || !thumb.isConnected) return;
           thumb.textContent = '';
           var sp = document.createElement('img');
           sp.className = 'trophy-img trophy-sprite';

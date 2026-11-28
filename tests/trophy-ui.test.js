@@ -219,3 +219,35 @@ test('the trophy list exposes search, sort, and grouped navigation', () => {
   assert.match(src, /trophyCurrentRows = group\.records\.slice\(\)/, 'a group opens its complete card sequence');
   assert.match(src, /'×' \+ group\.count/, 'the row exposes the group size');
 });
+
+function missingHelper() {
+  const start = src.indexOf('function trophyMissingDetails(');
+  const end = src.indexOf('function trophyMissingNode(');
+  assert.ok(start > 0 && end > start, 'missing-card helper has a stable boundary');
+  const sandbox = {};
+  vm.runInNewContext(src.slice(start, end) + '\nthis.api = trophyMissingDetails;', sandbox);
+  return sandbox.api;
+}
+
+test('missing-card copy distinguishes absent, legacy and unreadable images', () => {
+  const details = missingHelper();
+  const legacy = details({ species: 'Tuna' });
+  assert.equal(legacy.note, 'No card screenshot saved');
+  assert.equal(legacy.why, 'Captured before failure reasons were recorded.');
+  const known = details({ species: 'Tuna', captureError: 'no-png' });
+  assert.equal(known.why, 'no-png');
+  const unreadable = details({ species: 'Tuna', blob: {} }, 'Card screenshot could not be read.');
+  assert.equal(unreadable.note, 'Card screenshot could not be read.');
+  assert.equal(unreadable.why, '', 'an unreadable blob is not called a legacy capture');
+});
+
+test('unreadable cards fall back instead of showing a broken image', () => {
+  assert.match(src, /function trophyMissingNode\(rec, note\)/, 'the lightbox has one shared missing renderer');
+  assert.match(src, /function trophyMissingThumb\(thumb, rec, note\)/, 'list thumbnails use the same detail source');
+  assert.match(src, /img\.onerror = function \(\) \{[\s\S]{0,260}?trophyMissingNode\(rec, 'Card screenshot could not be read\.'\)/, 'the lightbox replaces a decode failure with the card placeholder');
+  assert.match(src, /img\.onerror = function \(\) \{[\s\S]{0,360}?trophyMissingThumb\(thumb, rec, 'Card screenshot could not be read\.'\)/, 'the list replaces a decode failure with the placeholder');
+  assert.ok(src.includes('thumbBroken'), 'a later sprite cannot overwrite the failure fallback');
+  assert.ok(src.includes('Captured before failure reasons were recorded.'), 'legacy records are explained');
+  assert.ok(src.includes('trophy-lb-missing-why'), 'the stored failure reason remains visible');
+  assert.ok(!src.includes('Download PNG'), 'Phase 5B export remains deferred');
+});

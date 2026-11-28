@@ -608,8 +608,10 @@ test('missing trophy cards get a card-shaped placeholder and a stored reason, ne
   assert.match(src, /trophy-lb-foot/, 'close control sits outside the metadata pill');
   assert.match(src, /trophy-lb-missing-note/);
   const lb = src.slice(src.indexOf('function renderTrophyLightbox('), src.indexOf('function openTrophyLightbox('));
+  const missing = src.slice(src.indexOf('function trophyMissingDetails('), src.indexOf('function buildTrophyBadges('));
   assert.match(lb, /No card screenshot saved/);
-  assert.match(lb, /trophy-lb-missing-label/);
+  assert.match(lb, /trophyMissingNode/, 'the lightbox uses the shared missing renderer');
+  assert.match(missing, /trophy-lb-missing-label/);
   assert.doesNotMatch(lb, /resolveTrophySprite/, 'the lightbox never substitutes a naked sprite for a missing card');
 });
 
