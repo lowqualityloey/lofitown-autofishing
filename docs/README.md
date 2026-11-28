@@ -29,6 +29,7 @@
 | [tasks/TASK-2026-11-28-daily-missions-scoping.scope-1.md](tasks/TASK-2026-11-28-daily-missions-scoping.scope-1.md) | Scope change record: added the docs index rows this suite requires for the missions-scoping task record. |
 | [tasks/TASK-2026-11-28-missions-awareness-d1.md](tasks/TASK-2026-11-28-missions-awareness-d1.md) | Task record for read-only daily-mission awareness (D1): Quests DOM parser, folded panel section, capture snapshot, and `/dashboard` display. |
 | [tasks/TASK-2026-11-28-missions-claim-d2.md](tasks/TASK-2026-11-28-missions-claim-d2.md) | Task record for mission auto-claim awareness & handling (D2): pure exact-match claim planner, opt-in guarded claim pass (HARD-1 stand-downs), additive capture/dashboard claim state. |
+| [tasks/TASK-2026-11-28-trophy-event-ui-followups.md](tasks/TASK-2026-11-28-trophy-event-ui-followups.md) | Task record for trophy retention/Keep, reversible saved-card cleanup, Event context, list triage, and unreadable-card resilience. |
 | [reviews/2026-10-27-panel-verification.md](reviews/2026-10-27-panel-verification.md) | Panel verification review: observed versus reasoned. |
 | [reviews/2026-11-18-capture-address-live.md](reviews/2026-11-18-capture-address-live.md) | Live verification of capture arming and stale-address correction in the real game, with the closed shadow root and the failed-POST bug. |
 | [reviews/2026-11-23-catch-and-focus-live.md](reviews/2026-11-23-catch-and-focus-live.md) | Live verification of the rebuilt userscript's catch POST, focus takeover, seat warning and next catch. |

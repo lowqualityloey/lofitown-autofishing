@@ -7160,7 +7160,7 @@ const SPECIES = [
   var updateChecking = false;
   /** @type {number | null} */
   var resultMissingSince = null;
-  var trophyCounts = { total: 0, missing: 0, Legendary: 0, Secret: 0, variant: 0 };
+  var trophyCounts = { total: 0, missing: 0, Legendary: 0, Secret: 0, variant: 0, kept: 0, cap: TROPHY_CAP, slots: TROPHY_CAP, oldestAt: null, nextExpiryAt: null, evictAt: null };
   var trophyPopOpen = false;
   var trophyFilter = 'all';
   /** @type {string[]} */
@@ -7173,6 +7173,12 @@ const SPECIES = [
   var trophyLightboxUrl = null;
   /** @type {HTMLElement | null} */
   var trophyLightboxReturnEl = null;
+  /** @type {number | null} */
+  var trophyStatusTimer = null;
+  var cleanConfirmUntil = 0;
+  /** @type {number | null} */
+  var cleanConfirmTimer = null;
+  var trophyCleanBusy = false;
   /** @type {number | null} */
   var tickTimer = null;
   /** @type {number | null} */
@@ -8098,6 +8104,66 @@ const SPECIES = [
     });
   }
 
+  /** kept cards leave the 24h TTL alone; the hard cap still applies. */
+  function trophyEvictionRank(rec) {
+    if (rec && rec.keep) return 2;
+    return rec && isRareChimeRow(rec) ? 1 : 0;
+  }
+
+  function trophyEvictionOrder(a, b) {
+    var pa = trophyEvictionRank(a), pb = trophyEvictionRank(b);
+    if (pa !== pb) return pa - pb;
+    return (Number(a && a.at) || 0) - (Number(b && b.at) || 0);
+  }
+
+  /** Count, retention boundary and likely next eviction for one profile. */
+  function trophyRetention(rows, now) {
+    var list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    var kept = 0, missing = 0, oldestAt = null, nextExpiryAt = null;
+    list.forEach(function (rec) {
+      if (rec.keep) kept++;
+      if (!rec.blob) missing++;
+      if (typeof rec.at === 'number' && isFinite(rec.at)) {
+        if (oldestAt == null || rec.at < oldestAt) oldestAt = rec.at;
+        if (!rec.keep) {
+          var expiry = rec.at + TROPHY_TTL_MS;
+          if (nextExpiryAt == null || expiry < nextExpiryAt) nextExpiryAt = expiry;
+        }
+      }
+    });
+    var ordered = list.slice().sort(trophyEvictionOrder);
+    return {
+      total: list.length,
+      cap: TROPHY_CAP,
+      slots: Math.max(0, TROPHY_CAP - list.length),
+      kept: kept,
+      missing: missing,
+      oldestAt: oldestAt,
+      nextExpiryAt: nextExpiryAt,
+      evictAt: list.length >= TROPHY_CAP && ordered.length ? ordered[0] : null,
+    };
+  }
+
+  function trophySpan(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms) || ms <= 0) return 'soon';
+    var mins = Math.ceil(ms / 60000);
+    if (mins < 60) return mins + 'm';
+    var hours = Math.floor(mins / 60), rest = mins % 60;
+    return hours + 'h' + (rest ? ' ' + rest + 'm' : '');
+  }
+
+  function trophyRetentionText(info, now) {
+    if (!info || !info.total) return '0/' + TROPHY_CAP + ' saved · cards expire after 24h';
+    var parts = [info.total + '/' + info.cap + ' saved'];
+    if (info.kept) parts.push(info.kept + ' kept');
+    if (info.evictAt) parts.push('next capture evicts ' + (info.evictAt.species || 'the oldest'));
+    else if (info.slots === 1) parts.push('1 slot left');
+    else parts.push(info.slots + ' slots left');
+    if (info.nextExpiryAt != null) parts.push('oldest expires in ' + trophySpan(info.nextExpiryAt - now));
+    if (info.missing) parts.push(info.missing + ' missing');
+    return parts.join(' · ');
+  }
+
   /**
    * Run one IndexedDB readwrite operation against the trophy store and always close the DB handle.
    * @template T
@@ -8134,19 +8200,17 @@ const SPECIES = [
           /** @type {any[]} */
           var keptForProf = [];
           all.forEach(function (rec) {
-            if (!rec || typeof rec.at !== 'number' || rec.at < cutoff) {
+            if (!rec) return;
+            var expired = typeof rec.at !== 'number' || rec.at < cutoff;
+            if (!rec.keep && expired) {
               try { store.delete(rec.id); } catch (e) {}
             } else if ((rec.profile || 'default') === prof) {
               keptForProf.push(rec);
             }
           });
-          // Evict plain Epic cards oldest-first so a burst of Epics never drops Legendary/Secret/Shiny/Golden trophies.
-          keptForProf.sort(function (a, b) {
-            var pa = isRareChimeRow(a) ? 1 : 0;
-            var pb = isRareChimeRow(b) ? 1 : 0;
-            if (pa !== pb) return pa - pb;
-            return a.at - b.at;
-          });
+          // Ordinary cards evict first, then rare/variant cards, then kept cards. A kept card
+          // survives the 24h TTL, but the hard cap still has the final say.
+          keptForProf.sort(trophyEvictionOrder);
           while (keptForProf.length > TROPHY_CAP) {
             var oldest = keptForProf.shift();
             try { store.delete(oldest.id); } catch (e) {}
@@ -8223,15 +8287,45 @@ const SPECIES = [
 
   async function refreshTrophyCounts() {
     var rows = await listTrophyCards(profileName());
-    var next = { total: rows.length, missing: 0, Legendary: 0, Secret: 0, variant: 0 };
+    var info = trophyRetention(rows, Date.now());
+    var next = { total: rows.length, missing: info.missing, Legendary: 0, Secret: 0, variant: 0,
+      kept: info.kept, cap: info.cap, slots: info.slots, oldestAt: info.oldestAt,
+      nextExpiryAt: info.nextExpiryAt, evictAt: info.evictAt };
     rows.forEach(function (r) {
-      if (!r.blob) next.missing++;
       if (r.rarity === 'Legendary') next.Legendary++;
       if (r.rarity === 'Secret') next.Secret++;
       if (r.shiny || r.golden) next.variant++;
     });
     trophyCounts = next;
     renderLog();
+  }
+
+  function showTrophyStatus(msg, ttlMs) {
+    if (!ui.trophyStatus) return;
+    ui.trophyStatus.textContent = msg;
+    ui.trophyStatus.classList.remove('hide');
+    if (trophyStatusTimer) clearTimeout(trophyStatusTimer);
+    trophyStatusTimer = null;
+    if (ttlMs && ttlMs > 0) {
+      trophyStatusTimer = setTimeout(function () {
+        if (trophyPopOpen && ui.trophyStatus) ui.trophyStatus.classList.add('hide');
+      }, ttlMs);
+    }
+  }
+
+  async function setTrophyKeep(rec, keep) {
+    if (!rec || !rec.id) return;
+    var next = !!keep;
+    await withTrophyStore(async function (store, tx) {
+      var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
+      store.put(Object.assign({}, rec, { keep: next }));
+      await txDone;
+    }, undefined);
+    rec.keep = next;
+    await refreshTrophyCounts();
+    if (trophyPopOpen) await renderTrophyPop();
+    if (trophyLightboxOpen) renderTrophyLightbox();
+    showTrophyStatus(next ? 'Kept — survives 24h expiry; the 40-card cap still applies.' : 'Kept card released to 24h expiry.', 5000);
   }
 
   function revokeTrophyUrls() {
@@ -8424,6 +8518,7 @@ const SPECIES = [
     if (rec.rarity) addBadge(rec.rarity, TIER_COLORS[rec.rarity] || '#aab4bf');
     if (rec.shiny) addBadge('Shiny', '#8be9fd');
     if (rec.golden) addBadge('Golden', '#ffd970');
+    if (rec.keep) addBadge('Kept', '#5ad18b');
   }
 
   function renderTrophyLightbox() {
@@ -8437,6 +8532,13 @@ const SPECIES = [
     if (ui.trophyLbPrev) ui.trophyLbPrev.classList.toggle('hide', rows.length <= 1);
     if (ui.trophyLbNext) ui.trophyLbNext.classList.toggle('hide', rows.length <= 1);
     var rareCls = rec.golden ? ' rare-gold' : (rec.rarity === 'Legendary' ? ' rare-leg' : (rec.rarity === 'Secret' ? ' rare-sec' : ''));
+    if (ui.trophyLbKeep) {
+      ui.trophyLbKeep.textContent = rec.keep ? 'Kept' : 'Keep';
+      ui.trophyLbKeep.setAttribute('aria-pressed', rec.keep ? 'true' : 'false');
+      ui.trophyLbKeep.title = rec.keep
+        ? 'Kept cards survive 24h expiry; the 40-card cap still applies. Click to release.'
+        : 'Keep this card past 24h; the 40-card cap still applies';
+    }
     if (ui.trophyLbMeta) {
       ui.trophyLbMeta.textContent = '';
       var spName = el('b', null, rec.species);
@@ -8444,7 +8546,8 @@ const SPECIES = [
       var lbBadges = el('div', 'trophy-badges');
       buildTrophyBadges(rec, lbBadges);
       if (lbBadges.childNodes.length) ui.trophyLbMeta.appendChild(lbBadges);
-      var details = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : '', (trophyLightboxIdx + 1) + ' of ' + rows.length].filter(Boolean);
+      var expiry = rec.keep ? 'kept' : (rec.at ? 'expires in ' + trophySpan(rec.at + TROPHY_TTL_MS - Date.now()) : '');
+      var details = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : '', expiry, (trophyLightboxIdx + 1) + ' of ' + rows.length].filter(Boolean);
       details.forEach(function (txt) {
         ui.trophyLbMeta.appendChild(el('span', 'trophy-lb-sep', '·'));
         ui.trophyLbMeta.appendChild(el('span', null, txt));
@@ -8522,10 +8625,11 @@ const SPECIES = [
     ui.trophyList.appendChild(el('div', 'trophy-empty', 'Loading trophy cards…'));
     var allForProf = await listTrophyCards(profileName());
     if (ui.trophyClear) ui.trophyClear.disabled = !allForProf.length;
-    var missing = allForProf.filter(function (r) { return !r.blob; }).length;
+    var info = trophyRetention(allForProf, Date.now());
     if (ui.trophyHint) {
-      ui.trophyHint.textContent = 'Auto-expires after 24h' +
-        (missing ? ' · ' + missing + ' missing screenshot' + (missing === 1 ? '' : 's') : '');
+      ui.trophyHint.textContent = trophyRetentionText(info, Date.now());
+      ui.trophyHint.title = 'Auto-expires after 24h. Kept cards survive expiry; the 40-card cap still applies.' +
+        (info.missing ? ' · ' + info.missing + ' missing screenshot' + (info.missing === 1 ? '' : 's') : '');
     }
     var rows = allForProf.filter(function (r) {
       return matchesTrophyFilter(r, trophyFilter);
@@ -8956,7 +9060,8 @@ const SPECIES = [
     '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:var(--af-muted);font:inherit;font-size:10px;padding:4px 8px;min-height:24px;border-radius:99px;cursor:pointer}',
     '.trophy-tab.active{background:rgba(90,209,139,.18);color:#5ad18b}',
     '.trophy-list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:5px;padding-right:4px}',
-    '.trophy-foot{display:flex;align-items:center;justify-content:space-between;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:#8b95a0}',
+    '.trophy-foot{display:flex;align-items:center;justify-content:space-between;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:#8b95a0}',
+    '.trophy-hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.trophy-item{width:100%;font:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:9px;padding:6px;color:inherit}',
     '.trophy-item:hover{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18)}',
     '.trophy-thumb{width:46px;height:52px;flex:none;border-radius:6px;background:rgba(0,0,0,.32);border:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;overflow:hidden}',
@@ -8988,6 +9093,8 @@ const SPECIES = [
     '.trophy-lb-meta b{min-width:0;overflow-wrap:anywhere}',
     '.trophy-lb-meta .trophy-badges{gap:4px}',
     '.trophy-lb-sep{color:var(--af-dim)}',
+    '.trophy-lb-keep{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:#cfd6dd;min-height:24px;padding:2px 8px;border-radius:99px;font:inherit;font-size:10px;cursor:pointer;flex:none}',
+    '.trophy-lb-keep[aria-pressed="true"]{background:rgba(90,209,139,.18);border-color:rgba(90,209,139,.45);color:#5ad18b}',
     '.trophy-lb-close{border:0;background:rgba(255,255,255,.10);color:#cfd6dd;width:24px;height:24px;border-radius:99px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;margin-left:2px}',
     '.trophy-lb-close:hover{background:rgba(255,255,255,.22);color:var(--af-text)}',
     '.trophy-lb-missing{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;width:min(76vw,300px);aspect-ratio:4/5;padding:24px;box-sizing:border-box;text-align:center;color:#cfd6dd;background:linear-gradient(160deg,rgba(34,39,47,.96),rgba(18,22,28,.96));border:2px dashed rgba(255,255,255,.18);border-radius:14px;box-shadow:0 18px 36px rgba(0,0,0,.55)}',
@@ -9332,10 +9439,8 @@ const SPECIES = [
     var trophyStatus = el('div', 'trophy-status hide', '');
     trophyStatus.setAttribute('role', 'status');
     trophyStatus.setAttribute('aria-live', 'polite');
-    /** @type {any} */
-    var trophyStatusTimer = null;
     var trophyFoot = el('div', 'trophy-foot');
-    var trophyHint = el('span', null, 'Auto-expires after 24h');
+    var trophyHint = el('span', 'trophy-hint', 'Auto-expires after 24h');
     var trophyClear = el('button', 'icon csv danger', 'clear');
     trophyClear.type = 'button';
     trophyClear.setAttribute('aria-label', 'Clear saved trophy cards for this profile');
@@ -9382,13 +9487,17 @@ const SPECIES = [
     trophyLbNext.setAttribute('aria-label', 'Next trophy card');
     trophyLbNext.title = 'Next (Right arrow)';
     var trophyLbMeta = el('div', 'trophy-lb-meta');
+    var trophyLbKeep = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-keep', 'Keep'));
+    trophyLbKeep.type = 'button';
+    trophyLbKeep.setAttribute('aria-label', 'Keep this trophy card past 24h expiry');
+    trophyLbKeep.setAttribute('aria-pressed', 'false');
     var trophyLbClose = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-close', '×'));
     trophyLbClose.type = 'button';
     trophyLbClose.setAttribute('aria-label', 'Close trophy preview');
     trophyLbClose.title = 'Close (Esc)';
     var trophyLbFoot = el('div', 'trophy-lb-foot');
     trophyLbRow.append(trophyLbPrev, trophyLbStage, trophyLbNext);
-    trophyLbFoot.append(trophyLbMeta, trophyLbClose);
+    trophyLbFoot.append(trophyLbMeta, trophyLbKeep, trophyLbClose);
     trophyLbShell.append(trophyLbRow, trophyLbFoot);
     trophyLightbox.appendChild(trophyLbShell);
 
@@ -9412,7 +9521,7 @@ const SPECIES = [
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
       trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyHint: trophyHint, trophyClear: trophyClear,
-      trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage, trophyLbPrev: trophyLbPrev, trophyLbNext: trophyLbNext, trophyLbMeta: trophyLbMeta, trophyLbClose: trophyLbClose,
+      trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage, trophyLbPrev: trophyLbPrev, trophyLbNext: trophyLbNext, trophyLbMeta: trophyLbMeta, trophyLbKeep: trophyLbKeep, trophyLbClose: trophyLbClose,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
 
@@ -9667,6 +9776,11 @@ const SPECIES = [
     }
     trophyClose.addEventListener('click', closePopWithFocus);
     trophyLbMeta.addEventListener('click', function (e) { e.stopPropagation(); });
+    trophyLbKeep.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var rec = trophyCurrentRows[trophyLightboxIdx];
+      if (rec) setTrophyKeep(rec, !rec.keep);
+    });
     trophyLbPrev.addEventListener('click', function (e) {
       e.stopPropagation();
       trophyLightboxIdx--;
