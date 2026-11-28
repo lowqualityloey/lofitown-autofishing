@@ -2,11 +2,11 @@
 
 <!-- Bounded projection: respect `state-guard:` thresholds in `PROMPTKIT.md`; `pk:checkpoint` archives completed history to `docs/STATE-ARCHIVE.md`. -->
 ## 1. Executive Summary & Current Position
-- **Project Name**: lofitown-autofishing (autofish 3.9.74: Self-contained dashboard polish + live `FISHSERVE_DASHBOARD` override and labelled fallback)
+- **Project Name**: lofitown-autofishing (autofish 3.9.75: Trophy retention, cleanup, search/grouping and capture polish)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — **v3.9.74** published: source and public mirror identical at 511,263 bytes / sha256 `3302b35b5340`; `tsc --noEmit` exit `0`, `476/476` unit tests pass; dashboard override and fallback smoke-tested on 8731.
+- **Overall Status**: ACTIVE — **v3.9.74** remains published at 511,263 bytes / sha256 `3302b35b5340` (release-time `476/476`; later `481/481`). **v3.9.75** is prepared locally: trophy retention/Keep, reversible saved-card cleanup, filter counts, search/sort/grouping, and stale-image/capture cleanup; 542,296 bytes / sha256 `dd6e0ad209c7e300949591945ca567fd5fcee04254f394f9d8d4e9fb9205690f`; `tsc --noEmit` exit `0`, `497/497` tests. No tag, mirror publish or push yet.
 - **Current Working Branch**: `main` (pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
-- **Last Updated**: 2026-11-28
+- **Last Updated**: 2026-11-29
 - **Engine Version**: v2.7.0 @ unknown
 - **Runtime**: Node v26.13.1 (WSL), zero dependencies, no bundler
 
@@ -136,6 +136,7 @@ Older decisions (2026-10-27–2026-11-17) are archived in `docs/STATE-ARCHIVE.md
 4. **Watch the for-anywhere prompt scan** for false positives on other white UI (name tags, chat bubbles) at untested window sizes.
 5. **Run the `v3.9.74` live in-game smoke test** on fullscreen viewports and verify intact postage stamps, bottom-safe accordion HUD, and Lightbox navigation/metadata pill.
 6. **Missions-bot follow-up (`TASK-2026-11-28-daily-missions-scoping`, signed off 2026-11-28 - D1 then D2).** M0 spike done (A1-A4 resolved; daily reset ≈08:00 UTC read from the DOM countdown, decoupled from local midnight); D1 implemented and signed off as `TASK-2026-11-28-missions-awareness-d1`; D2 auto-claim awareness/handling implemented under a fresh owner go as `TASK-2026-11-28-missions-claim-d2` (L2 Lite, `preset: solo-fast`): pure exact-match claim planner, opt-in (default off) guarded claim pass with HARD-1 stand-downs (focus session, Cozier upsell), additive panel/dashboard/capture claim state - signed off and committed locally 2026-11-28 (owner reply 'sign-off D2 commit'). A read-only live smoke passed 2026-11-28 (L1, §8); a live claim-action observation remains open (the game showed 0 claim controls — auto-grant). The Cozier focus-fishing paywall stays a hard constraint (detect + report, never bypass); the owner's Cozy/Cozier status and post-spike panel-restart fact remain unknown (recorded as unanswered in the D1 record).
+7. **Publish `v3.9.75` when authorized.** Tag, attach `dist/autofish.user.js` to the public dist mirror, run `node scripts/release.js --check`, and verify the stable install URL serves 3.9.75. Release prep is complete; do not tag, push, or publish without owner approval.
 
 ---
 

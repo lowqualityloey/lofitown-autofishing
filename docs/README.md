@@ -43,6 +43,7 @@
 
 | File | What it is |
 | :--- | :--- |
+| [releases/3.9.75.md](releases/3.9.75.md) | 3.9.75: Trophy retention/Keep, reversible saved-card cleanup, filter counts, species search/sort/grouping, visible-weight group ordering, and stale/unreadable card resilience. |
 | [releases/3.9.74.md](releases/3.9.74.md) | 3.9.74: Self-contained dashboard taste pass (system fonts, no Google Fonts) and `FISHSERVE_DASHBOARD` live override with a labelled amber fallback; userscript rebuild is version-only. |
 | [releases/3.9.73.md](releases/3.9.73.md) | 3.9.73: Full-stamp catch framing (`lastCardRect` exact bbox + `pb: 0.26`) and Phase 2 `$impeccable` HUD, Lightbox nav/pill, Dashboard profile filter, and Install polish. |
 | [releases/3.9.72.md](releases/3.9.72.md) | 3.9.72: Viewport-flexible centered `cardBox()`, DPR scaling, `maxInk: 0.46` rare-card acceptance, `fallbackCatchCard()` text backstop, and `castRetry` card guard. |
