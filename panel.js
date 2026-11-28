@@ -1667,20 +1667,77 @@
     return true;
   }
 
+  function trophyFilterCounts(rows) {
+    var counts = { all: 0, Epic: 0, Legendary: 0, Secret: 0, event: 0, variant: 0 };
+    (Array.isArray(rows) ? rows : []).forEach(function (rec) {
+      if (!rec) return;
+      counts.all++;
+      if (rec.rarity === 'Epic') counts.Epic++;
+      if (rec.rarity === 'Legendary') counts.Legendary++;
+      if (rec.rarity === 'Secret') counts.Secret++;
+      if (isEventRarity(rec.rarity)) counts.event++;
+      if (rec.shiny || rec.golden) counts.variant++;
+    });
+    return counts;
+  }
+
+  function trophyFilterName(filter) {
+    if (filter === 'Epic') return 'Epic trophy';
+    if (filter === 'Legendary') return 'Legendary trophy';
+    if (filter === 'Secret') return 'Secret trophy';
+    if (filter === 'event') return 'Halloween/Christmas';
+    if (filter === 'variant') return 'Shiny or Golden';
+    return 'trophy';
+  }
+
+  function eventLedgerCounts() {
+    var out = { Halloween: 0, Christmas: 0 };
+    try {
+      /** @type {any} */
+      var book = (fish() && fish().log) ? fish().log() : null;
+      /** @type {any[]} */
+      var rows = (book && Array.isArray(book.byRarity)) ? book.byRarity : [];
+      rows.forEach(function (r) {
+        if (r && Object.prototype.hasOwnProperty.call(out, r.rarity)) out[r.rarity] = r.n || 0;
+      });
+      return out;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function trophyEmptyText(filter, ledger) {
+    if (filter === 'event') {
+      var msg = 'No Halloween/Christmas cards saved in the last 24h. Event card capture starts with this build.';
+      if (ledger && (ledger.Halloween || ledger.Christmas)) {
+        msg += ' All-time ledger: ' + (ledger.Halloween || 0) + ' Halloween · ' + (ledger.Christmas || 0) + ' Christmas caught.';
+      }
+      return msg;
+    }
+    if (filter === 'variant') return 'No Shiny or Golden trophy cards saved in the last 24h.';
+    if (filter !== 'all') return 'No ' + trophyFilterName(filter) + ' cards saved in the last 24h.';
+    return 'No saved trophy cards in the last 24h.';
+  }
+
   async function renderTrophyPop() {
     if (!ui.trophyPop || !ui.trophyList || !trophyPopOpen) return;
     revokeTrophyUrls();
     if (ui.trophyTitle) ui.trophyTitle.textContent = 'Trophy cards (24h) · ' + profileName();
+    ui.trophyList.textContent = '';
+    ui.trophyList.appendChild(el('div', 'trophy-empty', 'Loading trophy cards…'));
+    var allForProf = await listTrophyCards(profileName());
+    var counts = trophyFilterCounts(allForProf);
     if (ui.trophyTabs) {
       ui.trophyTabs.forEach(function (btn) {
         var on = btn.dataset.filter === trophyFilter;
+        var n = counts[btn.dataset.filter] || 0;
+        var label = btn.dataset.label || btn.textContent || 'Trophy';
+        btn.textContent = label + ' ' + n;
+        btn.setAttribute('aria-label', 'Show ' + label + ' trophy cards (' + n + ')');
         btn.classList.toggle('active', on);
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
       });
     }
-    ui.trophyList.textContent = '';
-    ui.trophyList.appendChild(el('div', 'trophy-empty', 'Loading trophy cards…'));
-    var allForProf = await listTrophyCards(profileName());
     if (ui.trophyClear) ui.trophyClear.disabled = !allForProf.length;
     var info = trophyRetention(allForProf, Date.now());
     if (ui.trophyHint) {
@@ -1709,7 +1766,7 @@
     trophyCurrentRows = rows;
     ui.trophyList.textContent = '';
     if (!rows.length) {
-      ui.trophyList.appendChild(el('div', 'trophy-empty', 'No saved trophy cards in the last 24 hours.'));
+      ui.trophyList.appendChild(el('div', 'trophy-empty', trophyEmptyText(trophyFilter, eventLedgerCounts())));
       place();
       return;
     }
@@ -2502,6 +2559,8 @@
       var btn = /** @type {HTMLButtonElement} */ (el('button', 'trophy-tab', spec.label));
       btn.type = 'button';
       btn.dataset.filter = spec.id;
+      btn.dataset.label = spec.label;
+      btn.setAttribute('aria-label', 'Show ' + spec.label + ' trophy cards');
       btn.addEventListener('click', function () {
         trophyFilter = spec.id;
         renderTrophyPop();

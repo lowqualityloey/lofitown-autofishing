@@ -123,3 +123,50 @@ test('saved-card cleanup is opt-in, backed up and reversible', () => {
   assert.ok(src.includes("trophyRestore.addEventListener('click'"), 'the restore control is wired');
   assert.ok(src.includes('No original card images to restore.'), 'an empty restore is explained');
 });
+
+function filterHelpers() {
+  const start = src.indexOf('function trophyFilterCounts(');
+  const end = src.indexOf('async function renderTrophyPop(');
+  assert.ok(start > 0 && end > start, 'filter helpers have stable boundaries');
+  const sandbox = {
+    isEventRarity: (rarity) => rarity === 'Halloween' || rarity === 'Christmas',
+    fish: () => null,
+  };
+  vm.runInNewContext(src.slice(start, end) + '\nthis.api = { trophyFilterCounts, trophyFilterName, trophyEmptyText, eventLedgerCounts };', sandbox);
+  return sandbox.api;
+}
+
+test('filter counts keep every tab and empty state honest', () => {
+  const { trophyFilterCounts, trophyEmptyText } = filterHelpers();
+  const counts = trophyFilterCounts([
+    { rarity: 'Epic' },
+    { rarity: 'Legendary' },
+    { rarity: 'Halloween' },
+    { rarity: 'Christmas', shiny: true },
+    { rarity: 'Epic', blob: null },
+  ]);
+  assert.equal(counts.all, 5);
+  assert.equal(counts.Epic, 2);
+  assert.equal(counts.Legendary, 1);
+  assert.equal(counts.Secret, 0);
+  assert.equal(counts.event, 2);
+  assert.equal(counts.variant, 1);
+  assert.match(trophyEmptyText('Epic'), /No Epic trophy cards/);
+  assert.match(trophyEmptyText('Legendary'), /No Legendary trophy cards/);
+  assert.match(trophyEmptyText('Secret'), /No Secret trophy cards/);
+  assert.match(trophyEmptyText('variant'), /No Shiny or Golden/);
+  assert.match(trophyEmptyText('all'), /No saved trophy cards/);
+  const event = trophyEmptyText('event', { Halloween: 614, Christmas: 30 });
+  assert.match(event, /Event card capture starts with this build/);
+  assert.match(event, /All-time ledger: 614 Halloween · 30 Christmas caught/);
+  assert.equal(/All-time ledger/.test(trophyEmptyText('event', { Halloween: 0, Christmas: 0 })), false, 'no fake ledger line');
+});
+
+test('the Event empty state and tab counts are wired into the viewer', () => {
+  assert.match(src, /btn\.textContent = label \+ ' ' \+ n/, 'each tab renders its current count');
+  assert.match(src, /btn\.setAttribute\('aria-label', 'Show ' \+ label \+ ' trophy cards \(' \+ n \+ '\)'\)/, 'the count is in the accessible name');
+  assert.match(src, /trophyEmptyText\(trophyFilter, eventLedgerCounts\(\)\)/, 'empty renders use filter-aware copy');
+  assert.ok(src.includes('Event card capture starts with this build.'), 'the Event copy names the capture boundary');
+  assert.ok(src.includes('All-time ledger: '), 'ledger context is explicitly all-time');
+  assert.ok(src.includes("btn.dataset.label = spec.label"), 'tabs keep a stable label when counts update');
+});
