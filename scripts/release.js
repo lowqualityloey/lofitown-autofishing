@@ -95,6 +95,9 @@ const TRAILER_EXEMPT = {
   // The 3.9.63 tag was placed on the PR #33 merge commit after the source and mirror releases were
   // published, so adding the trailer would have meant moving a published tag. Backfilled by hand.
   'v3.9.63': 'tagged on merge commit c639a7f without the trailer; published 2026-11-24, so the tag cannot move; vault note logged 2026-11-25',
+  // 3.9.74 was tagged and its source release created before this gate ran, so the tag cannot move.
+  // The vault note was logged by hand on 2026-11-29; this entry records the exception.
+  'v3.9.74': 'published 2026-11-28 without the trailer; tag cannot move; vault note logged 2026-11-29',
 };
 
 function milestoneText(body) {
