@@ -3,10 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Overnight dashboard for the AutoFish userscript: catch rate, press acceptance, dial width bands, losses, missions and session history from local snapshots.">
+<meta name="theme-color" content="#0f1318">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f1318'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%235ad18b'/%3E%3C/svg%3E">
 <title>AutoFish Local Dashboard</title>
 <style>
+  /* Hallmark · polish · built: the project · redesign: polish · 2026-11-28 */
   :root {
     color-scheme: dark;
+    /* Self-contained stack: no webfont request, so the dashboard works offline. */
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --bg: #0f1318;
     --card: #161b22;
     --row-hover: rgba(255,255,255,.035);
@@ -20,57 +26,105 @@
     --sky: #8be9fd;
     --gold: #ffd970;
     --radius: 14px;
+    /* Tints lifted out of the rules, so a palette change happens in one place. */
+    --select-bg: rgba(90,209,139,.28);
+    --scroll-thumb: rgba(255,255,255,.16);
+    --scroll-thumb-hover: rgba(255,255,255,.26);
+    --accent-wash: rgba(90,209,139,.11);
+    --accent-line: rgba(90,209,139,.38);
+    --accent-tint: rgba(90,209,139,.16);
+    --accent-line-strong: rgba(90,209,139,.42);
+    --warn-wash: rgba(242,193,78,.11);
+    --warn-line: rgba(242,193,78,.38);
+    --warn-tag: rgba(242,193,78,.14);
+    --bad-wash: rgba(255,133,133,.11);
+    --bad-line: rgba(255,133,133,.38);
+    --notice-wash: rgba(255,133,133,.10);
+    --notice-line: rgba(255,133,133,.35);
+    --notice-text: #ffd6d6;
+    --control-bg: rgba(255,255,255,.05);
+    --control-bg-hover: rgba(255,255,255,.10);
+    --control-line-hover: rgba(255,255,255,.18);
+    --control-bg-active: rgba(255,255,255,.14);
+    --tag-bg: rgba(255,255,255,.07);
+    --epic: #b58cff;
+    --epic-tag: rgba(181,140,255,.16);
+    --pink-tag: rgba(255,143,163,.16);
+    --sky-tag: rgba(139,233,253,.14);
+    --gold-tag: rgba(255,217,112,.14);
   }
   * { box-sizing: border-box; }
-  html, .table-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.18) transparent; }
-  ::selection { background: rgba(90,209,139,.28); color: var(--text); }
+  html, body { overflow-x: clip; }
+  html, .table-scroll { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent; }
+  ::selection { background: var(--select-bg); color: var(--text); }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: var(--bg); }
-  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 99px; }
-  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.26); }
+  ::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
   ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 
   body {
     margin: 0;
     padding: 24px;
-    background: var(--bg);
+    background:
+      radial-gradient(ellipse 80% 42% at 50% -8%, var(--accent-wash), transparent 70%),
+      var(--bg);
     color: var(--text);
-    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    overflow-x: hidden;
+    font: 13px/1.5 var(--font-sans);
   }
-  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  .wrap { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+  .skip-link {
+    position: fixed; left: 16px; top: 16px; z-index: 100;
+    padding: 9px 14px; border-radius: 8px;
+    background: var(--accent); color: #08130c;
+    font-size: 12px; font-weight: 600; text-decoration: none;
+    transform: translateY(-180%); transition: transform .16s ease;
+  }
+  .skip-link:focus-visible { transform: translateY(0); outline: 2px solid var(--text); outline-offset: 2px; }
+  #kpis { scroll-margin-top: 104px; }
+  #kpis:focus { outline: none; }
+  @media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
 
   .header {
+    position: sticky; top: 12px; z-index: 20;
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 16px;
-    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px;
+    background: rgba(22,27,34,.94); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px;
+    box-shadow: 0 12px 32px rgba(5,8,11,.22);
+    backdrop-filter: blur(10px);
   }
   .title-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
-  h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: -.015em; line-height: 1.25; }
+  h1 {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0;
+    font-size: 20px; font-weight: 700; letter-spacing: -.02em; line-height: 1.2;
+  }
+  .brand-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-wash); flex: none; }
+  .h1-sub { font-size: 14px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
   .badge {
     display: inline-flex; align-items: center; font-size: 11px; font-weight: 600;
     padding: 2px 9px; border-radius: 99px; white-space: nowrap;
-    border: 1px solid var(--border); color: var(--muted); text-transform: uppercase; letter-spacing: .35px;
+    border: 1px solid var(--border); color: var(--muted);
   }
-  .badge.ok { color: var(--accent); border-color: rgba(90,209,139,.38); background: rgba(90,209,139,.11); }
-  .badge.warn { color: var(--warn); border-color: rgba(242,193,78,.38); background: rgba(242,193,78,.11); }
-  .badge.bad { color: var(--bad); border-color: rgba(255,133,133,.38); background: rgba(255,133,133,.11); }
+  .badge.ok { color: var(--accent); border-color: var(--accent-line); background: var(--accent-wash); }
+  .badge.warn { color: var(--warn); border-color: var(--warn-line); background: var(--warn-wash); }
+  .badge.bad { color: var(--bad); border-color: var(--bad-line); background: var(--bad-wash); }
 
   .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   button, select.ctrl-sel {
-    border: 1px solid var(--border); background: rgba(255,255,255,.05); color: var(--text);
-    font: inherit; font-size: 12px; font-weight: 500; padding: 6px 11px; min-height: 36px;
-    border-radius: 8px; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, color .14s ease;
+    border: 1px solid var(--border); background: var(--control-bg); color: var(--text);
+    font: inherit; font-size: 12px; font-weight: 500; padding: 6px 11px; min-height: 40px;
+    border-radius: 8px; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, color .14s ease, transform .14s ease;
   }
   select.ctrl-sel option { background: var(--card); color: var(--text); }
-  button:hover:not(:disabled), select.ctrl-sel:hover { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.18); }
-  button:active:not(:disabled) { background: rgba(255,255,255,.14); }
+  button:hover:not(:disabled), select.ctrl-sel:hover { background: var(--control-bg-hover); border-color: var(--control-line-hover); }
+  button:active:not(:disabled) { background: var(--control-bg-active); transform: translateY(1px); }
   button:focus-visible, select.ctrl-sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  button:disabled { opacity: .55; cursor: progress; }
-  button.active { background: rgba(90,209,139,.16); border-color: rgba(90,209,139,.42); color: var(--accent); }
+  button:disabled { background: var(--control-bg); color: var(--muted); opacity: .55; cursor: not-allowed; }
+  button.active { background: var(--accent-tint); border-color: var(--accent-line-strong); color: var(--accent); }
 
   .notice {
     display: none; padding: 10px 14px; border-radius: 10px; font-size: 12.5px;
-    border: 1px solid rgba(255,133,133,.35); background: rgba(255,133,133,.10); color: #ffd6d6;
+    border: 1px solid var(--notice-line); background: var(--notice-wash); color: var(--notice-text);
   }
   .notice.show { display: block; }
 
@@ -78,17 +132,18 @@
   .kpi, .panel {
     min-width: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px;
   }
-  .kpi-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .35px; }
-  .kpi-val { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.015em; }
+  .kpi-label { font-size: 11px; font-weight: 600; color: var(--muted); }
+  .kpi-val { font-size: 24px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
   .kpi-sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 14px; }
-  h2 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  h2 { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 12.5px; font-weight: 600; color: var(--text); letter-spacing: .01em; }
+  h2::before { content: ""; width: 3px; height: 11px; border-radius: 2px; background: var(--accent); flex: none; }
 
   .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   th, td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: left; }
-  th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .3px; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 11px; white-space: nowrap; }
   tbody tr:hover { background: var(--row-hover); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   td.nowrap { white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -104,17 +159,18 @@
 
   .tag {
     display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px;
-    background: rgba(255,255,255,.07); color: var(--text); margin-right: 4px; white-space: nowrap;
+    background: var(--tag-bg); color: var(--text); margin-right: 4px; white-space: nowrap;
   }
-  .tag.epi { color: #b58cff; background: rgba(181,140,255,.16); }
-  .tag.leg { color: var(--warn); background: rgba(242,193,78,.14); }
-  .tag.sec { color: var(--pink); background: rgba(255,143,163,.16); }
-  .tag.sh { color: var(--sky); background: rgba(139,233,253,.14); }
-  .tag.go { color: var(--gold); background: rgba(255,217,112,.14); }
+  .tag.epi { color: var(--epic); background: var(--epic-tag); }
+  .tag.leg { color: var(--warn); background: var(--warn-tag); }
+  .tag.sec { color: var(--pink); background: var(--pink-tag); }
+  .tag.sh { color: var(--sky); background: var(--sky-tag); }
+  .tag.go { color: var(--gold); background: var(--gold-tag); }
 
   @media (max-width: 640px) {
     body { padding: 12px; }
-    .header { padding: 12px 14px; }
+    button, select.ctrl-sel { min-height: 44px; }
+    .header { position: static; padding: 12px 14px; }
     .kpi, .panel { padding: 12px 14px; }
     .diag-row { grid-template-columns: 1fr; gap: 2px; }
   }
@@ -124,11 +180,12 @@
 </style>
 </head>
 <body>
+<a class="skip-link" href="#kpis">Skip to dashboard data</a>
 <main class="wrap">
   <header class="header">
     <div class="title-row">
-      <h1>AutoFish Local Dashboard</h1>
-      <span id="covBadge" class="badge" aria-live="polite">Loading...</span>
+      <h1><span class="brand-dot" aria-hidden="true"></span>AutoFish <span class="h1-sub">Local Dashboard</span></h1>
+      <span id="covBadge" class="badge" aria-live="polite">Loading…</span>
     </div>
     <div class="controls">
       <select id="profSel" class="ctrl-sel" aria-label="Filter by profile">
@@ -143,7 +200,7 @@
 
   <div id="errNotice" class="notice" role="status" aria-live="polite"></div>
 
-  <section class="kpis" aria-label="Session totals">
+  <section id="kpis" class="kpis" aria-label="Session totals" tabindex="-1">
     <div class="kpi"><div class="kpi-label">Catch rate</div><div id="kpiRate" class="kpi-val">--</div><div id="kpiRateSub" class="kpi-sub">No snapshots yet</div></div>
     <div class="kpi"><div class="kpi-label">Press accept rate</div><div id="kpiPress" class="kpi-val">--</div><div id="kpiPressSub" class="kpi-sub">--</div></div>
     <div class="kpi"><div class="kpi-label">Logged catches (CSV)</div><div id="kpiCatches" class="kpi-val">--</div><div id="kpiCatchesSub" class="kpi-sub">--</div></div>
@@ -153,11 +210,11 @@
   <div class="grid">
     <section class="panel">
       <h2>Dial width bands</h2>
-      <div id="bandsBody" class="empty">Waiting for snapshots...</div>
+      <div id="bandsBody" class="empty">Waiting for snapshots…</div>
     </section>
     <section class="panel">
       <h2>Losses, stalls &amp; guard verdicts</h2>
-      <div id="diagBody" class="empty">Waiting for snapshots...</div>
+      <div id="diagBody" class="empty">Waiting for snapshots…</div>
     </section>
   </div>
 
@@ -174,7 +231,7 @@
 
   <section class="panel">
     <h2>Missions (latest snapshot)</h2>
-    <div id="missionsBody" class="empty">Waiting for snapshots...</div>
+    <div id="missionsBody" class="empty">Waiting for snapshots…</div>
   </section>
 
   <section class="panel">
@@ -206,6 +263,10 @@
   var esc = function (s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  };
+  var cap = function (s) {
+    s = String(s == null ? '' : s);
+    return s.charAt(0).toUpperCase() + s.slice(1);
   };
 
   function renderTable(headers, rows, emptyText) {
@@ -262,15 +323,15 @@
   }
 
   function renderMissions(m) {
-    if (!m || !m.missions) return '<div class="empty">No mission snapshot yet — quests ride the 5-minute capture post while the game\'s Missions panel is open.</div>';
+    if (!m || !m.missions) return '<div class="empty">No mission snapshot yet. Quests ride the 5-minute capture post while the game\'s Missions panel is open.</div>';
     var head = '<div class="diag-row"><div class="diag-key">Scope</div><div class="diag-val">' +
       esc(m.missions.scope || '?') +
-      (m.missions.countdown ? ' · resets in ' + esc(m.missions.countdown) : '') +
-      (m.file ? ' · ' + esc(m.file) : '') + '</div></div>';
+      (m.missions.countdown ? ', resets in ' + esc(m.missions.countdown) : '') +
+      (m.file ? ' (' + esc(m.file) + ')' : '') + '</div></div>';
     var claims = m.missions.claims;
     var claimRowHtml = claims ? '<div class="diag-row"><div class="diag-key">Claimable</div><div class="diag-val">' +
       esc(String(claims.count || 0) + (claims.ambiguous ? ' (ambiguous - nothing clicked)' : '') +
-        (claims.reason ? ' · ' + claims.reason : '')) + '</div></div>' : '';
+        (claims.reason ? ' (' + claims.reason + ')' : '')) + '</div></div>' : '';
     var rows = (Array.isArray(m.missions.missions) ? m.missions.missions : []).map(function (q) {
       return [esc(q.objective || ''), esc(q.reward || '--'), esc(q.complete ? 'Complete' : (q.progress || '--'))];
     });
@@ -284,7 +345,8 @@
   function setBusy(busy) {
     loading = busy;
     el('refreshBtn').setAttribute('aria-busy', busy ? 'true' : 'false');
-    el('refreshBtn').textContent = busy ? 'Refreshing...' : 'Refresh';
+    el('refreshBtn').disabled = busy;
+    el('refreshBtn').textContent = busy ? 'Refreshing…' : 'Refresh';
   }
 
   function updateProfiles(recent, sess) {
@@ -322,7 +384,7 @@
         badge.textContent = 'No snapshots';
         badge.className = 'badge';
       } else {
-        badge.textContent = cov.verdict + ' (' + cov.snapshots + ' snapshots)';
+        badge.textContent = cap(cov.verdict) + ' (' + cov.snapshots + ' snapshots)';
         badge.className = 'badge ' + (cov.verdict === 'complete' ? 'ok' : 'warn');
       }
 
