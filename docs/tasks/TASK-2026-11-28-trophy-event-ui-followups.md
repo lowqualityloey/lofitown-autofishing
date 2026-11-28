@@ -1,6 +1,6 @@
 # Task: Trophy Retention, Card Cleanup, Event Context and List Triage
 
-Level: 2 (Controlled) · Owner: lead · Created: 2026-11-28 · Status: in_progress · TDD Enforcement Mode: disabled
+Level: 2 (Controlled) · Owner: lead · Created: 2026-11-28 · Status: completed · TDD Enforcement Mode: disabled
 
 ## Objective
 
@@ -31,5 +31,10 @@ Complete the approved trophy and Event UI follow-ups: make the 24h/40-card reten
 
 ## Evidence
 
-- Baseline: `npm run typecheck` exit 0 after Phase 1 source edits; full gate recorded per commit.
-- Real store: read-only verification only; no production data writes.
+- Commits: `c3c324e` (retention + Keep), `ba9c7cb` (reversible cleanup), `a3f4a03` (filter counts + Event context), `941d592` (search/sort/group), `e8d5e6c` (unreadable-card resilience), `aef7f2b` (Keep keeps the open group).
+- Automated: `npm run typecheck` exit 0; `node build-userscript.js` wrote 541,236 bytes; `node --test` **494/494** pass.
+- Incognito throwaway store (39 records / 37 PNGs / 2 missing): footer read `39/40 saved · 1 kept · 1 slot left · oldest expires in 1h · 2 missing`; tab counts 39/15/5/2/6/5; search preserved focus/cursor; newest/rarity/weight sorting and ×N grouping worked; a six-card group opened `1 of 6`; ArrowRight moved to `2 of 6`; Escape closed and returned focus; Keep changed to `Kept`/`aria-pressed=true` without leaving the group and released cleanly.
+- Cleanup: `clean` required the second click, cleaned the synthetic speckled card, stored one backup, and `restore` returned the original; the other 36 cards were reported already clean; missing cards were skipped. Decode failure test showed `Card screenshot could not be read.` instead of a broken image; legacy missing showed `Captured before failure reasons were recorded.`; an empty Event tab showed both the capture-boundary sentence and `All-time ledger: 614 Halloween · 30 Christmas caught.`
+- Layout: the trophy popup measured 264px, the toolbar had no horizontal overflow (search 175px, sort ending at 244px).
+- Phase 5B remains deferred: no download/export control was added, and the existing card-only lightbox contract is unchanged.
+- Real store: only read; no task write and no synthetic profile. Baseline was 39 records / 37 PNGs / 2 missing. During the check the live game independently appended `Phantom Jellyfish` at 2026-11-28T14:32:31Z (profile `nepchur`), leaving **40 records / 38 PNGs / 2 missing**. That row was not created, cleaned, kept, or deleted by this task; it was left untouched.
