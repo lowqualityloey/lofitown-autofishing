@@ -350,8 +350,9 @@ test('GET /dashboard and GET /report serve local analytics and handle empty dire
   try {
     const dash = await fetch('http://127.0.0.1:' + port + '/dashboard');
     assert.equal(dash.status, 200);
+    assert.equal(dash.headers.get('x-fishserve-dashboard'), 'local');
     assert.match(dash.headers.get('content-type') || '', /^text\/html/);
-    assert.ok((await dash.text()).includes('AutoFish Local Dashboard'));
+    assert.equal(await dash.text(), readFileSync(join(__dirname, '..', 'dashboard.html'), 'utf8'), 'no banner is injected when serving the local copy normally');
 
     const emptyRep = await (await fetch('http://127.0.0.1:' + port + '/report')).json();
     assert.equal(emptyRep.ok, true);
@@ -367,6 +368,34 @@ test('GET /dashboard and GET /report serve local analytics and handle empty dire
     assert.equal(fullRep.summary.run.attempts, 1);
     assert.equal(fullRep.summary.run.caught, 1);
   } finally { server.close(); }
+});
+
+test('GET /dashboard follows FISHSERVE_DASHBOARD and falls back to the sibling copy when it is missing', async () => {
+  const prev = process.env.FISHSERVE_DASHBOARD;
+  const dir = mkdtempSync(join(tmpdir(), 'fishserve-dash-'));
+  const alt = join(dir, 'worktree.html');
+  writeFileSync(alt, '<!doctype html><title>worktree dashboard</title>');
+  process.env.FISHSERVE_DASHBOARD = alt;
+  const { server, port } = await boot();
+  try {
+    const followedRes = await fetch('http://127.0.0.1:' + port + '/dashboard');
+    assert.equal(followedRes.headers.get('x-fishserve-dashboard'), 'override');
+    const followed = await followedRes.text();
+    assert.match(followed, /worktree dashboard/);
+    assert.doesNotMatch(followed, /fishserve-dashboard-fallback/);
+
+    process.env.FISHSERVE_DASHBOARD = join(dir, 'gone', 'dashboard.html');
+    const fallbackRes = await fetch('http://127.0.0.1:' + port + '/dashboard');
+    assert.equal(fallbackRes.headers.get('x-fishserve-dashboard'), 'fallback');
+    const fallback = await fallbackRes.text();
+    assert.match(fallback, /AutoFish Local Dashboard/);
+    assert.match(fallback, /id="fishserve-dashboard-fallback"/);
+    assert.match(fallback, /FISHSERVE_DASHBOARD<\/code> is missing/);
+  } finally {
+    server.close();
+    if (prev === undefined) delete process.env.FISHSERVE_DASHBOARD;
+    else process.env.FISHSERVE_DASHBOARD = prev;
+  }
 });
 
 test('POST /export prunes runs older than 14 days or excess over maxRuns, never deleting files <24h old', async () => {

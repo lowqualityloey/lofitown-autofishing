@@ -92,6 +92,8 @@ node fishserve.js
 
 Open **Session & guards**, turn on **Local capture**, and enter the fishserve origin (`http://127.0.0.1:8731` by default; or click **Cancel** anytime to fish without a server). If Chromium asks to allow **local network access** for `app.lofi.town`, click **Allow**. Catches stream to `catches.csv` (`time,species,rarity,quality,weight,value,profile,shiny,golden`) and the first run snapshot posts immediately and repeats every five minutes (old `data/runs/` snapshots prune automatically past 14 days or 1,000 files, keeping the last 24h untouched). Click the green **capture armed** line anytime to open the live dashboard (`http://127.0.0.1:8731/dashboard`), or click an amber line to correct the address.
 
+`fishserve` serves `/dashboard` from the checkout it runs in by default. Set `FISHSERVE_DASHBOARD=/path/to/dashboard.html` to make it follow another checkout's file directly; if that file is missing it falls back to the copy beside `fishserve.js` with a visible amber banner and `X-Fishserve-Dashboard: fallback`.
+
 In the morning:
 
 ```bash

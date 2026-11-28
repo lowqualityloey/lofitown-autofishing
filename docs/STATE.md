@@ -103,6 +103,17 @@ Staging area for rules observed during sessions but not yet approved as invarian
     Windows worktree move the ref but not that tree, so it reads a large diff until a
     `git reset --hard` is run there; the Windows worktree is the one that writes. (The `heyloey` CLI
     lives only on the WSL side - run milestone writes through `wsl.exe -e bash -lc '...'`.)
+  - **Dashboard override is systemd config, not repo config.** The live 8731 unit reads this
+    worktree's dashboard via `~/.config/systemd/user/fishserve.service.d/dashboard-worktree.conf`
+    (WSL user `heyloey`):
+    `Environment=FISHSERVE_DASHBOARD=/mnt/c/Users/jonel/.freebuff/worktrees/c8d892c2/lofitown-autofishing/dashboard.html`.
+    `/dashboard` is resolved per request and falls back to the sibling `dashboard.html` when the
+    override is missing. The fallback is labelled `X-Fishserve-Dashboard: fallback` and carries an
+    amber banner naming the missing path; a healthy page is byte-identical and labelled `override`
+    (`local` when no drop-in is set). Recreating the unit without the drop-in silently serves the
+    local copy as `local`, so recreate the drop-in too, then check
+    `systemctl --user show fishserve -p Environment` and
+    `curl -sD - -o /dev/null http://127.0.0.1:8731/dashboard`.
   - **Ban risk** sits entirely with the user's account; the bot does client-side input only and
     refuses to run while the tab is not visible.
 

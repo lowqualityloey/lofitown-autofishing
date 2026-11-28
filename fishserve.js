@@ -61,6 +61,33 @@ const SESSIONS = () => fileOf('FISHSERVE_SESSIONS', 'sessions.csv');
 const SHOTS = () => fileOf('FISHSERVE_SHOTS', 'shots');
 const RUNS = () => fileOf('FISHSERVE_RUNS', path.join('data', 'runs'));
 
+const LOCAL_DASHBOARD = path.join(__dirname, 'dashboard.html');
+/**
+ * Which file `/dashboard` serves, and why: `local` when no override is configured, `override` when
+ * it is present, `fallback` when it is configured but missing. Only `fallback` is a warning state.
+ */
+const dashboardSource = () => {
+  const override = process.env.FISHSERVE_DASHBOARD;
+  if (!override) return { file: LOCAL_DASHBOARD, state: 'local' };
+  if (fs.existsSync(override)) return { file: override, state: 'override' };
+  return { file: LOCAL_DASHBOARD, state: 'fallback' };
+};
+
+const htmlEsc = (v) => String(v == null ? '' : v)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/**
+ * A stale dashboard is worse than a broken one, because nothing on the page says it is stale. The
+ * banner is injected only on fallback, so a healthy page stays byte-identical to its source file.
+ */
+function withFallbackBanner(html, expected) {
+  const banner = '<div id="fishserve-dashboard-fallback" role="alert" style="position:sticky;top:0;z-index:99999;margin:0;padding:10px 16px;background:#f2c14e;color:#1a1405;font:600 13px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;border-bottom:2px solid #1a1405">Dashboard fallback: <code style="font:inherit">FISHSERVE_DASHBOARD</code> is missing, so this is the copy beside <code style="font:inherit">fishserve.js</code> instead. Expected: <code style="font:inherit;word-break:break-all">' + htmlEsc(expected) + '</code></div>';
+  const tag = /<body[^>]*>/i.exec(html);
+  if (!tag) return banner + html;
+  const at = tag.index + tag[0].length;
+  return html.slice(0, at) + banner + html.slice(at);
+}
+
 // url -> file on disk, all siblings of this script
 const STATIC = {
   '/autofish.js': 'autofish.js',
@@ -267,15 +294,21 @@ function createServer() {
 
     const file = STATIC[route];
     if (req.method === 'GET' && file) {
-      const full = path.join(__dirname, file);
+      const dashboard = route === '/dashboard' ? dashboardSource() : null;
+      const full = dashboard ? dashboard.file : path.join(__dirname, file);
       fs.readFile(full, (e, d) => {
         if (e) { res.writeHead(404, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, cors)); return res.end('not found'); }
-        res.writeHead(200, (route === '/install' || route === '/dashboard')
+        const headers = (route === '/install' || route === '/dashboard')
           ? Object.assign({ 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }, cors)
-          : Object.assign({}, JS_HEAD, cors));
+          : Object.assign({}, JS_HEAD, cors);
+        if (dashboard) headers['X-Fishserve-Dashboard'] = dashboard.state;
+        res.writeHead(200, headers);
+        const body = dashboard && dashboard.state === 'fallback'
+          ? Buffer.from(withFallbackBanner(d.toString('utf8'), String(process.env.FISHSERVE_DASHBOARD)))
+          : d;
         // The userscript has to inject the panel from whichever host:port served it, and only the
         // request knows that (8731 is often already taken on Windows by an older copy).
-        res.end(route.slice(-8) === '.user.js' ? withHost(d.toString('utf8'), req.headers.host) : d);
+        res.end(route.slice(-8) === '.user.js' ? withHost(d.toString('utf8'), req.headers.host) : body);
       });
       return;
     }
