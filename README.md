@@ -6,7 +6,7 @@ A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no buil
 
 ## Status
 
-**Actively maintained.** Current build **3.9.75** ([release notes](docs/releases/3.9.75.md)) · **full test suite passing** on 2026-11-29 · [MIT](LICENSE)
+**Actively maintained.** Current release **3.9.75** ([notes](docs/releases/3.9.75.md) · [public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.75)) · source/mirror SHA-256 `dd6e0ad2…` · stable URL verified HTTP `200` · **full test suite passing** on 2026-11-29 · [MIT](LICENSE)
 
 Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://www.tampermonkey.net/), the game open, and a character you can seat.
 

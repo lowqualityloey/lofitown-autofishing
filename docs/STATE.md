@@ -4,7 +4,7 @@
 ## 1. Executive Summary & Current Position
 - **Project Name**: lofitown-autofishing (autofish 3.9.75: Trophy retention, cleanup, search/grouping and capture polish)
 - **Current Milestone / Epic**: Milestone 2 — trustworthy accuracy and seat-aware sessions; Milestone 1 (in-game panel) & Milestone 3 (self-updating distribution) closed.
-- **Overall Status**: ACTIVE — **v3.9.74** remains published at 511,263 bytes / sha256 `3302b35b5340` (release-time `476/476`; later `481/481`). **v3.9.75** is prepared locally: trophy retention/Keep, reversible saved-card cleanup, filter counts, search/sort/grouping, and stale-image/capture cleanup; 542,296 bytes / sha256 `dd6e0ad209c7e300949591945ca567fd5fcee04254f394f9d8d4e9fb9205690f`; `tsc --noEmit` exit `0`, `497/497` tests. No tag, mirror publish or push yet.
+- **Overall Status**: ACTIVE — **v3.9.75** published from tag `v3.9.75` on `0e3403d` ([source](https://github.com/lowqualityloey/lofitown-autofishing/releases/tag/v3.9.75) 2026-11-28T15:14:59Z; [mirror](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.75) 15:15:27Z). Source and mirror assets are identical at 542,296 bytes / sha256 `dd6e0ad209c7e300949591945ca567fd5fcee04254f394f9d8d4e9fb9205690f`; the stable install URL was verified anonymously at HTTP `200`, `@version 3.9.75`, same hash. `tsc --noEmit` exit `0`, `497/497` tests remain green. **v3.9.74** remains published at 511,263 bytes / sha256 `3302b35b5340`.
 - **Current Working Branch**: `main` (pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
 - **Last Updated**: 2026-11-29
 - **Engine Version**: v2.7.0 @ unknown
