@@ -428,17 +428,15 @@ test('local capture unifies catch CSV + 5-minute snapshots, survives reload, and
   const toggle = src.slice(src.indexOf("captureRow.addEventListener('click'"), src.indexOf("profSel.addEventListener('change'"));
   assert.ok(toggle.length > 0, 'the whole row is the control');
   assert.ok(!src.includes("captureToggle.addEventListener('click'"), 'the 14 px button is not a second, stacked listener');
-  assert.ok(toggle.includes('askCaptureAddress()'), 'the server-free install is asked for the address once');
+  assert.ok(toggle.includes('openCapturePrompt('), 'the server-free install is asked for the address once via inline prompt');
   assert.ok(!/localStorage/.test(toggle), 'the address goes through the prefs, not a second store');
-  assert.ok(toggle.includes('if (!captureServer()) next = !!askCaptureAddress();'), 'one click asks for the address, even when the switch already says on');
+  assert.ok(toggle.includes('if (!overnightPref && !captureServer())'), 'one click asks for the address when unconfigured');
   assert.ok(toggle.includes('if (next) armOvernight(); else disarmOvernight();'), 'answering arms; cancelling leaves the capture off');
 });
 
 test('a stale capture address can be corrected from the amber line', () => {
-  // A stored address that moves used to have no way back: the toggle only asked when there was no
-  // address at all, so the pref sat on a dead origin forever and heal retried the same one.
-  const ask = src.slice(src.indexOf('function askCaptureAddress'), src.indexOf('function editCaptureAddress'));
-  assert.ok(ask.length > 0 && ask.includes('window.prompt('), 'the address is asked for in one place');
+  const ask = src.slice(src.indexOf('function openCapturePrompt'), src.indexOf('function editCaptureAddress'));
+  assert.ok(ask.length > 0 && ask.includes('showInlinePrompt('), 'the address is asked in-panel without blocking OS prompts');
   assert.ok(ask.includes('node fishserve.js') && ask.includes('Click Cancel'), 'first-time capture prompt explains fishserve is optional');
   assert.ok(ask.includes('captureBase = base'), 'the answer is kept with the pref');
   assert.ok(ask.includes('capture needs an address like'), 'a malformed answer says why');
@@ -578,4 +576,14 @@ test('panel clears stale reload/info banners on start, resume, user stop, and se
   assert.ok(src.includes("{ id: 'Epic', label: 'EPI' }") && src.includes('function isRareChimeRow('), 'Epic cards are saved and filterable without triggering the rare catch chime');
   assert.ok(src.includes('FISH_ATLAS_PACKS') && src.includes('function resolveTrophySprite(') && src.includes('image-rendering:pixelated'), 'trophy rows resolve crisp Base/Shiny pixel-art sprites from lofi.town texture packs with clean lightbox preview');
   assert.ok(!src.includes('Save image') && !src.includes('lofi-card'), 'lightbox keeps Photo-3 card-only preview without Next/Save buttons or HTML mock cards');
+});
+
+test('Phase 2 impeccable polish: tokens, bottomInset, accordion, inline prompts, full-row toggles, and Lightbox nav/pill', () => {
+  assert.ok(src.includes('--af-bg:') && src.includes('--af-accent:'), 'Shadow DOM defines CSS design tokens');
+  assert.ok(src.includes('bottomInset: 88') && src.includes('calc(100vh - 180px)'), 'panel reserves bottom-corner clearance for game music/focus bars');
+  assert.ok(src.includes('accordionSections.forEach'), 'Tier-2 folds operate as a single-open accordion');
+  assert.ok(src.includes('function showInlinePrompt(') && !src.includes('window.confirm(') && !src.includes('window.prompt('), 'replaces blocking OS dialogs with inline Shadow DOM prompt');
+  assert.ok(src.includes('function bindRowTap('), 'all setting toggle rows share full-row clickability');
+  assert.ok(src.includes("'ArrowLeft'") && src.includes("'ArrowRight'") && src.includes('trophy-lb-meta') && src.includes('trophy-lb-nav'), 'lightbox adds card metadata pill, arrow navigation, and Tab trap');
+  assert.ok(src.includes('prefers-reduced-motion:reduce'), 'panel respects reduced-motion preferences');
 });

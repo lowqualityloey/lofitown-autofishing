@@ -56,14 +56,15 @@
   .badge.bad { color: var(--bad); border-color: rgba(255,133,133,.38); background: rgba(255,133,133,.11); }
 
   .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  button {
+  button, select.ctrl-sel {
     border: 1px solid var(--border); background: rgba(255,255,255,.05); color: var(--text);
-    font: inherit; font-size: 12px; font-weight: 500; padding: 6px 11px; min-height: 32px;
+    font: inherit; font-size: 12px; font-weight: 500; padding: 6px 11px; min-height: 36px;
     border-radius: 8px; cursor: pointer; transition: background-color .14s ease, border-color .14s ease, color .14s ease;
   }
-  button:hover:not(:disabled) { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.18); }
+  select.ctrl-sel option { background: var(--card); color: var(--text); }
+  button:hover:not(:disabled), select.ctrl-sel:hover { background: rgba(255,255,255,.10); border-color: rgba(255,255,255,.18); }
   button:active:not(:disabled) { background: rgba(255,255,255,.14); }
-  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button:focus-visible, select.ctrl-sel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   button:disabled { opacity: .55; cursor: progress; }
   button.active { background: rgba(90,209,139,.16); border-color: rgba(90,209,139,.42); color: var(--accent); }
 
@@ -105,6 +106,7 @@
     display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px;
     background: rgba(255,255,255,.07); color: var(--text); margin-right: 4px; white-space: nowrap;
   }
+  .tag.epi { color: #b58cff; background: rgba(181,140,255,.16); }
   .tag.leg { color: var(--warn); background: rgba(242,193,78,.14); }
   .tag.sec { color: var(--pink); background: rgba(255,143,163,.16); }
   .tag.sh { color: var(--sky); background: rgba(139,233,253,.14); }
@@ -129,6 +131,9 @@
       <span id="covBadge" class="badge" aria-live="polite">Loading...</span>
     </div>
     <div class="controls">
+      <select id="profSel" class="ctrl-sel" aria-label="Filter by profile">
+        <option value="all">All profiles</option>
+      </select>
       <button id="winNight" class="active" type="button" aria-pressed="true">Last 12h</button>
       <button id="winAll" type="button" aria-pressed="false">All snapshots</button>
       <button id="autoBtn" class="active" type="button" aria-pressed="true">Auto 30s: on</button>
@@ -158,8 +163,8 @@
 
   <div class="grid">
     <section class="panel">
-      <h2>Recent rare &amp; variant catches</h2>
-      <div id="trophyBody" class="empty">No Legendary, Secret, Shiny, or Golden catches in recent CSV rows.</div>
+      <h2>Recent trophy catches (Epic+)</h2>
+      <div id="trophyBody" class="empty">No Epic, Legendary, Secret, Shiny, or Golden catches in recent CSV rows.</div>
     </section>
     <section class="panel">
       <h2>Logged sessions in window</h2>
@@ -182,6 +187,7 @@
 (function () {
   var allMode = false;
   var autoOn = true;
+  var profFilter = 'all';
   var timer = null;
   var loading = false;
 
@@ -277,10 +283,23 @@
 
   function setBusy(busy) {
     loading = busy;
-    el('refreshBtn').disabled = busy;
-    el('winNight').disabled = busy;
-    el('winAll').disabled = busy;
+    el('refreshBtn').setAttribute('aria-busy', busy ? 'true' : 'false');
     el('refreshBtn').textContent = busy ? 'Refreshing...' : 'Refresh';
+  }
+
+  function updateProfiles(recent, sess) {
+    var sel = el('profSel');
+    if (!sel) return;
+    var names = {};
+    recent.forEach(function (c) { names[c.profile || 'default'] = true; });
+    sess.forEach(function (r) { names[r.profile || 'default'] = true; });
+    var keys = Object.keys(names).sort();
+    var html = '<option value="all">All profiles</option>' + keys.map(function (k) {
+      return '<option value="' + esc(k) + '">' + esc(k) + '</option>';
+    }).join('');
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+    if (profFilter !== 'all' && !names[profFilter]) profFilter = 'all';
+    sel.value = profFilter;
   }
 
   async function refresh() {
@@ -323,12 +342,15 @@
         el('kpiPressSub').textContent = '--';
       }
 
-      var recent = Array.isArray(rec.rows) ? rec.rows : [];
+      var allRecent = Array.isArray(rec.rows) ? rec.rows : [];
+      var allSess = (s && Array.isArray(s.sessions)) ? s.sessions : [];
+      updateProfiles(allRecent, allSess);
+      var recent = profFilter === 'all' ? allRecent : allRecent.filter(function (c) { return (c.profile || 'default') === profFilter; });
       var rares = recent.filter(function (c) {
-        return c.rarity === 'Legendary' || c.rarity === 'Secret' || c.shiny || c.golden;
+        return c.rarity === 'Epic' || c.rarity === 'Legendary' || c.rarity === 'Secret' || c.shiny || c.golden;
       });
-      el('kpiCatches').textContent = String(rep.catchesCount != null ? rep.catchesCount : recent.length);
-      el('kpiCatchesSub').textContent = rares.length + ' rare/variant in last ' + recent.length + ' rows';
+      el('kpiCatches').textContent = String(profFilter === 'all' && rep.catchesCount != null ? rep.catchesCount : recent.length);
+      el('kpiCatchesSub').textContent = rares.length + ' Epic+/variant in ' + (profFilter === 'all' ? 'last ' : profFilter + ' (') + recent.length + (profFilter === 'all' ? ' rows' : ' rows)');
 
       el('kpiRuns').textContent = String(rep.runsFiles || 0) + ' files';
       el('kpiRunsSub').textContent = cov ? ('Captured ' + fmtTime(cov.firstPostAt) + ' to ' + fmtTime(cov.lastPostAt)) : 'data/runs/';
@@ -352,16 +374,17 @@
         [{ label: 'Time', nowrap: true }, { label: 'Species' }, { label: 'Tags' }, { label: 'Weight', num: true }],
         rares.slice().reverse().slice(0, 30).map(function (c) {
           var tags = '';
-          if (c.rarity === 'Legendary') tags += '<span class="tag leg">Legendary</span>';
+          if (c.rarity === 'Epic') tags += '<span class="tag epi">Epic</span>';
+          else if (c.rarity === 'Legendary') tags += '<span class="tag leg">Legendary</span>';
           else if (c.rarity === 'Secret') tags += '<span class="tag sec">Secret</span>';
           if (c.shiny) tags += '<span class="tag sh">Shiny</span>';
           if (c.golden) tags += '<span class="tag go">Golden</span>';
           return [fmtTime(c.time), esc(c.species), tags, esc(c.weight || '--')];
         }),
-        'No Legendary, Secret, Shiny, or Golden catches in recent CSV rows.'
+        'No Epic, Legendary, Secret, Shiny, or Golden catches in recent CSV rows.'
       );
 
-      var sess = (s && Array.isArray(s.sessions)) ? s.sessions : [];
+      var sess = profFilter === 'all' ? allSess : allSess.filter(function (row) { return (row.profile || 'default') === profFilter; });
       el('sessionsBody').innerHTML = renderTable(
         [{ label: 'Ended', nowrap: true }, { label: 'Profile' }, { label: 'Min', num: true }, { label: 'Catches', num: true }, { label: 'Reason' }],
         sess.slice(-20).reverse().map(function (row) {
@@ -395,6 +418,10 @@
     timer = autoOn ? setInterval(refresh, 30000) : null;
   }
 
+  el('profSel').addEventListener('change', function () {
+    profFilter = el('profSel').value || 'all';
+    refresh();
+  });
   el('winNight').addEventListener('click', function () {
     allMode = false;
     el('winNight').classList.add('active');

@@ -2,71 +2,107 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AutoFish — install</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AutoFish — Install</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f1216; color: #e8ecef;
-         font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 40px 20px; }
-  main { max-width: 720px; width: 100%; }
-  h1 { font-size: 24px; margin: 0 0 4px; }
-  p.lede { color: #9aa4ae; margin: 0 0 26px; }
-  .card { background: #161b21; border: 1px solid #232a33; border-radius: 14px; padding: 20px 22px; margin-bottom: 16px; }
-  ol { padding-left: 20px; margin: 0; }
+  :root {
+    color-scheme: dark;
+    --bg: #0f1318;
+    --card: #161b22;
+    --code-bg: #0b0e13;
+    --border: rgba(255,255,255,.10);
+    --text: #e8ecef;
+    --muted: #9aa4ae;
+    --accent: #5ad18b;
+    --btn: #286e4e;
+    --btn-hover: #2f7d5a;
+    --btn-text: #eafff2;
+    --warn: #f2c14e;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: var(--bg); color: var(--text); padding: 36px 20px;
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 720px; width: 100%; display: flex; flex-direction: column; gap: 16px; }
+  header h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -.015em; }
+  p.lede { color: var(--muted); margin: 0 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; }
+  h2 { font-size: 16px; margin: 0 0 10px; letter-spacing: -.01em; }
+  ol, ul { padding-left: 20px; margin: 0; }
   li { margin: 8px 0; }
-  a.bookmark { display: inline-block; margin: 6px 0 2px; padding: 11px 18px; border-radius: 10px; background: #2f7d5a; color: #eafff2;
-               text-decoration: none; font-weight: 600; cursor: grab; }
-  code { background: #0c1014; border: 1px solid #232a33; border-radius: 6px; padding: 1px 6px; font-size: 13px; }
+  .acts { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+  a.cta, a.bookmark {
+    display: inline-flex; align-items: center; justify-content: center; min-height: 40px;
+    padding: 9px 18px; border-radius: 10px; background: var(--btn); color: var(--btn-text);
+    text-decoration: none; font-weight: 600; font-size: 14px; transition: background-color .14s ease;
+  }
+  a.cta:hover, a.bookmark:hover { background: var(--btn-hover); }
+  a.bookmark { cursor: grab; background: rgba(255,255,255,.08); border: 1px solid var(--border); color: var(--text); }
+  a.bookmark:hover { background: rgba(255,255,255,.14); }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; font-size: 13px; }
   a { color: #7fd6a1; }
-  .note { color: #9aa4ae; font-size: 13px; }
-  .warn { color: #f2c14e; }
-  .ok { color: #5ad18b; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .note { color: var(--muted); font-size: 13.5px; }
+  .warn { color: var(--warn); }
+  .ok { color: var(--accent); }
+  p + p { margin-top: 10px; }
+  @media (max-width: 640px) {
+    body { padding: 18px 12px; }
+    .card { padding: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    a.cta, a.bookmark { transition: none; }
+  }
 </style>
 </head>
 <body>
 <main>
-  <h1>AutoFish</h1>
-  <p class="lede">A control panel for the lofi.town fishing bot. No DevTools, no pasting code.</p>
+  <header>
+    <h1>AutoFish for lofi.town</h1>
+    <p class="lede">Single-file userscript HUD — casts, reels, tracks your 24h rare trophy cards, and saves CSV ledgers right in your browser.</p>
+  </header>
 
-  <div class="card">
+  <section class="card">
+    <h2>1-Click Userscript Install (No Server Needed)</h2>
+    <p class="note" style="margin:0">Install Tampermonkey (or Violentmonkey) once, install the latest AutoFish userscript below, then open <code>https://app.lofi.town</code>. A collapsed <b>AutoFish</b> pill sits in the top-right corner when minimized, and the panel docks cleanly below the top coins bar when expanded.</p>
+    <div class="acts">
+      <a class="cta" href="https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js">Install AutoFish Userscript</a>
+    </div>
+    <p class="note warn" style="margin:12px 0 0">For a local build, don't open the raw URL directly: Tampermonkey can stop on its generic <b>SCRIPT INSTALLATION</b> page instead of the install prompt. Open <b>Dashboard → Utilities → Import from URL</b> and paste <code id="userscript">/autofish.user.js</code>, or import <code>dist/autofish.user.js</code> from file. If importing from URL also fails, use the release URL above.</p>
+  </section>
+
+  <section class="card">
+    <h2>What AutoFish Handles</h2>
     <ol>
-      <li>In a terminal, run <code>node fishserve.js</code> and leave it open. <span class="note">(It serves this page, the panel, and the catch log.)</span></li>
-      <li>Drag this link to your bookmarks bar:
-        <br><a class="bookmark" id="bm" href="javascript:void(0)">🎣 AutoFish</a>
-      </li>
-      <li>Open <code>https://app.lofi.town</code> and click the bookmark once.</li>
-      <li>The panel appears in a corner. Press <b>Start</b> when you are ready to fish.</li>
+      <li><b>Flow or Timed modes</b> — fish nonstop until Stop, or use session length, cooldown, clock window, and daily cap schedules.</li>
+      <li><b>Safety guards</b> — pauses honestly when you stand up, focus mode starts, or a tab is hidden, with bounded auto-recovery.</li>
+      <li><b>Trophy cards &amp; Catch ledger</b> — per-profile 24-hour rare catch PNGs (<code>Epic+</code>, <code>Shiny</code>, <code>Golden</code>) and 1-click CSV export saved locally.</li>
     </ol>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2 style="font-size:16px;margin:0 0 10px">What the panel does</h2>
-    <ol>
-      <li><b>Session length</b> — it stops itself after the time you set. The cooldown that follows is enforced: Start stays disabled until it runs out.</li>
-      <li><b>Clock window</b> — optionally only run between two times, including across midnight. A session that starts outside its window waits for it.</li>
-      <li><b>Guards</b> — it pauses when the tab is hidden (the game freezes), stops after two minutes hidden, retries when nothing has bitten for ten minutes, and stops itself at the daily cap.</li>
-    </ol>
-  </div>
-
-  <div class="card">
-    <h2 style="font-size:16px;margin:0 0 10px">Leaving it alone</h2>
-    <ul style="margin:0;padding-left:20px">
-      <li class="ok">The panel asks the browser to keep the screen awake while it fishes.</li>
-      <li class="warn">If the screen still locks, the game freezes — nothing bites until you come back, and the panel stops the session rather than burning the clock on frozen frames.</li>
-      <li class="note">Keep the game window visible; a hidden tab is a frozen game.</li>
+  <section class="card">
+    <h2>Keep the Game Window Visible</h2>
+    <ul>
+      <li class="ok">AutoFish requests a browser wake lock to keep your screen awake during sessions.</li>
+      <li class="warn">If your OS sleeps or you switch away from the tab, lofi.town freezes frame timers until you return.</li>
+      <li class="note">Use a visible desktop window for unattended or overnight fishing.</li>
     </ul>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2 style="font-size:16px;margin:0 0 10px">Want to skip the server?</h2>
-    <p class="note" style="margin:0">Install Tampermonkey once, then open the <a href="https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js">public release build</a> and press <b>Install</b>. That fixed URL always serves the newest build and is the reliable path in BrowserOS Neo. From then on a small <b>🐟 AutoFish</b> chip sits in the bottom-left corner of lofi.town — click it once to start fishing. No terminal, no bookmarklet, and this page only has to exist for that one install.</p>
-    <p class="note warn" style="margin:10px 0 0">For a local build, don't open the raw URL directly: Tampermonkey can stop on its generic <b>SCRIPT INSTALLATION</b> page instead of the install prompt. In Tampermonkey, open <b>Dashboard → Utilities → Import from URL</b> and paste <code id="userscript">/autofish.user.js</code>, or import <code>dist/autofish.user.js</code> from file. The local server serves the file. If importing from URL also fails, use the release URL above.</p>
-  </div>
+  <section class="card">
+    <h2>Optional: Local Capture &amp; Overnight Dashboard</h2>
+    <ol>
+      <li>Run <code>node fishserve.js</code> in a terminal to enable live <code>catches.csv</code> streaming and 5-minute diagnostics on <code>/dashboard</code>.</li>
+      <li>Prefer bookmarklet injection while <code>fishserve.js</code> is running? Drag or click to copy this bookmarklet, then click it once on <code>https://app.lofi.town</code>:
+        <div class="acts"><a class="bookmark" id="bm" href="javascript:void(0)">AutoFish Bookmarklet</a></div>
+      </li>
+    </ol>
+  </section>
 </main>
 <script>
-  // The bookmarklet points at whichever address served this page. That matters because the game
-  // runs in the browser on the Windows side while the server may live in WSL: the port that works
-  // is the port you opened this page on.
   (function () {
     var origin = location.origin;
     var code = "javascript:(()=>{if(window.__panel&&window.__panel.mounted)return;"
@@ -78,10 +114,9 @@
     bm.setAttribute('href', code);
     var us = document.getElementById('userscript');
     if (us) us.textContent = origin + '/autofish.user.js';
-    // Dragging to the bookmarks bar is fiddly in some browsers; clicking copies the same code.
     bm.addEventListener('click', function (ev) {
       ev.preventDefault();
-      var done = function () { bm.textContent = '🎣 copied — paste it as a bookmark'; setTimeout(function () { bm.textContent = '🎣 AutoFish'; }, 2200); };
+      var done = function () { bm.textContent = 'Copied bookmarklet URL'; setTimeout(function () { bm.textContent = 'AutoFish Bookmarklet'; }, 2200); };
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(code).then(done, function () {});
     });
   })();

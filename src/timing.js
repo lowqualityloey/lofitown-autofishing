@@ -674,7 +674,7 @@
     if (!box || !cw || !ch) return null;
     const px = Math.round(box.w * 0.30);
     const pt = Math.round(box.h * 0.36);
-    const pb = Math.round(box.h * 0.12);
+    const pb = Math.round(box.h * 0.26);
     const x = Math.max(0, Math.round(box.x - px));
     const y = Math.max(0, Math.round(box.y - pt));
     const right = Math.min(cw, Math.round(box.x + box.w + px));

@@ -24,6 +24,7 @@ interface Rect {
     viewport: Size;
     margin?: number;
     topInset?: number;
+    bottomInset?: number;
     exclude?: Rect | null;
     preferred?: Point | null;
   }

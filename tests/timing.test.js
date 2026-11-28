@@ -740,7 +740,7 @@ test('isCardSettled rejects white-flash and transparent frames and padCardBox ad
   assert.equal(T.isCardSettled(metrics), true, 'cream parchment + ink card is settled');
 
   const padded = T.padCardBox({ x: 400, y: 200, w: 300, h: 400 }, 1280, 720);
-  assert.deepEqual(padded, { x: 310, y: 56, w: 480, h: 592 }, 'adds left/right 30%, top 36%, bottom 12% headroom');
+  assert.deepEqual(padded, { x: 310, y: 56, w: 480, h: 648 }, 'adds left/right 30%, top 36%, bottom 26% headroom for overflowing stamp');
   const clamped = T.padCardBox({ x: 20, y: 10, w: 300, h: 400 }, 350, 420);
   assert.deepEqual(clamped, { x: 0, y: 0, w: 350, h: 420 }, 'clamps cleanly to canvas boundaries');
 });

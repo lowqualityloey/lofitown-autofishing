@@ -380,9 +380,11 @@
       if (card) {
         clearResultMissing('catch card');
         markShapeHit(t);
-        F.lastCardRect = card.w && card.h
-          ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
-          : { x: card.cx - 183, y: card.cy - 203, w: 366, h: 406 };
+        F.lastCardRect = (card.x != null && card.y != null && card.w && card.h)
+          ? { x: card.x, y: card.y, w: card.w, h: card.h }
+          : (card.w && card.h
+            ? { x: card.cx - card.w / 2, y: card.cy - card.h / 2, w: card.w, h: card.h }
+            : { x: card.cx - 183, y: card.cy - 203, w: 366, h: 406 });
         const r = o.recordCatch ? o.recordCatch(card) : (F.recordCatch ? F.recordCatch(card) : 'empty');
         if (r === 'trophy-wait') { F.stats.cardWaits = (F.stats.cardWaits || 0) + 1; return; }
         if (r !== 'logged') {
@@ -410,9 +412,11 @@
         clearResultMissing('catch card');
         markShapeHit(t);
         F.cardUntil = t + 2200;
-        F.lastCardRect = c.w && c.h
-          ? { x: c.cx - c.w / 2, y: c.cy - c.h / 2, w: c.w, h: c.h }
-          : { x: c.cx - 183, y: c.cy - 203, w: 366, h: 406 };
+        F.lastCardRect = (c.x != null && c.y != null && c.w && c.h)
+          ? { x: c.x, y: c.y, w: c.w, h: c.h }
+          : (c.w && c.h
+            ? { x: c.cx - c.w / 2, y: c.cy - c.h / 2, w: c.w, h: c.h }
+            : { x: c.cx - 183, y: c.cy - 203, w: 366, h: 406 });
         L('catch card over dial', { frac: c.frac, cx: c.cx, cy: c.cy, dial: !!F.geo });
       }
     }

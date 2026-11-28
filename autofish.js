@@ -991,7 +991,11 @@
     if (!r) return null;
     const frac = creamFraction(r);
     if (frac < 0.2) return null;      // paper is 249,238,208 and covers ~28% once art and frame are excluded
-    return { cx: Math.round(r.x + r.w / 2), cy: Math.round(r.y + r.h / 2), frac: +frac.toFixed(2), via: 'box' };
+    return {
+      x: box.x, y: box.y, w: box.w, h: box.h,
+      cx: Math.round(r.x + r.w / 2), cy: Math.round(r.y + r.h / 2),
+      frac: +frac.toFixed(2), via: 'box'
+    };
   }
 
   /**
@@ -1067,6 +1071,8 @@
     }
     const fill = sum(x0, y0, x1, y1) / ((x1 - x0) * (y1 - y0));
     const cand = {
+      x: x0 * SDOWN,
+      y: y0 * SDOWN,
       cx: Math.round(seed.x * SDOWN + (CW * SDOWN) / 2),
       cy: Math.round(seed.y * SDOWN + (CH * SDOWN) / 2),
       w: W, h: H, frac: +fill.toFixed(2), via: 'shape'

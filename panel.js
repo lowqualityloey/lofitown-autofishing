@@ -542,41 +542,69 @@
   }
 
   /**
-   * Ask once for the fishserve origin. The answer is kept with the pref, so a reload does not ask
-   * again. A cancelled answer returns '' and changes nothing; a malformed one also says why.
+   * Show an in-panel Shadow DOM confirmation or text-input bar (replaces blocking OS prompt/confirm).
+   * @param {{ msg: string, input?: boolean, value?: string, placeholder?: string, confirmLabel?: string, danger?: boolean, onOk: (val: string) => void }} cfg
    */
-  function askCaptureAddress() {
-    var msg = 'Optional — only needed if you run "node fishserve.js" on your PC for catches.csv and 5-minute run snapshots.\n' +
-      'Click Cancel to fish normally (Catch history already saves in your browser).\n\n' +
-      'Enter fishserve URL (default http://127.0.0.1:8731):';
-    var typed = window.prompt(msg, captureBase || '');
-    var base = String(typed == null ? '' : typed).trim().replace(/\/+$/, '');
-    if (!/^https?:\/\/[^/]+:\d+$/.test(base)) {
-      banner = base ? 'capture needs an address like http://127.0.0.1:PORT' : '';
-      return '';
+  function showInlinePrompt(cfg) {
+    if (!ui.inlinePrompt || !ui.inlinePromptMsg || !ui.inlinePromptIn || !ui.inlinePromptOk) return;
+    ui.inlinePromptMsg.textContent = cfg.msg;
+    ui.inlinePromptIn.classList.toggle('hide', !cfg.input);
+    if (cfg.input) {
+      ui.inlinePromptIn.value = cfg.value || '';
+      ui.inlinePromptIn.placeholder = cfg.placeholder || '';
     }
-    captureBase = base;
-    banner = '';
-    return base;
+    ui.inlinePromptOk.textContent = cfg.confirmLabel || 'OK';
+    ui.inlinePromptOk.className = 'inline-prompt-btn ' + (cfg.danger ? 'danger' : 'ok');
+    ui.inlinePromptOnOk = cfg.onOk;
+    ui.inlinePrompt.classList.remove('hide');
+    place();
+    try {
+      if (cfg.input) { ui.inlinePromptIn.focus(); ui.inlinePromptIn.select(); }
+      else ui.inlinePromptOk.focus();
+    } catch (e) {}
   }
 
-  /**
-   * Correct a stale address from the amber line. The old sampler is stopped first, or it would keep
-   * posting to the origin that no longer answers; the pref stays on and the capture arms again from
-   * the corrected origin. Cancelling changes nothing, so the toggle can still turn it off.
-   */
+  function hideInlinePrompt() {
+    if (!ui.inlinePrompt) return;
+    ui.inlinePromptOnOk = null;
+    ui.inlinePrompt.classList.add('hide');
+    place();
+  }
+
+  function openCapturePrompt(onDone) {
+    showInlinePrompt({
+      msg: 'Optional — only needed if you run "node fishserve.js" on your PC. Click Cancel to fish normally (Catch history saves in your browser).',
+      input: true,
+      value: captureBase || '',
+      placeholder: 'https:// or http://host:PORT',
+      confirmLabel: 'Connect',
+      onOk: function (typed) {
+        var base = String(typed == null ? '' : typed).trim().replace(/\/+$/, '');
+        if (!/^https?:\/\/[^/]+:\d+$/.test(base)) {
+          banner = base ? 'capture needs an address like http://host:PORT' : '';
+          render();
+          return;
+        }
+        captureBase = base;
+        banner = '';
+        onDone(base);
+      }
+    });
+  }
+
   function editCaptureAddress() {
     if (BASE) return;                      // a served panel has only the origin that served it
-    if (!askCaptureAddress()) return;
-    try { if (window.__overnight) window.__overnight.stop(); } catch (e) {}
-    window.__overnight = null;
-    captureState = 'off';
-    captureError = '';
-    captureClearBackoff();
-    syncCaptureUrl();
-    savePrefs();
-    armOvernight();
-    render();
+    openCapturePrompt(function () {
+      try { if (window.__overnight) window.__overnight.stop(); } catch (e) {}
+      window.__overnight = null;
+      captureState = 'off';
+      captureError = '';
+      captureClearBackoff();
+      syncCaptureUrl();
+      savePrefs();
+      armOvernight();
+      render();
+    });
   }
 
   /**
@@ -1298,11 +1326,28 @@
     if (trophyLightboxIdx >= rows.length) trophyLightboxIdx = 0;
     var rec = rows[trophyLightboxIdx];
     revokeLightboxUrl();
+    if (ui.trophyLbPrev) ui.trophyLbPrev.classList.toggle('hide', rows.length <= 1);
+    if (ui.trophyLbNext) ui.trophyLbNext.classList.toggle('hide', rows.length <= 1);
+    var rareCls = rec.golden ? ' rare-gold' : (rec.rarity === 'Legendary' ? ' rare-leg' : (rec.rarity === 'Secret' ? ' rare-sec' : ''));
+    if (ui.trophyLbMeta) {
+      ui.trophyLbMeta.textContent = '';
+      var spName = el('b', null, rec.species);
+      ui.trophyLbMeta.appendChild(spName);
+      var lbBadges = el('div', 'trophy-badges');
+      buildTrophyBadges(rec, lbBadges);
+      if (lbBadges.childNodes.length) ui.trophyLbMeta.appendChild(lbBadges);
+      var details = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : '', (trophyLightboxIdx + 1) + ' / ' + rows.length].filter(Boolean);
+      details.forEach(function (txt) {
+        ui.trophyLbMeta.appendChild(el('span', 'trophy-lb-sep', '·'));
+        ui.trophyLbMeta.appendChild(el('span', null, txt));
+      });
+      if (ui.trophyLbClose) ui.trophyLbMeta.appendChild(ui.trophyLbClose);
+    }
     if (ui.trophyLbStage) {
       ui.trophyLbStage.textContent = '';
       if (rec.blob && typeof URL !== 'undefined' && URL.createObjectURL) {
         var img = document.createElement('img');
-        img.className = 'trophy-lb-img';
+        img.className = 'trophy-lb-img' + rareCls;
         trophyLightboxUrl = URL.createObjectURL(rec.blob);
         img.src = trophyLightboxUrl;
         img.alt = rec.species + ' catch card';
@@ -1319,7 +1364,7 @@
           }
           ui.trophyLbStage.textContent = '';
           var spImg = document.createElement('img');
-          spImg.className = 'trophy-lb-img trophy-sprite';
+          spImg.className = 'trophy-lb-img trophy-sprite' + rareCls;
           spImg.src = spriteUrl;
           spImg.alt = rec.species;
           ui.trophyLbStage.appendChild(spImg);
@@ -1680,24 +1725,25 @@
   }
 
   var CSS = [
-    ':host{all:initial}',
-    '.wrap{position:relative;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
-    '.card{position:relative;width:264px;background:rgba(18,22,28,.94);border:1px solid rgba(255,255,255,.10);border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.45);backdrop-filter:blur(10px);overflow:hidden}',
+    ':host{all:initial;--af-bg:rgba(18,22,28,.95);--af-surface:rgba(255,255,255,.05);--af-surface-hi:rgba(255,255,255,.10);--af-border:rgba(255,255,255,.10);--af-text:#e8ecef;--af-muted:#9aa4ae;--af-dim:#8b95a0;--af-accent:#5ad18b;--af-warn:#f2c14e;--af-bad:#ff8fa3;--af-gold:#ffd970;--af-sky:#8be9fd}',
+    '.wrap{position:relative;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--af-text);user-select:none;-webkit-user-select:none}',
+    '.card{position:relative;width:264px;max-width:calc(100vw - 24px);background:var(--af-bg);border:1px solid var(--af-border);border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.45);backdrop-filter:blur(10px);overflow:hidden}',
     '.head{display:flex;align-items:center;gap:8px;padding:9px 10px;background:rgba(255,255,255,.04);cursor:grab}',
     '.head:active{cursor:grabbing}',
     '.dot{width:8px;height:8px;border-radius:50%;background:#5a6470;flex:none}',
-    '.dot.running{background:#5ad18b;box-shadow:0 0 0 3px rgba(90,209,139,.18)}',
-    '.dot.waiting{background:#f2c14e}.dot.paused{background:#f08a4b}.dot.cooldown{background:#7aa2f7}',
+    '.dot.running{background:var(--af-accent);box-shadow:0 0 0 3px rgba(90,209,139,.18)}',
+    '.dot.waiting{background:var(--af-warn)}.dot.paused{background:#f08a4b}.dot.cooldown{background:#7aa2f7}',
     '.title{font-weight:600;letter-spacing:.2px;flex:1}',
-    '.ver{flex:none;font-size:10px;color:#9aa4ae;letter-spacing:.3px;font-variant-numeric:tabular-nums}',
-    '.ver.update{cursor:pointer;color:#5ad18b;background:rgba(90,209,139,.14);border:1px solid rgba(90,209,139,.35);border-radius:99px;padding:1px 6px}',
+    '.ver{flex:none;font-size:10px;color:var(--af-muted);letter-spacing:.3px;font-variant-numeric:tabular-nums}',
+    '.ver.update{cursor:pointer;color:var(--af-accent);background:rgba(90,209,139,.14);border:1px solid rgba(90,209,139,.35);border-radius:99px;padding:2px 7px;min-height:24px;display:inline-flex;align-items:center}',
     '.ver.update:hover{background:rgba(90,209,139,.24)}',
     '.ver:empty{display:none}',
     '.chip{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:#aab4bf;border:1px solid rgba(255,255,255,.12);border-radius:99px;padding:1px 7px}',
-    '.icon{border:0;background:transparent;color:#9aa4ae;font-size:14px;cursor:pointer;padding:2px 4px;border-radius:6px}',
-    '.icon:hover{background:rgba(255,255,255,.08);color:#e8ecef}',
+    '.icon{border:0;background:transparent;color:var(--af-muted);font-size:13px;cursor:pointer;padding:2px 6px;min-height:24px;min-width:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center}',
+    '.icon:hover{background:rgba(255,255,255,.08);color:var(--af-text)}',
     'button:focus-visible,.pill:focus-visible,[role="button"]:focus-visible,.sel:focus-visible{outline:2px solid #5ad18b;outline-offset:2px;border-radius:6px}',
     '.body{padding:10px;display:flex;flex-direction:column;gap:9px;max-height:calc(100vh - 70px);overflow-y:auto}',
+    '@media (min-height:480px){.body{max-height:calc(100vh - 180px)}}',
     '.body,.trophy-list,.perfjson{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}',
     '.body::-webkit-scrollbar,.trophy-list::-webkit-scrollbar,.perfjson::-webkit-scrollbar{width:6px;height:6px}',
     '.body::-webkit-scrollbar-track,.trophy-list::-webkit-scrollbar-track,.perfjson::-webkit-scrollbar-track{background:transparent}',
@@ -1705,10 +1751,12 @@
     '.body::-webkit-scrollbar-thumb:hover,.trophy-list::-webkit-scrollbar-thumb:hover,.perfjson::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.28)}',
     '.body::-webkit-scrollbar-button,.trophy-list::-webkit-scrollbar-button,.perfjson::-webkit-scrollbar-button{display:none;width:0;height:0}',
     '.row{display:flex;align-items:center;gap:6px}',
+    '.row.tappable{cursor:pointer;border-radius:6px;padding:1px 4px;margin:0 -4px}',
+    '.row.tappable:hover{background:rgba(255,255,255,.04)}',
     '.label{flex:1;color:#aab4bf}',
-    '.step{display:flex;align-items:center;gap:2px;background:rgba(255,255,255,.05);border-radius:9px;padding:2px}',
-    '.step button{border:0;background:transparent;color:#cfd6dd;width:24px;height:22px;border-radius:7px;cursor:pointer;font-size:14px;line-height:1}',
-    '.step button:hover{background:rgba(255,255,255,.10)}',
+    '.step{display:flex;align-items:center;gap:4px;background:var(--af-surface);border-radius:9px;padding:2px}',
+    '.step button{border:0;background:transparent;color:#cfd6dd;width:24px;height:24px;border-radius:7px;cursor:pointer;font-size:14px;line-height:1}',
+    '.step button:hover{background:var(--af-surface-hi)}',
     '.step button:disabled{opacity:.3;cursor:default}',
     '.val{min-width:64px;width:64px;text-align:center;font:inherit;font-variant-numeric:tabular-nums;color:#e8ecef;background:transparent;border:1px solid transparent;border-radius:7px;padding:2px 3px;outline:none}',
     '.val:hover{border-color:rgba(255,255,255,.12)}',
@@ -1734,26 +1782,38 @@
     '.banner.result{color:#ffd0a0;background:rgba(255,145,80,.14);border-bottom-color:rgba(255,145,80,.34)}',
     '.banner.blind{color:#ffc9a8;background:rgba(255,120,60,.14);border-bottom-color:rgba(255,120,60,.34)}',
     '.banner.success{color:#5ad18b;background:rgba(90,209,139,.12);border-bottom-color:rgba(90,209,139,.34)}',
+    '.inline-prompt{display:flex;flex-direction:column;gap:6px;padding:8px 10px;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.12)}',
+    '.inline-prompt.hide{display:none}',
+    '.inline-prompt-msg{font-size:11px;color:#dfe5ea;line-height:1.35}',
+    '.inline-prompt-in{width:100%;box-sizing:border-box;background:rgba(12,16,20,.92);border:1px solid rgba(255,255,255,.18);border-radius:7px;color:var(--af-text);font:inherit;font-size:11.5px;padding:5px 7px;outline:none}',
+    '.inline-prompt-in:focus{border-color:var(--af-accent)}',
+    '.inline-prompt-acts{display:flex;gap:6px;justify-content:flex-end}',
+    '.inline-prompt-btn{border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.08);color:var(--af-text);font:inherit;font-size:11px;font-weight:600;padding:4px 10px;min-height:24px;border-radius:7px;cursor:pointer}',
+    '.inline-prompt-btn.ok{background:#2f7d5a;border-color:#2f7d5a;color:#eafff2}',
+    '.inline-prompt-btn.danger{background:#a33a3a;border-color:#a33a3a;color:#ffecec}',
     '.logbox{display:flex;flex-direction:column;gap:4px;padding-top:6px;border-top:1px solid rgba(255,255,255,.08)}',
     '.loghead{display:flex;align-items:center;gap:4px}',
-    '.logmeta{font-size:10px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.logmeta.clickable,.tier.clickable{cursor:pointer;border-radius:6px;padding:1px 2px}',
-    '.logmeta.clickable:hover,.tier.clickable:hover{background:rgba(255,255,255,.08)}',
-    '.icon.csv{font-size:10px;font-weight:600;padding:2px 5px;color:#b8c2cc}',
-    '.icon.danger{color:#ff8fa3}.icon.danger:disabled{opacity:.35;cursor:default}.icon.danger.armed{background:rgba(255,107,107,.16);color:#ffb3b3}',
+    '.logmeta{font-size:10px;color:var(--af-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.logmeta.clickable,.tier.clickable{cursor:pointer;border-radius:6px;padding:1px 3px}',
+    '.logmeta.clickable{text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}',
+    '.tier.clickable{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);padding:2px 0}',
+    '.logmeta.clickable:hover,.tier.clickable:hover{background:rgba(255,255,255,.10)}',
+    '.icon.csv{font-size:10px;font-weight:600;padding:3px 7px;color:#b8c2cc}',
+    '.icon.danger{font-size:10px;font-weight:600;color:var(--af-bad);padding:2px 6px}.icon.danger:disabled{opacity:.35;cursor:default}.icon.danger.armed{background:rgba(255,107,107,.16);color:#ffb3b3}',
     '.strip{display:flex;gap:4px}',
     '.tier{flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.25}',
     '.tier b{font-size:11px;font-weight:600;font-variant-numeric:tabular-nums}',
-    '.tier span{font-size:9.5px;letter-spacing:.3px;text-transform:uppercase;color:#9aa4ae}',
-    '.last{font-size:10.5px;color:#9aa4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.sel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:#e8ecef;font:inherit;font-size:11px;padding:2px 4px;max-width:104px}',
-    '.sel option{background:#12161c;color:#e8ecef}',
-    '.perfbox{display:flex;flex-direction:column;gap:2px;padding:6px 4px 2px;border-top:1px solid rgba(255,255,255,.08);cursor:pointer;border-radius:6px}',
-    '.perfbox:hover{background:rgba(255,255,255,.04)}',
-    '.perf{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-    '.capture{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:4px}',
-    '.capture[role="button"]:hover{text-decoration:underline}',
-    '.capture.on{color:#5ad18b}.capture.warn{color:#f2c14e}',
+    '.tier span{font-size:9.5px;letter-spacing:.3px;text-transform:uppercase;color:var(--af-muted)}',
+    '.last{font-size:10.5px;color:var(--af-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.sel{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;color:var(--af-text);font:inherit;font-size:11px;padding:2px 4px;min-height:24px;max-width:104px}',
+    '.sel option{background:#12161c;color:var(--af-text)}',
+    '.perfbox{display:flex;flex-direction:column;gap:2px;padding:6px 7px;margin-top:2px;border:1px solid rgba(255,255,255,.07);cursor:pointer;border-radius:8px}',
+    '.perfbox:hover{background:rgba(255,255,255,.05);border-color:rgba(255,255,255,.14)}',
+    '.perf{font-size:10px;color:var(--af-muted);font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '.capture{font-size:10px;color:var(--af-muted);font-variant-numeric:tabular-nums;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:4px}',
+    '.capture[role="button"]{text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}',
+    '.capture[role="button"]:hover{color:var(--af-text)}',
+    '.capture.on{color:var(--af-accent)}.capture.warn{color:var(--af-warn)}',
     '.subhead{font-size:9.5px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:#8b95a0;padding-top:4px;border-top:1px solid rgba(255,255,255,.06)}',
     '.subhead:first-child{padding-top:0;border-top:0}',
     '.timedgrp{display:flex;flex-direction:column;gap:9px}',
@@ -1783,7 +1843,7 @@
     '.trophy-head{display:flex;align-items:center;gap:6px}',
     '.trophy-title{flex:1;font-weight:600;font-size:11.5px;color:#e8ecef}',
     '.trophy-tabs{display:flex;gap:4px}',
-    '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:#9aa4ae;font:inherit;font-size:10px;padding:3px 7px;border-radius:99px;cursor:pointer}',
+    '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:var(--af-muted);font:inherit;font-size:10px;padding:4px 8px;min-height:24px;border-radius:99px;cursor:pointer}',
     '.trophy-tab.active{background:rgba(90,209,139,.18);color:#5ad18b}',
     '.trophy-list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:5px;padding-right:4px}',
     '.trophy-foot{display:flex;align-items:center;justify-content:space-between;padding-top:6px;border-top:1px solid rgba(255,255,255,.08);font-size:10px;color:#8b95a0}',
@@ -1801,11 +1861,25 @@
     '.trophy-badge{font-size:9px;font-weight:600;letter-spacing:.2px;padding:0 5px;border-radius:99px;border:1px solid;background:rgba(255,255,255,.04);line-height:1.45}',
     '.trophy-sub{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.trophy-empty{font-size:11px;color:#8b95a0;text-align:center;padding:24px 8px}',
-    '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.74);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:24px;cursor:pointer;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
-    '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;max-width:90vw;max-height:86vh}',
-    '.trophy-lb-img{max-width:min(86vw,480px);max-height:80vh;width:auto;height:auto;object-fit:contain;display:block;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.74);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:24px;cursor:pointer;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--af-text);user-select:none;-webkit-user-select:none}',
+    '.trophy-lb-shell{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:92vw;max-height:92vh}',
+    '.trophy-lb-row{display:flex;align-items:center;gap:12px}',
+    '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;max-width:82vw;max-height:76vh}',
+    '.trophy-lb-img{max-width:min(80vw,480px);max-height:74vh;width:auto;height:auto;object-fit:contain;display:block;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lb-img.rare-leg{filter:drop-shadow(0 14px 28px rgba(242,193,78,.26)) drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lb-img.rare-sec{filter:drop-shadow(0 14px 28px rgba(255,143,163,.26)) drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lb-img.rare-gold{filter:drop-shadow(0 14px 28px rgba(255,217,112,.30)) drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
     '.trophy-lb-img.trophy-sprite{min-width:160px;min-height:160px}',
+    '.trophy-lb-nav{width:34px;height:34px;border-radius:99px;border:1px solid rgba(255,255,255,.18);background:rgba(18,22,28,.82);color:var(--af-text);font:inherit;font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:background-color .14s ease}',
+    '.trophy-lb-nav:hover{background:rgba(255,255,255,.18)}',
+    '.trophy-lb-nav.hide{display:none}',
+    '.trophy-lb-meta{display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:6px;padding:6px 12px;border-radius:99px;background:rgba(18,22,28,.86);border:1px solid rgba(255,255,255,.14);font-size:11.5px;color:#dfe5ea;font-variant-numeric:tabular-nums;cursor:default}',
+    '.trophy-lb-meta .trophy-badges{gap:4px}',
+    '.trophy-lb-sep{color:var(--af-dim)}',
+    '.trophy-lb-close{border:0;background:rgba(255,255,255,.10);color:#cfd6dd;width:24px;height:24px;border-radius:99px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;margin-left:2px}',
+    '.trophy-lb-close:hover{background:rgba(255,255,255,.22);color:var(--af-text)}',
     '.trophy-lb-missing{font-size:12px;color:#cfd6dd;background:rgba(18,22,28,.9);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:18px 24px}',
+    '@media (prefers-reduced-motion:reduce){.chev,.trophy-lb-img,.trophy-lb-nav{transition:none!important}}',
     '.trophy-lightbox.hide{display:none}',
     '.hide{display:none}'
   ].join('\n');
@@ -1820,6 +1894,7 @@
 
   function build() {
     ui = {};
+    accordionSections = [];
     host = document.createElement('div');
     host.id = 'autofish-panel';
     host.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;';
@@ -1973,12 +2048,28 @@
     profAdd.type = 'button';
     profAdd.setAttribute('aria-label', 'New profile');
     profAdd.title = 'new profile with its own catch history and daily budget';
-    var profReset = el('button', 'icon danger', '×');
+    var profReset = el('button', 'icon danger', 'clear');
     profReset.type = 'button';
     profReset.setAttribute('aria-label', 'Clear profile catch history');
     profReset.title = 'clear this profile’s catch history (cannot be undone)';
     profRow.append(profLabel, profSel, profAdd, profReset);
     setSec.body.appendChild(profRow);
+    function bindRowTap(row, btn) {
+      row.className = 'row tappable';
+      row.addEventListener('click', function (e) {
+        var tgt = /** @type {HTMLElement | null} */ (e.target);
+        if (tgt && tgt.closest && tgt.closest('button,select,input')) return;
+        btn.click();
+      });
+    }
+    bindRowTap(modeRow, modeToggle);
+    bindRowTap(winRow, winToggle);
+    bindRowTap(chainRow, chainToggle);
+    bindRowTap(upsellRow, upsellToggle);
+    bindRowTap(focusRow, focusToggle);
+    bindRowTap(claimRow, claimToggle);
+    bindRowTap(reloadRow, reloadToggle);
+    bindRowTap(chimeRow, chimeToggle);
     [
       [modeLabel, modeToggle],
       [winLabel, winToggle],
@@ -2136,7 +2227,22 @@
     trophyFoot.append(trophyHint, trophyClear);
     trophyPop.append(trophyHead, trophyTabsWrap, trophyStatus, trophyList, trophyFoot);
 
+    var inlinePrompt = el('div', 'inline-prompt hide');
+    var inlinePromptMsg = el('div', 'inline-prompt-msg', '');
+    var inlinePromptIn = /** @type {HTMLInputElement} */ (el('input', 'inline-prompt-in'));
+    inlinePromptIn.type = 'text';
+    inlinePromptIn.autocomplete = 'off';
+    inlinePromptIn.spellcheck = false;
+    var inlinePromptActs = el('div', 'inline-prompt-acts');
+    var inlinePromptCancel = el('button', 'inline-prompt-btn', 'Cancel');
+    inlinePromptCancel.type = 'button';
+    var inlinePromptOk = el('button', 'inline-prompt-btn ok', 'OK');
+    inlinePromptOk.type = 'button';
+    inlinePromptActs.append(inlinePromptCancel, inlinePromptOk);
+    inlinePrompt.append(inlinePromptMsg, inlinePromptIn, inlinePromptActs);
+
     card.append(head, bannerEl, body, trophyPop);
+    card.insertBefore(inlinePrompt, body);
     var pill = el('button', 'pill hide', '🎣');
     pill.type = 'button';
     pill.title = 'Expand AutoFish panel';
@@ -2148,8 +2254,25 @@
     trophyLightbox.setAttribute('aria-modal', 'true');
     trophyLightbox.setAttribute('aria-label', 'Trophy catch card preview');
     trophyLightbox.tabIndex = -1;
+    var trophyLbShell = el('div', 'trophy-lb-shell');
+    var trophyLbRow = el('div', 'trophy-lb-row');
+    var trophyLbPrev = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-nav', '‹'));
+    trophyLbPrev.type = 'button';
+    trophyLbPrev.setAttribute('aria-label', 'Previous trophy card');
+    trophyLbPrev.title = 'Previous (Left arrow)';
     var trophyLbStage = el('div', 'trophy-lb-stage');
-    trophyLightbox.appendChild(trophyLbStage);
+    var trophyLbNext = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-nav', '›'));
+    trophyLbNext.type = 'button';
+    trophyLbNext.setAttribute('aria-label', 'Next trophy card');
+    trophyLbNext.title = 'Next (Right arrow)';
+    var trophyLbMeta = el('div', 'trophy-lb-meta');
+    var trophyLbClose = /** @type {HTMLButtonElement} */ (el('button', 'trophy-lb-close', '×'));
+    trophyLbClose.type = 'button';
+    trophyLbClose.setAttribute('aria-label', 'Close trophy preview');
+    trophyLbClose.title = 'Close (Esc)';
+    trophyLbRow.append(trophyLbPrev, trophyLbStage, trophyLbNext);
+    trophyLbShell.append(trophyLbRow, trophyLbMeta);
+    trophyLightbox.appendChild(trophyLbShell);
 
     root.append(wrap, trophyLightbox);
 
@@ -2159,6 +2282,7 @@
     // merge rather than replace, or every one of those references is lost.
     Object.assign(ui, {
       wrap: wrap, card: card, head: head, dot: dot, ver: ver, chip: chip, minBtn: min,
+      inlinePrompt: inlinePrompt, inlinePromptMsg: inlinePromptMsg, inlinePromptIn: inlinePromptIn, inlinePromptOk: inlinePromptOk,
       modeToggle: modeToggle, timedWrap: timedWrap,
       winToggle: winToggle, timeRow: timeRow, upsellToggle: upsellToggle,
       focusToggle: focusToggle,
@@ -2170,8 +2294,20 @@
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
       trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyClear: trophyClear,
-      trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage,
+      trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage, trophyLbPrev: trophyLbPrev, trophyLbNext: trophyLbNext, trophyLbMeta: trophyLbMeta, trophyLbClose: trophyLbClose,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
+    });
+
+    inlinePromptCancel.addEventListener('click', hideInlinePrompt);
+    inlinePromptOk.addEventListener('click', function () {
+      var cb = ui.inlinePromptOnOk;
+      var val = inlinePromptIn.value;
+      hideInlinePrompt();
+      if (cb) cb(val);
+    });
+    inlinePromptIn.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); inlinePromptOk.click(); }
+      else if (e.key === 'Escape') { e.preventDefault(); hideInlinePrompt(); }
     });
 
     // stop the game seeing our clicks (bubble phase: our handlers already ran)
@@ -2227,9 +2363,15 @@
     secondary.addEventListener('click', function () {
       var at = Date.now();
       if (state.phase === 'cooldown') {
-        if (!window.confirm('The cooldown is self-imposed. Skip it and start fishing now?')) return;
-        dispatch({ type: 'skip-cooldown', at: at });
-        dispatch({ type: 'start', at: at });
+        showInlinePrompt({
+          msg: 'Skip this self-imposed cooldown and start fishing now?',
+          confirmLabel: 'Start now',
+          onOk: function () {
+            var nowAt = Date.now();
+            dispatch({ type: 'skip-cooldown', at: nowAt });
+            dispatch({ type: 'start', at: nowAt });
+          }
+        });
         return;
       }
       dispatch({ type: 'stop', at: at, reason: 'user' });
@@ -2297,11 +2439,18 @@
       }
     });
     captureRow.addEventListener('click', function () {
+      if (!overnightPref && !captureServer()) {
+        openCapturePrompt(function () {
+          overnightPref = true;
+          captureClearBackoff();
+          syncCaptureUrl();
+          savePrefs();
+          armOvernight();
+          render();
+        });
+        return;
+      }
       var next = !overnightPref;
-      // The inlined userscript was not served by fishserve, so it has no origin to fetch from.
-      // Ask on the first click whatever the switch currently says; a cancelled/malformed answer
-      // leaves local capture off so both CSV streaming and snapshots stay cleanly disabled.
-      if (!captureServer()) next = !!askCaptureAddress();
       overnightPref = next;
       captureClearBackoff();
       syncCaptureUrl();
@@ -2334,20 +2483,34 @@
     });
     profAdd.addEventListener('click', function () {
       if (activePhase()) { banner = 'stop the session before switching profiles'; render(); return; }
-      var rawName = prompt('New profile name (its own catch history and daily budget)', 'alt');
-      var name = String(rawName || '').trim();
-      if (!name) return;
-      switchProfile(name);
+      showInlinePrompt({
+        msg: 'New profile name (its own catch history and daily budget):',
+        input: true,
+        value: 'alt',
+        placeholder: 'profile name',
+        confirmLabel: 'Create',
+        onOk: function (rawName) {
+          var name = String(rawName || '').trim();
+          if (!name) return;
+          switchProfile(name);
+        }
+      });
     });
     profReset.addEventListener('click', function () {
       var f = fish();
       if (!f || !f.logReset) return;
       var name = f.logProfile();
-      if (!window.confirm('Clear the catch history for profile "' + name + '"? This cannot be undone.')) return;
-      f.logReset();
-      banner = 'catch history cleared for ' + name;
-      renderLog();
-      render();
+      showInlinePrompt({
+        msg: 'Clear the catch history for "' + name + '"? This cannot be undone.',
+        confirmLabel: 'Clear history',
+        danger: true,
+        onOk: function () {
+          if (f.logReset) f.logReset();
+          banner = 'catch history cleared for ' + name;
+          renderLog();
+          render();
+        }
+      });
     });
     logTrophiesBtn.addEventListener('click', function () { openTrophyPop('all'); });
     logCsvBtn.addEventListener('click', downloadLedgerCsv);
@@ -2385,15 +2548,65 @@
       try { if (ui.logTrophiesBtn) ui.logTrophiesBtn.focus(); } catch (e) {}
     }
     trophyClose.addEventListener('click', closePopWithFocus);
+    trophyLbMeta.addEventListener('click', function (e) { e.stopPropagation(); });
+    trophyLbPrev.addEventListener('click', function (e) {
+      e.stopPropagation();
+      trophyLightboxIdx--;
+      renderTrophyLightbox();
+    });
+    trophyLbNext.addEventListener('click', function (e) {
+      e.stopPropagation();
+      trophyLightboxIdx++;
+      renderTrophyLightbox();
+    });
+    trophyLbClose.addEventListener('click', function (e) {
+      e.stopPropagation();
+      closeTrophyLightbox();
+    });
     trophyLightbox.addEventListener('click', function () {
       closeTrophyLightbox();
     });
     trophyLightbox.addEventListener('keydown', function (e) {
       if (!trophyLightboxOpen) return;
-      if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        e.stopPropagation();
+        trophyLightboxIdx--;
+        renderTrophyLightbox();
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        e.stopPropagation();
+        trophyLightboxIdx++;
+        renderTrophyLightbox();
+        return;
+      }
+      if (e.key === 'Escape' || ((e.key === 'Enter' || e.key === ' ') && e.target === trophyLightbox)) {
         e.preventDefault();
         e.stopPropagation();
         closeTrophyLightbox();
+        return;
+      }
+      if (e.key === 'Tab') {
+        var lbFocusables = Array.prototype.filter.call(
+          trophyLightbox.querySelectorAll('button:not(:disabled)'),
+          function (b) { return !b.classList.contains('hide') && b.offsetParent !== null; }
+        );
+        if (!lbFocusables.length) {
+          e.preventDefault();
+          trophyLightbox.focus();
+          return;
+        }
+        var lbFirst = lbFocusables[0], lbLast = lbFocusables[lbFocusables.length - 1];
+        var lbActive = (root && root.activeElement) || document.activeElement;
+        if (e.shiftKey && (lbActive === lbFirst || !trophyLightbox.contains(lbActive))) {
+          e.preventDefault();
+          lbLast.focus();
+        } else if (!e.shiftKey && (lbActive === lbLast || !trophyLightbox.contains(lbActive))) {
+          e.preventDefault();
+          lbFirst.focus();
+        }
       }
     });
     wrap.addEventListener('keydown', function (e) {
@@ -2459,6 +2672,9 @@
    * A real <button> header (never a div, so Enter and Space work) keeps the rows in the DOM but
    * out of the glance. place() is re-run because opening one changes the card's height.
    */
+  /** @type {Array<{ box: HTMLElement, rows: HTMLElement, toggle: HTMLElement }>} */
+  var accordionSections = [];
+
   function section(title) {
     var box = el('div', 'sec');
     var toggle = el('button', 'sechead');
@@ -2467,10 +2683,20 @@
     toggle.append(chev, name);
     toggle.setAttribute('aria-expanded', 'false');
     var rows = el('div', 'secbody hide');
+    var entry = { box: box, rows: rows, toggle: toggle };
+    accordionSections.push(entry);
     toggle.addEventListener('click', function () {
       var open = !rows.classList.toggle('hide');
       box.classList.toggle('open', open);
       toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (open) {
+        accordionSections.forEach(function (other) {
+          if (other === entry || other.rows.classList.contains('hide')) return;
+          other.rows.classList.add('hide');
+          other.box.classList.remove('open');
+          other.toggle.setAttribute('aria-expanded', 'false');
+        });
+      }
       place();
     });
     box.append(toggle, rows);
@@ -3132,6 +3358,7 @@
       viewport: { w: window.innerWidth, h: window.innerHeight },
       exclude: exclude,
       topInset: 72,
+      bottomInset: 88,
       preferred: dragged || null
     });
     if (res === 'pill') {

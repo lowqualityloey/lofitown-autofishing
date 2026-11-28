@@ -58,3 +58,15 @@ test('a preferred spot that is already clear is kept', () => {
   const preferred = { x: 20, y: 40, w: 260, h: 300 };
   assert.deepEqual(place({ panel, viewport: { w: 1522, h: 954 }, exclude, preferred }), { x: 20, y: 40, w: 260, h: 300 });
 });
+
+test('bottomInset keeps bottom corners clear of game music/focus bars', () => {
+  const r = place({
+    panel,
+    viewport: { w: 1668, h: 1028 },
+    exclude: { x: 0, y: 0, w: 300, h: 600 },
+    topInset: 72,
+    bottomInset: 88
+  });
+  assert.notEqual(r, 'pill');
+  assert.ok(r.y + r.h <= 1028 - 88, 'respects bottomInset headroom');
+});
