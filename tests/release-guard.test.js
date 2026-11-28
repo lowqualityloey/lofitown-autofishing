@@ -35,8 +35,7 @@ test('a tag with no vault trailer is refused, so a release cannot publish unreco
   assert.throws(() => milestoneFor('v9.9.9', 'fix: nothing here\n'), /heyloey done/, 'it says how to fix it');
 
   // A published tag must never be doctored: a moved tag leaves installed copies and the mirror on
-  // a commit it no longer names. The default - and the only advice with an unknown state - is the
-  // note alone.
+  // a commit it no longer names. The repair is the note plus a recorded exemption, never a retag.
   const publishedErr = milestoneError('v9.9.9', 'fix: nothing here\n', { published: true });
   assert.match(publishedErr.message, /already published, so its tag must not move/);
   assert.match(publishedErr.message, /heyloey done/);
@@ -74,6 +73,23 @@ test('a tag with no vault trailer is refused, so a release cannot publish unreco
   const publishAt = src.indexOf('publishMirror(mirror.repo');
   assert.ok(at > 0 && publishAt > 0 && at < publishAt, 'the trailer gate runs before anything is published');
   assert.equal((src.match(/milestoneFor\(tag, git\(/g) || []).length, 1, 'exactly one gate, on the tag commit');
+});
+
+test('an already-published tag without a trailer gets the exemption step, not a dead end', () => {
+  const err = milestoneError('v9.9.9', 'fix: nothing here\n', { published: true });
+  assert.match(err.message, /already published, so its tag must not move/);
+  assert.match(err.message, /heyloey done/);
+  assert.match(err.message, /TRAILER_EXEMPT in scripts\/release\.js/);
+  assert.ok(err.message.includes("'v9.9.9':"), 'the refusal prints the exact table key');
+  assert.match(err.message, /commit and push scripts\/release\.js/);
+  assert.match(err.message, /next run accepts this tag/);
+  assert.doesNotMatch(err.message, /--amend/, 'a published commit is never rewritten');
+  assert.doesNotMatch(err.message, /git tag -f/, 'a published tag never moves');
+
+  // The documented post-publish path is not just printed: once recorded, the gate accepts it.
+  const recorded = milestoneFor('v3.9.74', 'release: v3.9.74\n');
+  assert.equal(recorded.exempt, true, 'a recorded published-tag exemption is accepted');
+  assert.match(recorded.reason, /vault note logged/);
 });
 
 for (const visibility of ['private', 'internal']) {

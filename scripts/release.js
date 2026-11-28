@@ -83,9 +83,9 @@ function mirrorFromUpdateUrl(url) {
 
 /**
  * The vault record rides on the release commit as a `HeyLoey-Milestone:` trailer, and the repo's
- * post-commit hook turns it into the daily note. Nothing about publishing depends on it, so a tag
- * without the trailer still ships - which is how 3.9.12 and then 3.9.43 went unrecorded and had to
- * be backfilled. The rule lived in an instruction; this makes the tool refuse instead.
+ * post-commit hook turns it into the daily note. A tag without it is refused so a release cannot
+ * publish unrecorded. An already-published tag cannot move, so its remedy is the vault note plus a
+ * TRAILER_EXEMPT entry - printed by the refusal - not an amend or a retag.
  */
 const TRAILER = /^HeyLoey-Milestone:[ \t]*(\S.*)$/m;
 const TRAILER_EXEMPT = {
@@ -107,10 +107,10 @@ function milestoneText(body) {
 
 /**
  * Which repair to offer depends on whether the release is already out. A tag that is published must
- * not move - installed copies and the mirror point at the commit it already names - so the default
- * (and the only thing `--check` can safely say about an existing release) is to log the note and
- * leave git alone. Amending and re-tagging is offered only while nothing has been published.
- * `published` defaults to true: an unknown state has to give the safe advice.
+ * not move - installed copies and the mirror point at the commit it already names - so the repair is
+ * to log the note and record a TRAILER_EXEMPT entry in this file; the refusal prints both steps.
+ * Amending and re-tagging is offered only while nothing has been published. `published` defaults to
+ * true: an unknown state has to give the safe advice.
  */
 function milestoneFor(tag, body, options) {
   const published = !options || options.published !== false;
@@ -121,8 +121,12 @@ function milestoneFor(tag, body, options) {
   if (published) {
     throw new Error(
       tag + ' has no HeyLoey-Milestone: trailer, so this release has no vault record.\n' +
-      '  It is already published, so its tag must not move - writing the note is the fix:\n' +
-      logIt
+      '  It is already published, so its tag must not move. Finish the record:\n' +
+      logIt + '\n' +
+      '  then:      add this entry to TRAILER_EXEMPT in scripts/release.js:\n' +
+      "               '" + tag + "': 'published YYYY-MM-DD without the trailer; " +
+      "tag cannot move; vault note logged YYYY-MM-DD',\n" +
+      '  and:       commit and push scripts/release.js; the next run accepts this tag'
     );
   }
   throw new Error(
