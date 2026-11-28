@@ -525,7 +525,7 @@
   function cardShapeOk(m, o) {
     const cfg = o || {};
     const minW = cfg.minW != null ? cfg.minW : 260;
-    const maxInk = cfg.maxInk != null ? cfg.maxInk : 0.3;
+    const maxInk = cfg.maxInk != null ? cfg.maxInk : 0.46;
     if (!m) return { card: false, why: 'none' };
     if (!(m.w >= minW)) return { card: false, why: 'narrow' };
     if (!(m.ink < maxInk)) return { card: false, why: 'inky' };

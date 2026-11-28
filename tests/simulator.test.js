@@ -433,3 +433,47 @@ test('simulator 7: trophy-wait holds catch dismissal until settled without incre
   assert.equal(sim.F.stats.cards, 1);
   assert.equal(sim.F.stats.textGaps, 0);
 });
+
+test('simulator 8: text-fallback catch card rescues missed visual cards and blocks castRetry dismissal', () => {
+  const sim = createHarness();
+  sim.F.opts.castRetryMs = 5000;
+  sim.F.startedAt = 1000;
+  sim.F.lastPress = 1000;
+  sim.F.attempt = { n: 64, startedAt: 1000, touched: 1000, presses: 7, dials: 2, dialHits: 2 };
+  sim.F.pendingWin = { closedAt: 1200, presses: 7, verdict: 'hit' };
+
+  // Visual findCatch() returns null (e.g. heavily illustrated Megalodon card), while fallbackCatchCard holds text grace
+  sim.state.catchResult = null;
+  let fallbackCalls = 0;
+  const simIoCard = { cx: 801, cy: 452, w: 390, h: 472, frac: 1, via: 'text' };
+
+  // Inject fallbackCatchCard on a custom step call sequence via stepFrame + F.textCardAt
+  const { stepFrame } = require('../src/loop.js');
+  const spacesBefore = sim.spaces.length;
+  sim.F.textCardAt = 6000;
+  sim.stepAt(6100);
+  assert.equal(sim.spaces.length, spacesBefore, 'castRetry must not fire Space while textCardAt holds an unlogged card');
+
+  // Once fallbackCatchCard supplies the centered card after grace, stepFrame logs and dismisses it cleanly
+  stepFrame(sim.F, 6300, {
+    isVisible: () => true,
+    now: () => 6300,
+    findCatch: () => null,
+    fallbackCatchCard: () => { fallbackCalls++; return simIoCard; },
+    findBubble: () => null,
+    recordCatch: () => 'logged',
+    tap: (x, y) => { sim.taps.push({ t: 6300, x, y }); return true; },
+    space: (t) => { sim.spaces.push({ t: 6300, target: t }); return true; },
+    log: (msg, extra) => sim.logs.push({ t: 6300, msg, extra }),
+    clearPendingWin: () => { sim.F.pendingWin = null; },
+    startAttempt: () => {},
+    resolveAttempt: () => {},
+    sameDial: () => false,
+    saveDialMemory: () => true,
+    tryEscapeProfile: () => {},
+  });
+  assert.equal(fallbackCalls, 1);
+  assert.equal(sim.taps.length, 1);
+  assert.deepEqual(sim.taps[0], { t: 6300, x: 801, y: 452 });
+  assert.equal(sim.F.textCardAt, 0, 'clears textCardAt after fallback card dismissal');
+});

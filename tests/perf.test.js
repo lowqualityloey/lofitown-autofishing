@@ -205,10 +205,10 @@ test('the catch-card scan is throttled to about 10 Hz', () => {
   assert.ok(Number(m[1]) >= 100, 'a card waits for a tap; there is nothing to win by scanning faster');
 });
 
-test('the card box follows the live canvas and only runs while a catch is pending', () => {
-  // Live at 1920x1080: the old fixed 1179 box read cream world art and tapped it every 4 s.
-  assert.match(CORE, /const CARD_BOX_REF = \{ x: 620, y: 315, w: 365, h: 405, cw: 1179, ch: 821 \}/);
+test('the card box follows the live canvas centered across viewports and only runs while a catch is pending', () => {
+  assert.match(CORE, /function canvasDpr\(\)/);
   assert.match(CORE, /function cardBox\(cw, ch\)/);
+  assert.match(CORE, /W \* 0\.48 - w \/ 2/, 'cardBox anchors horizontally around actual modal center across viewports');
   for (const start of ['function cardGate()', 'function cardInBox()']) {
     const fn = fnBody(start);
     assert.match(fn, /cardBox\(uiCanvas && uiCanvas\.width, uiCanvas && uiCanvas\.height\)/, start + ' must size from the live canvas');

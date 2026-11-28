@@ -373,8 +373,10 @@
     // dismissed cards that had not printed their species yet, losing the record. Bounded, so a
     // card that never prints text still clears.
     const awaitingCard = !!(F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000);
+    if (!awaitingCard) F.textCardAt = 0;
     if (!F.geo && t - (F.lastCard || 0) > 1500 && awaitingCard) {
-      const card = o.findCatch ? o.findCatch() : (F.findCatch ? F.findCatch() : null);
+      let card = o.findCatch ? o.findCatch() : (F.findCatch ? F.findCatch() : null);
+      if (!card && o.fallbackCatchCard) card = o.fallbackCatchCard(t);
       if (card) {
         clearResultMissing('catch card');
         markShapeHit(t);
@@ -392,7 +394,7 @@
           F.stats.textGaps = (F.stats.textGaps || 0) + 1;
         }
         tap(card.cx, card.cy);
-        F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0;
+        F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0; F.textCardAt = 0;
         F.stats.cards = (F.stats.cards || 0) + 1;
         L('catch card dismissed', { via: card.via, frac: card.frac, log: r });
         return;
@@ -623,7 +625,8 @@
 
     const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs &&
       t - Math.max(F.castHoldAt || 0, F.lastCastTry || 0) > F.opts.seatHoldRetryMs);
-    if (!F.resultMissing && (!F.castHold || seatProbe) && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
+    const holdingCard = !!(F.cardWait != null || F.trophyWaitAt || F.textCardAt);
+    if (!F.resultMissing && (!F.castHold || seatProbe) && F.opts.castRetryMs && !holdingCard && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
       F.lastCastTry = t;
       F.stats.castRetries = (F.stats.castRetries || 0) + 1;
       const tries = (F.stallRetry = (F.stallRetry || 0) + 1);

@@ -6,7 +6,7 @@ A one-file AutoFish for [lofi.town](https://app.lofi.town/) - no server, no buil
 
 ## Status
 
-**Actively maintained.** Current release **3.9.71** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.71)) · **full test suite passing** on 2026-11-28 · [MIT](LICENSE)
+**Actively maintained.** Current release **3.9.72** ([public release](https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/tag/v3.9.72)) · **full test suite passing** on 2026-11-28 · [MIT](LICENSE)
 
 Requires a desktop Chrome, Edge or Firefox browser with [Tampermonkey](https://www.tampermonkey.net/), the game open, and a character you can seat.
 
@@ -36,11 +36,11 @@ The obvious alternatives are doing the loop manually or using another lofi.town 
 4. Click a chair, bench or stool at the water's edge and wait for the game's own **CAST!** prompt. The bot cannot seat you.
 5. Press **Start** on the panel. The badge changes to **RUNNING** and `presses` starts climbing.
 
-There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.71`) or this browser-console command:
+There is no shell command for the basic install; step 2 is the URL. After installation, verify it with the panel header (`v3.9.72`) or this browser-console command:
 
 ```js
 __fish.version
-// 3.9.71
+// 3.9.72
 ```
 
 ### Nothing happened?
@@ -66,7 +66,7 @@ The panel keeps everyday controls on its surface (`Start / Pause`, `Stop`, elaps
 
 ![The AutoFish panel showing Flow mode, Local capture, and live diagnostics](docs/images/panel.jpg)
 
-The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.71. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
+The local ledger tracks per-species counts and best weights, rarity totals, 60 day buckets, and per-profile daily budgets. It never requires the server. Historical field runs give a sense of the floor: the 3.9.27 run recorded 145 attempts, 144 catches (99.3%), 777/777 accepted presses, 258 dial hits and 0 misses; the 3.9.15 baseline was 126/133 (94.7%). These are measurements of those builds, not a guarantee for 3.9.72. The full records and caveats are in [AUTOFISH.md](AUTOFISH.md).
 
 ## Limits and requirements
 

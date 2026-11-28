@@ -474,6 +474,7 @@ interface Rect {
     now(): number;
     stop(): void;
     findCatch(): any;
+    fallbackCatchCard?(t: number): any;
     findBubble(): any;
     sample(geo: GeoLock): any;
     lockDial(hx: number, hy: number, span?: number): GeoLock | null;

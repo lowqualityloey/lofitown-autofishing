@@ -42,6 +42,7 @@
 
 | File | What it is |
 | :--- | :--- |
+| [releases/3.9.72.md](releases/3.9.72.md) | 3.9.72: Viewport-flexible centered `cardBox()`, DPR scaling, `maxInk: 0.46` rare-card acceptance, `fallbackCatchCard()` text backstop, and `castRetry` card guard. |
 | [releases/3.9.71.md](releases/3.9.71.md) | 3.9.71: Transparent scrim-stripped PNG trophy capture (`uiCanvas`-locked settle gating, post-flash hold, post-trim core verification, and stale-text catch sync). |
 | [releases/3.9.70.md](releases/3.9.70.md) | 3.9.70: Dual-surface non-white trophy screen capture (`uiCanvas` + `gameCanvas`) and clean card-only floating Lightbox overlay. |
 | [releases/3.9.69.md](releases/3.9.69.md) | 3.9.69: Authentic lofi.town catch card Lightbox renderer (`Fish-Tier-*` pixel badges, rarity frames, PNG export) and removal of white `uiCanvas` captures. |

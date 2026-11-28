@@ -44,6 +44,11 @@ test('a remembered circle scales with a proportionally resized canvas', () => {
     T.dialGeoFit({ cx: 840, cy: 411, R: 96, cw: 1680, ch: 1031 }, 1260, 773.25),
     { cx: 630, cy: 308, R: 72 }
   );
+  assert.deepEqual(
+    T.dialGeoFit({ cx: 1680, cy: 822, R: 192, cw: 3360, ch: 2062 }, 3360, 2062, 2),
+    { cx: 1680, cy: 822, R: 192 },
+    'scales dial radius range by devicePixelRatio on HiDPI canvases'
+  );
 });
 
 test('a circle from a different aspect, or junk, is not trusted', () => {

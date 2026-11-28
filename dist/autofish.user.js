@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.71
+// @version      3.9.72
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -342,8 +342,12 @@ window.__autofishInstalled = true;
   /**
    * Validate a stored circle against the canvas it will be used on. Same canvas -> unchanged; a
    * proportionally bigger/smaller canvas -> scaled; anything else -> null.
+   * @param {any} stored
+   * @param {number} cw
+   * @param {number} ch
+   * @param {number} [dpr]
    */
-  function dialGeoFit(stored, cw, ch) {
+  function dialGeoFit(stored, cw, ch, dpr) {
     if (!stored || !finitePositive(cw) || !finitePositive(ch)) return null;
     const cx = Number(stored.cx), cy = Number(stored.cy), R = Number(stored.R);
     const sw0 = Number(stored.cw), sh0 = Number(stored.ch);
@@ -353,8 +357,9 @@ window.__autofishInstalled = true;
       k = cw / sw0;
       if (Math.abs(ch / sh0 - k) > 0.02) return null;          // not the same camera, just a resize
     }
+    const scale = finitePositive(dpr) ? Number(dpr) : 1;
     const out = { cx: Math.round(cx * k), cy: Math.round(cy * k), R: Math.round(R * k) };
-    if (out.R < DIAL_R_MIN || out.R > DIAL_R_MAX) return null;
+    if (out.R < Math.round(DIAL_R_MIN * scale) || out.R > Math.round(DIAL_R_MAX * scale)) return null;
     if (out.cx < 0 || out.cy < 0) return null;
     return out;
   }
@@ -1603,7 +1608,7 @@ const SPECIES = [
   function cardShapeOk(m, o) {
     const cfg = o || {};
     const minW = cfg.minW != null ? cfg.minW : 260;
-    const maxInk = cfg.maxInk != null ? cfg.maxInk : 0.3;
+    const maxInk = cfg.maxInk != null ? cfg.maxInk : 0.46;
     if (!m) return { card: false, why: 'none' };
     if (!(m.w >= minW)) return { card: false, why: 'narrow' };
     if (!(m.ink < maxInk)) return { card: false, why: 'inky' };
@@ -2220,8 +2225,10 @@ const SPECIES = [
     // dismissed cards that had not printed their species yet, losing the record. Bounded, so a
     // card that never prints text still clears.
     const awaitingCard = !!(F.pendingWin && t - (F.pendingWin.closedAt || t) < 30000);
+    if (!awaitingCard) F.textCardAt = 0;
     if (!F.geo && t - (F.lastCard || 0) > 1500 && awaitingCard) {
-      const card = o.findCatch ? o.findCatch() : (F.findCatch ? F.findCatch() : null);
+      let card = o.findCatch ? o.findCatch() : (F.findCatch ? F.findCatch() : null);
+      if (!card && o.fallbackCatchCard) card = o.fallbackCatchCard(t);
       if (card) {
         clearResultMissing('catch card');
         markShapeHit(t);
@@ -2239,7 +2246,7 @@ const SPECIES = [
           F.stats.textGaps = (F.stats.textGaps || 0) + 1;
         }
         tap(card.cx, card.cy);
-        F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0;
+        F.lastCard = t; F.cardWait = null; F.lastCardRect = null; F.cardUntil = 0; F.textCardAt = 0;
         F.stats.cards = (F.stats.cards || 0) + 1;
         L('catch card dismissed', { via: card.via, frac: card.frac, log: r });
         return;
@@ -2470,7 +2477,8 @@ const SPECIES = [
 
     const seatProbe = !!(F.castHold && F.opts.seatHoldRetryMs &&
       t - Math.max(F.castHoldAt || 0, F.lastCastTry || 0) > F.opts.seatHoldRetryMs);
-    if (!F.resultMissing && (!F.castHold || seatProbe) && F.opts.castRetryMs && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
+    const holdingCard = !!(F.cardWait != null || F.trophyWaitAt || F.textCardAt);
+    if (!F.resultMissing && (!F.castHold || seatProbe) && F.opts.castRetryMs && !holdingCard && t - Math.max(F.lastPress || 0, F.geoAt || 0, F.lastBubbleAt || 0, F.lastCastTry || 0, F.startedAt) > F.opts.castRetryMs) {
       F.lastCastTry = t;
       F.stats.castRetries = (F.stats.castRetries || 0) + 1;
       const tries = (F.stallRetry = (F.stallRetry || 0) + 1);
@@ -2714,7 +2722,7 @@ const SPECIES = [
    * the honest answer: that copy has no build step to stamp it.
    * @type {FishCore}
    */
-  const F = { version: "3.9.71" };
+  const F = { version: "3.9.72" };
   const now = () => performance.now();
   const { doctor, wilson, runSummary, pressAcceptSummary, predictionSummary, pressVerdictReport, resultMissingDue, createResultMissing } = /** @type {any} */ (window.AutoFishDiagnostics);
   const {
@@ -3589,17 +3597,30 @@ const SPECIES = [
    * It is drawn on the same UI layer, so it is found by colour and area - a cream fill over a
    * wide centre rect. The dial cannot trip this: it covers well under the 45% threshold.
    */
-  const CARD_BOX_REF = { x: 620, y: 315, w: 365, h: 405, cw: 1179, ch: 821 };
-  /** The card box follows the live canvas, like promptBox(). At 1920x1080 the fixed 1179x821
-   * rectangle was reading cream world art and tapping it every four seconds. */
+  function canvasDpr() {
+    const f = uiFrame();
+    if (f && f.w > 0 && f.cw > 0) {
+      const s = f.cw / f.w;
+      if (isFinite(s) && s > 0) return Math.max(0.5, Math.min(4, s));
+    }
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
+    return isFinite(dpr) && dpr > 0 ? Math.max(0.5, Math.min(4, dpr)) : 1;
+  }
+
+  /**
+   * The catch card is drawn centered on the play canvas regardless of window width or fullscreen
+   * size (measured live at both 1086x952 -> (498,406) and 1668x1028 -> (800,446)). Sizing from
+   * canvas center + DPR keeps box detection centered across compact windows, fullscreen, and HiDPI.
+   */
   function cardBox(cw, ch) {
-    const W = Math.max(1, Math.round(cw || CARD_BOX_REF.cw));
-    const H = Math.max(1, Math.round(ch || CARD_BOX_REF.ch));
-    const sx = W / CARD_BOX_REF.cw, sy = H / CARD_BOX_REF.ch;
-    const w = Math.min(W, Math.max(260, Math.round(CARD_BOX_REF.w * sx)));
-    const h = Math.min(H, Math.max(300, Math.round(CARD_BOX_REF.h * sy)));
-    const x = Math.max(0, Math.min(W - w, Math.round(CARD_BOX_REF.x * sx)));
-    const y = Math.max(0, Math.min(H - h, Math.round(CARD_BOX_REF.y * sy)));
+    const dpr = canvasDpr();
+    const W = Math.max(1, Math.round(cw || 1179 * dpr));
+    const H = Math.max(1, Math.round(ch || 821 * dpr));
+    const s = Math.max(0.85, Math.min(1.15, H / (950 * dpr)));
+    const w = Math.min(W, Math.max(Math.round(240 * dpr), Math.round(360 * dpr * s)));
+    const h = Math.min(H, Math.max(Math.round(280 * dpr), Math.round(436 * dpr * s)));
+    const x = Math.max(0, Math.min(W - w, Math.round(W * 0.48 - w / 2)));
+    const y = Math.max(0, Math.min(H - h, Math.round(H * 0.44 - h / 2)));
     return { x, y, w, h };
   }
 
@@ -3681,7 +3702,10 @@ const SPECIES = [
       }
     }
     const sum = (x0, y0, x1, y1) => I[y1 * stride + x1] - I[y0 * stride + x1] - I[y1 * stride + x0] + I[y0 * stride + x0];
-    const CW = Math.ceil(CARD_MIN_W / SDOWN), CH = Math.ceil(CARD_MIN_H / SDOWN);
+    const dpr = canvasDpr();
+    const minW = CARD_MIN_W * dpr, minH = CARD_MIN_H * dpr;
+    const maxW = CARD_MAX_W * dpr, maxH = CARD_MAX_H * dpr;
+    const CW = Math.ceil(minW / SDOWN), CH = Math.ceil(minH / SDOWN);
     if (sw < CW || sh < CH) return null;
     /** @type {{ x: number, y: number, n: number } | null} */
     let seed = null;
@@ -3695,7 +3719,7 @@ const SPECIES = [
     if (I[sh * stride + sw] / (sw * sh) > 0.6) return null; // an opaque layer is the world, not a card
     const solid = (x0, y0, x1, y1) => sum(x0, y0, x1, y1) / ((x1 - x0) * (y1 - y0)) >= 0.88;
     let x0 = seed.x, y0 = seed.y, x1 = x0 + CW, y1 = y0 + CH;
-    const MAXW = Math.floor(CARD_MAX_W / SDOWN), MAXH = Math.floor(CARD_MAX_H / SDOWN);
+    const MAXW = Math.floor(maxW / SDOWN), MAXH = Math.floor(maxH / SDOWN);
     let grew = true;
     for (let guard = 0; grew && guard < 4000; guard++) {
       grew = false;
@@ -3705,12 +3729,12 @@ const SPECIES = [
       if (y0 > 0 && y1 - y0 < MAXH && solid(x0, y0 - 1, x1, y1)) { y0--; grew = true; }
     }
     const W = (x1 - x0) * SDOWN, H = (y1 - y0) * SDOWN;
-    if (W < CARD_MIN_W || W > CARD_MAX_W || H < CARD_MIN_H || H > CARD_MAX_H) return null;
+    if (W < minW || W > maxW || H < minH || H > maxH) return null;
     if (!uiCanvas || W * H > uiCanvas.width * uiCanvas.height * 0.7) return null;    // the layer itself is opaque, not a card
     const r = readUI(x0 * SDOWN, y0 * SDOWN, W, H);
     if (!r) return null;
     const ink = inkMix(r);
-    const shape = cardShapeOk({ w: W, h: H, ink: ink.dark });
+    const shape = cardShapeOk({ w: W, h: H, ink: ink.dark }, { minW: Math.round(250 * dpr), maxInk: 0.46 });
     if (!shape.card) {                                                 // reel UI, not a card
       L('shape rejected', { why: shape.why, w: W, h: H, ink: +ink.dark.toFixed(3) });
       return null;
@@ -3745,6 +3769,31 @@ const SPECIES = [
     }
     return cardByShape();
   };
+
+  /**
+   * Authoritative text backstop: if a catch card drew full species/price text into hookText() while
+   * visual card detection missed (e.g. heavy illustration or odd viewport), synthesize the centered
+   * card rect after a 250 ms visual grace so the catch is still logged, trophy-captured, and tapped.
+   */
+  function fallbackCatchCard(t) {
+    const rec = F.parseCatch ? F.parseCatch() : null;
+    if (!rec) { F.textCardAt = 0; return null; }
+    if (!F.textCardAt) F.textCardAt = t;
+    if (t - F.textCardAt < 250) return null;
+    const ref = uiCanvas || gameCanvas;
+    const box = cardBox(ref && ref.width, ref && ref.height);
+    F.stats.cardTextFallbacks = (F.stats.cardTextFallbacks || 0) + 1;
+    const card = {
+      cx: Math.round(box.x + box.w / 2),
+      cy: Math.round(box.y + box.h / 2),
+      w: box.w,
+      h: box.h,
+      frac: 1,
+      via: 'text',
+    };
+    L('catch card by text', { species: rec.species, rarity: rec.rarity || null, cx: card.cx, cy: card.cy, w: card.w, h: card.h });
+    return card;
+  }
   /**
    * Text capture. The card is canvas-drawn: no DOM node, no scene text, no local save. But every
    * string is drawn through CanvasRenderingContext2D.fillText (Pixi bakes Text nodes that way),
@@ -4461,6 +4510,7 @@ const SPECIES = [
     F.cardWait = null;
     F.trophyWaitAt = 0;
     F.trophySettledAt = 0;
+    F.textCardAt = 0;
   }
 
   /**
@@ -4602,7 +4652,7 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0, stalled: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
-      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
+      shapeHits: 0, cardTextFallbacks: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
       firstPressHeld: 0, firstPressForced: 0, firstPressHeldForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
@@ -4617,14 +4667,14 @@ const SPECIES = [
     // (scaled if the canvas was a different size), else the middle of the play area. Never a
     // literal point measured at one viewport - dialAnywhere() is the backstop when this is wrong.
     if (!F.lastGeo) {
-      const mem = dialGeoFit(loadDialMemory(), uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height);
+      const mem = dialGeoFit(loadDialMemory(), uiCanvas && uiCanvas.width, uiCanvas && uiCanvas.height, canvasDpr());
       if (mem) { F.lastGeo = mem; L('dial remembered', { cx: mem.cx, cy: mem.cy, R: mem.R }); }
     }
     F.hint = F.lastGeo
       ? { x: F.lastGeo.cx, y: F.lastGeo.cy }
       : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
           y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
-    F.txtAt = now(); F.cardWait = null; F.trophyWaitAt = 0; F.trophySettledAt = 0;       // only text drawn from here on counts
+    F.txtAt = now(); F.cardWait = null; F.trophyWaitAt = 0; F.trophySettledAt = 0; F.textCardAt = 0;       // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0; F.dialRejected = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
@@ -4708,7 +4758,7 @@ const SPECIES = [
       hits: 0, misses: 0, noPress: 0, stalled: 0,
       attempts: 0, caught: 0, lost: 0, wins: 0, losses: 0, skipped: 0, ghosts: 0,
       frames: 0, errors: 0, cards: 0, catchSeq: 0,
-      shapeHits: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
+      shapeHits: 0, cardTextFallbacks: 0, castRetries: 0, stalls: 0, pressAccepted: 0, pressRejected: 0, textGaps: 0, resultMissing: 0,
       firstPressHeld: 0, firstPressForced: 0, firstPressHeldForced: 0, holdPassesMax: 0, locksDisarmed: 0,
     };
     F.arms = {}; F.dialArm = null; F.armCfg = null; F.attempt = null; F.attempts = [];
@@ -5139,6 +5189,7 @@ const SPECIES = [
     now,
     stop: () => F.stop(),
     findCatch: () => F.findCatch(),
+    fallbackCatchCard: (t) => fallbackCatchCard(t),
     findBubble: () => F.findBubble(),
     sample: (geo) => F.sample(geo),
     lockDial: (hx, hy, span) => F.lockDial(hx, hy, span),

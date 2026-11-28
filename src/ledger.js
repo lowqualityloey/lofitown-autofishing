@@ -22,8 +22,12 @@
   /**
    * Validate a stored circle against the canvas it will be used on. Same canvas -> unchanged; a
    * proportionally bigger/smaller canvas -> scaled; anything else -> null.
+   * @param {any} stored
+   * @param {number} cw
+   * @param {number} ch
+   * @param {number} [dpr]
    */
-  function dialGeoFit(stored, cw, ch) {
+  function dialGeoFit(stored, cw, ch, dpr) {
     if (!stored || !finitePositive(cw) || !finitePositive(ch)) return null;
     const cx = Number(stored.cx), cy = Number(stored.cy), R = Number(stored.R);
     const sw0 = Number(stored.cw), sh0 = Number(stored.ch);
@@ -33,8 +37,9 @@
       k = cw / sw0;
       if (Math.abs(ch / sh0 - k) > 0.02) return null;          // not the same camera, just a resize
     }
+    const scale = finitePositive(dpr) ? Number(dpr) : 1;
     const out = { cx: Math.round(cx * k), cy: Math.round(cy * k), R: Math.round(R * k) };
-    if (out.R < DIAL_R_MIN || out.R > DIAL_R_MAX) return null;
+    if (out.R < Math.round(DIAL_R_MIN * scale) || out.R > Math.round(DIAL_R_MAX * scale)) return null;
     if (out.cx < 0 || out.cy < 0) return null;
     return out;
   }

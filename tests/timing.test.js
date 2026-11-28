@@ -473,7 +473,8 @@ test('cardShapeOk separates on ink once the panel is wide enough', () => {
   assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.5 }).card, false);
   assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.5 }).why, 'inky');
   assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.47 }).card, false);
-  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.3 }).card, false);   // strictly under 0.3
+  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.46 }).card, false);   // strictly under 0.46
+  assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.391 }).card, true, 'accepts illustrated Epic/Legendary cards');
   assert.equal(T.cardShapeOk({ w: 300, h: 440, ink: 0.29 }).card, true);
 });
 
