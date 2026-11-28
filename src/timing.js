@@ -541,34 +541,126 @@
     if (!r || !r.d || !r.w || !r.h) return null;
     const d = r.d, n = r.w * r.h;
     if (!n || d.length < n * 4) return null;
-    let dark = 0, white = 0, opaque = 0;
+    let dark = 0, white = 0, cream = 0, opaque = 0;
     for (let p = 0, i = 0; p < n; p++, i += 4) {
       if (d[i + 3] > 120) {
         opaque++;
-        if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 150) dark++;
-        if (d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) white++;
+        const rr = d[i], gg = d[i + 1], bb = d[i + 2];
+        if (0.299 * rr + 0.587 * gg + 0.114 * bb < 150) dark++;
+        if (rr >= 225 && gg >= 225 && bb >= 225) white++;
+        if (rr >= 215 && gg >= 195 && bb >= 150 && bb <= 230 && (rr - bb) >= 12) cream++;
       }
     }
-    if (!opaque) return { dark: 0, white: 0, opaqueFrac: 0 };
-    return { dark: dark / opaque, white: white / opaque, opaqueFrac: opaque / n };
+    if (!opaque) return { dark: 0, white: 0, cream: 0, opaqueFrac: 0 };
+    return { dark: dark / opaque, white: white / opaque, cream: cream / opaque, opaqueFrac: opaque / n };
   }
 
   /**
-   * Wait until the catch card exits lofi.town's initial white-flash frame (solid white silhouette
-   * with almost no dark artwork or typography ink) before taking a trophy screenshot.
-   * @param {{ w?: number, h?: number, d?: Uint8Array | Uint8ClampedArray, dark?: number, white?: number, opaqueFrac?: number } | null | undefined} input
-   * @param {{ minOpaque?: number, maxWhite?: number, minDark?: number }} [o]
+   * Wait until the catch card exits lofi.town's initial white-flash and mid-flip frames
+   * (requiring opaque surface, low white flash, dark ink/art, and card parchment cream)
+   * before taking a trophy screenshot.
+   * @param {{ w?: number, h?: number, d?: Uint8Array | Uint8ClampedArray, dark?: number, white?: number, cream?: number, opaqueFrac?: number } | null | undefined} input
+   * @param {{ minOpaque?: number, maxWhite?: number, minDark?: number, minCream?: number }} [o]
    */
   function isCardSettled(input, o) {
     const m = input && input.d ? cardInkMetrics(/** @type {any} */ (input)) : input;
     if (!m || typeof m.opaqueFrac !== 'number') return false;
     const cfg = o || {};
-    const minOpaque = cfg.minOpaque != null ? cfg.minOpaque : 0.15;
-    const maxWhite = cfg.maxWhite != null ? cfg.maxWhite : 0.65;
-    const minDark = cfg.minDark != null ? cfg.minDark : 0.02;
+    const minOpaque = cfg.minOpaque != null ? cfg.minOpaque : 0.20;
+    const maxWhite = cfg.maxWhite != null ? cfg.maxWhite : 0.25;
+    const minDark = cfg.minDark != null ? cfg.minDark : 0.06;
+    const minCream = cfg.minCream != null ? cfg.minCream : 0.15;
     if (m.opaqueFrac < minOpaque) return false;
-    if ((m.white || 0) >= maxWhite && (m.dark || 0) < minDark) return false;
+    if ((m.white || 0) >= maxWhite) return false;
+    if ((m.dark || 0) < minDark) return false;
+    if (m.cream != null && m.cream < minCream) return false;
     return true;
+  }
+
+  function innerCardBox(box, frac) {
+    if (!box || !box.w || !box.h) return null;
+    const f = Math.max(0.1, Math.min(1, frac != null ? frac : 0.6));
+    const w = Math.max(1, Math.round(box.w * f));
+    const h = Math.max(1, Math.round(box.h * f));
+    const x = Math.round(box.x + (box.w - w) * 0.5);
+    const y = Math.round(box.y + (box.h - h) * 0.5);
+    return { x, y, w, h };
+  }
+
+  function stripCardScrim(r, o) {
+    if (!r || !r.d || !r.w || !r.h) return null;
+    const w = r.w | 0, h = r.h | 0, n = w * h;
+    if (n <= 0 || r.d.length < n * 4) return null;
+    const cfg = o || {};
+    const maxAlpha = cfg.maxAlpha != null ? cfg.maxAlpha : 235;
+    const maxRgb = cfg.maxRgb != null ? cfg.maxRgb : 24;
+    const pad = Math.max(0, (cfg.pad != null ? cfg.pad : 8) | 0);
+    const out = new Uint8ClampedArray(n * 4);
+    out.set(r.d.length === n * 4 ? r.d : r.d.subarray(0, n * 4));
+    const seen = new Uint8Array(n);
+    const queue = new Int32Array(n);
+    let head = 0, tail = 0;
+
+    function isScrim(p) {
+      const i = p * 4;
+      const a = out[i + 3];
+      if (a <= 8) return true;
+      return a < maxAlpha && out[i] < maxRgb && out[i + 1] < maxRgb && out[i + 2] < maxRgb;
+    }
+
+    function push(p) {
+      if (seen[p] || !isScrim(p)) return;
+      seen[p] = 1;
+      queue[tail++] = p;
+    }
+
+    for (let x = 0; x < w; x++) {
+      push(x);
+      if (h > 1) push((h - 1) * w + x);
+    }
+    for (let y = 1; y < h - 1; y++) {
+      push(y * w);
+      if (w > 1) push(y * w + (w - 1));
+    }
+
+    while (head < tail) {
+      const p = queue[head++];
+      const i = p * 4;
+      out[i] = 0;
+      out[i + 1] = 0;
+      out[i + 2] = 0;
+      out[i + 3] = 0;
+      const x = p % w, y = (p - x) / w;
+      if (x > 0) push(p - 1);
+      if (x + 1 < w) push(p + 1);
+      if (y > 0) push(p - w);
+      if (y + 1 < h) push(p + w);
+    }
+
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (out[(y * w + x) * 4 + 3] > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) return null;
+
+    const cx = Math.max(0, minX - pad);
+    const cy = Math.max(0, minY - pad);
+    const cr = Math.min(w, maxX + 1 + pad);
+    const cb = Math.min(h, maxY + 1 + pad);
+    const cw = cr - cx, ch = cb - cy;
+    const trimmed = new Uint8ClampedArray(cw * ch * 4);
+    for (let y = 0; y < ch; y++) {
+      const srcStart = ((cy + y) * w + cx) * 4;
+      trimmed.set(out.subarray(srcStart, srcStart + cw * 4), y * cw * 4);
+    }
+    return { d: trimmed, w: cw, h: ch, crop: { x: cx, y: cy, w: cw, h: ch } };
   }
 
   /**
@@ -666,6 +758,8 @@
     cardShapeOk,
     cardInkMetrics,
     isCardSettled,
+    innerCardBox,
+    stripCardScrim,
     padCardBox,
     pressOutcome,
     castRecovery,

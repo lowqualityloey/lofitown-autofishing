@@ -153,3 +153,16 @@ test('a card that never parsed moves the cursor before it is tapped away', () =>
   assert.ok(cursor > 0, 'the text cursor must advance past an unparsed card');
   assert.ok(tap > cursor, 'the cursor has to move before the card is dismissed');
 });
+
+test('parseCard isolates the latest card when multiple cards sit ahead of F.txtAt', () => {
+  const known = (s) => s === 'Swamp Pupper' || s === 'Leech';
+  const out = T.parseCard(
+    ['Swamp Pupper', 'Epic', '26.6kg', 'Decent', '$126', 'Leech', '0.03kg', 'Impressive', '$6'],
+    TIER,
+    known,
+  );
+  assert.equal(out.why, 'ok');
+  assert.equal(out.rec.species, 'Leech');
+  assert.equal(out.rec.value, '$6');
+  assert.equal(out.rec.rarity, '');
+});

@@ -743,3 +743,76 @@ test('isCardSettled rejects white-flash and transparent frames and padCardBox ad
   const clamped = T.padCardBox({ x: 20, y: 10, w: 300, h: 400 }, 350, 420);
   assert.deepEqual(clamped, { x: 0, y: 0, w: 350, h: 420 }, 'clamps cleanly to canvas boundaries');
 });
+
+test('innerCardBox isolates interior flash from scrim and stripCardScrim clears dark scrim to transparent PNG', () => {
+  const inner = T.innerCardBox({ x: 100, y: 200, w: 300, h: 400 }, 0.6);
+  assert.deepEqual(inner, { x: 160, y: 280, w: 180, h: 240 }, 'extracts centered 60% core rect');
+
+  // 20x20 frame: outer 20% ring is black scrim rgba(0,0,0,155), inner 60% is pure white flash.
+  const W = 20, H = 20;
+  const flashWithScrim = new Uint8ClampedArray(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const inCore = x >= 4 && x < 16 && y >= 4 && y < 16;
+      if (inCore) {
+        flashWithScrim[i] = 255; flashWithScrim[i + 1] = 255; flashWithScrim[i + 2] = 255; flashWithScrim[i + 3] = 255;
+      } else {
+        flashWithScrim[i] = 0; flashWithScrim[i + 1] = 0; flashWithScrim[i + 2] = 0; flashWithScrim[i + 3] = 155;
+      }
+    }
+  }
+  const core = T.innerCardBox({ x: 0, y: 0, w: W, h: H }, 0.6);
+  const corePixels = new Uint8ClampedArray(core.w * core.h * 4);
+  for (let y = 0; y < core.h; y++) {
+    const start = ((core.y + y) * W + core.x) * 4;
+    corePixels.set(flashWithScrim.subarray(start, start + core.w * 4), y * core.w * 4);
+  }
+  assert.equal(T.isCardSettled({ w: core.w, h: core.h, d: corePixels }), false, 'white core under scrim must reject');
+
+  // stripCardScrim: 30x30 RGBA with outer scrim rgba(0,0,0,155), opaque dark border + cream interior in 6..23
+  const sw = 30, sh = 30;
+  const buf = new Uint8ClampedArray(sw * sh * 4);
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      const i = (y * sw + x) * 4;
+      const onCard = x >= 6 && x <= 23 && y >= 6 && y <= 23;
+      const onBorder = onCard && (x === 6 || x === 23 || y === 6 || y === 23);
+      if (!onCard) {
+        buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 155;
+      } else if (onBorder) {
+        buf[i] = 10; buf[i + 1] = 10; buf[i + 2] = 10; buf[i + 3] = 255; // opaque dark pixel outline preserved
+      } else {
+        buf[i] = 249; buf[i + 1] = 238; buf[i + 2] = 208; buf[i + 3] = 255;
+      }
+    }
+  }
+  const stripped = T.stripCardScrim({ d: buf, w: sw, h: sh }, { pad: 2 });
+  assert.ok(stripped, 'stripCardScrim returns trimmed card');
+  assert.deepEqual(stripped.crop, { x: 4, y: 4, w: 22, h: 22 }, 'trims to opaque bounds + 2px transparent pad');
+  assert.equal(stripped.d[3], 0, 'outer pad corner is transparent alpha=0');
+  // Card outline pixel at original (6,6) -> trimmed (2,2) stays opaque black outline
+  const outlineIdx = (2 * stripped.w + 2) * 4;
+  assert.equal(stripped.d[outlineIdx + 3], 255, 'opaque black card border stays intact');
+  assert.equal(stripped.d[outlineIdx], 10, 'opaque dark border RGB unchanged');
+
+  // All-scrim image returns null
+  const allScrim = new Uint8ClampedArray(10 * 10 * 4);
+  for (let p = 0; p < 100; p++) allScrim[p * 4 + 3] = 155;
+  assert.equal(T.stripCardScrim({ d: allScrim, w: 10, h: 10 }), null, 'all-scrim crop yields null');
+
+  assert.match(SRC, /out\.toBlob\([^;]*'image\/png'\)/, 'captureCardBlob encodes lossless PNG');
+  assert.doesNotMatch(SRC, /image\/webp/, 'captureCardBlob must not encode WebP');
+  assert.match(SRC, /trophyAnimMs/, 'trophy capture enforces post-flash animation settle delay');
+
+  // Live Ego Lite measurements: off-center flash+scrim (white=0.85, dark=0.15, cream=0) & mid-flip (dt=818ms: dark=0.027, cream=0) must reject
+  assert.equal(T.isCardSettled({ opaqueFrac: 1, dark: 0.15, white: 0.85, cream: 0 }), false, 'flash+scrim mixture must reject');
+  assert.equal(T.isCardSettled({ opaqueFrac: 1, dark: 0.027, white: 0, cream: 0 }), false, 'mid-flip transition frame without cream/ink must reject');
+  assert.equal(T.isCardSettled({ opaqueFrac: 1, dark: 0.213, white: 0.022, cream: 0.287 }), true, 'live settled catch card passes');
+
+  // Structural guards: uiCanvas-only when present, post-trim core re-check, 2500ms budget, txtAt flush on new pendingWin
+  assert.match(SRC, /if \(uiCanvas\) \{\s*const uiRaw = readUI/, 'pickSettledCardSurface locks to uiCanvas when present');
+  assert.match(SRC, /if \(!isCardSettled\(\{ d: cleanCore, w: cleanInner\.w, h: cleanInner\.h \}\)\) return cb\(null\)/, 'post-strip core validation');
+  assert.match(SRC, /trophySettleMs != null \? F\.opts\.trophySettleMs : 2500/, '2500ms settle cap for slow epic reveals');
+  assert.match(SRC, /clearPendingWin:\s*\(\)\s*=>\s*\{\s*clearPendingWin\(\);\s*F\.txtAt = now\(\);/, 'clearPendingWin in loopIo flushes stale txtAt');
+});

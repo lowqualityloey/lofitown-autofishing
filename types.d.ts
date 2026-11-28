@@ -395,6 +395,7 @@ interface Rect {
     castRetryMs?: number;
     seatWatchdogMs?: number;
     trophySettleMs?: number;
+    trophyAnimMs?: number;
     [key: string]: any;
   }
 

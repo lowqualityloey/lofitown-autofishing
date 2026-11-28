@@ -1803,7 +1803,7 @@
     '.trophy-empty{font-size:11px;color:#8b95a0;text-align:center;padding:24px 8px}',
     '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.74);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:24px;cursor:pointer;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
     '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;max-width:90vw;max-height:86vh}',
-    '.trophy-lb-img{max-width:min(86vw,480px);max-height:80vh;width:auto;height:auto;object-fit:contain;display:block;border-radius:12px;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lb-img{max-width:min(86vw,480px);max-height:80vh;width:auto;height:auto;object-fit:contain;display:block;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
     '.trophy-lb-img.trophy-sprite{min-width:160px;min-height:160px}',
     '.trophy-lb-missing{font-size:12px;color:#cfd6dd;background:rgba(18,22,28,.9);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:18px 24px}',
     '.trophy-lightbox.hide{display:none}',

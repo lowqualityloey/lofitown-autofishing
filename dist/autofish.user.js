@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         lofi.town AutoFish
 // @namespace    lofitown-autofishing
-// @version      3.9.70
+// @version      3.9.71
 // @description  Casts, reels and presses the dial on lofi.town. Panel included; no server, no bookmarklet.
 // @downloadURL  https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
 // @updateURL    https://github.com/lowqualityloey/lofitown-autofishing-dist/releases/latest/download/autofish.user.js
@@ -1012,16 +1012,25 @@ const SPECIES = [
    */
   function parseCard(raw, isTier, isKnown) {
     if (!raw.length) return { why: 'empty' };                  // nothing drawn since the cursor: already logged
-    const wI = raw.findIndex((s) => WEIGHT.test(s));
-    const vI = raw.findIndex((s) => MONEY.test(s));
-    if (vI < 0) return { why: 'noprice' };                     // every card prints its price
-    const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? raw[wI] : '', value: raw[vI], raw };
+    let lastV = -1, prevV = -1;
+    for (let i = 0; i < raw.length; i++) {
+      if (MONEY.test(raw[i])) { prevV = lastV; lastV = i; }
+    }
+    if (lastV < 0) return { why: 'noprice' };                  // every card prints its price
+    // If multiple cards piled up since F.txtAt, isolate the most recent complete card slice.
+    const slice = prevV >= 0 && raw.slice(prevV + 1, lastV).some((s) => WORD.test(s) && !WEIGHT.test(s))
+      ? raw.slice(prevV + 1)
+      : raw;
+    const wI = slice.findIndex((s) => WEIGHT.test(s));
+    const vI = slice.findIndex((s) => MONEY.test(s));
+    if (vI < 0) return { why: 'noprice' };
+    const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? slice[wI] : '', value: slice[vI], raw: slice };
     /** @type {Array<[number, string]>} */
     const words = [];
     for (let i = 0; i < vI; i++) {
       // A weight or price can also satisfy the broad word pattern; they are values, not names.
-      if (WEIGHT.test(raw[i]) || MONEY.test(raw[i])) continue;
-      if (WORD.test(raw[i])) words.push([i, raw[i]]);
+      if (WEIGHT.test(slice[i]) || MONEY.test(slice[i])) continue;
+      if (WORD.test(slice[i])) words.push([i, slice[i]]);
     }
     if (!words.length) return { why: 'nowords' };
     let used = 1;
@@ -1610,34 +1619,126 @@ const SPECIES = [
     if (!r || !r.d || !r.w || !r.h) return null;
     const d = r.d, n = r.w * r.h;
     if (!n || d.length < n * 4) return null;
-    let dark = 0, white = 0, opaque = 0;
+    let dark = 0, white = 0, cream = 0, opaque = 0;
     for (let p = 0, i = 0; p < n; p++, i += 4) {
       if (d[i + 3] > 120) {
         opaque++;
-        if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] < 150) dark++;
-        if (d[i] >= 225 && d[i + 1] >= 225 && d[i + 2] >= 225) white++;
+        const rr = d[i], gg = d[i + 1], bb = d[i + 2];
+        if (0.299 * rr + 0.587 * gg + 0.114 * bb < 150) dark++;
+        if (rr >= 225 && gg >= 225 && bb >= 225) white++;
+        if (rr >= 215 && gg >= 195 && bb >= 150 && bb <= 230 && (rr - bb) >= 12) cream++;
       }
     }
-    if (!opaque) return { dark: 0, white: 0, opaqueFrac: 0 };
-    return { dark: dark / opaque, white: white / opaque, opaqueFrac: opaque / n };
+    if (!opaque) return { dark: 0, white: 0, cream: 0, opaqueFrac: 0 };
+    return { dark: dark / opaque, white: white / opaque, cream: cream / opaque, opaqueFrac: opaque / n };
   }
 
   /**
-   * Wait until the catch card exits lofi.town's initial white-flash frame (solid white silhouette
-   * with almost no dark artwork or typography ink) before taking a trophy screenshot.
-   * @param {{ w?: number, h?: number, d?: Uint8Array | Uint8ClampedArray, dark?: number, white?: number, opaqueFrac?: number } | null | undefined} input
-   * @param {{ minOpaque?: number, maxWhite?: number, minDark?: number }} [o]
+   * Wait until the catch card exits lofi.town's initial white-flash and mid-flip frames
+   * (requiring opaque surface, low white flash, dark ink/art, and card parchment cream)
+   * before taking a trophy screenshot.
+   * @param {{ w?: number, h?: number, d?: Uint8Array | Uint8ClampedArray, dark?: number, white?: number, cream?: number, opaqueFrac?: number } | null | undefined} input
+   * @param {{ minOpaque?: number, maxWhite?: number, minDark?: number, minCream?: number }} [o]
    */
   function isCardSettled(input, o) {
     const m = input && input.d ? cardInkMetrics(/** @type {any} */ (input)) : input;
     if (!m || typeof m.opaqueFrac !== 'number') return false;
     const cfg = o || {};
-    const minOpaque = cfg.minOpaque != null ? cfg.minOpaque : 0.15;
-    const maxWhite = cfg.maxWhite != null ? cfg.maxWhite : 0.65;
-    const minDark = cfg.minDark != null ? cfg.minDark : 0.02;
+    const minOpaque = cfg.minOpaque != null ? cfg.minOpaque : 0.20;
+    const maxWhite = cfg.maxWhite != null ? cfg.maxWhite : 0.25;
+    const minDark = cfg.minDark != null ? cfg.minDark : 0.06;
+    const minCream = cfg.minCream != null ? cfg.minCream : 0.15;
     if (m.opaqueFrac < minOpaque) return false;
-    if ((m.white || 0) >= maxWhite && (m.dark || 0) < minDark) return false;
+    if ((m.white || 0) >= maxWhite) return false;
+    if ((m.dark || 0) < minDark) return false;
+    if (m.cream != null && m.cream < minCream) return false;
     return true;
+  }
+
+  function innerCardBox(box, frac) {
+    if (!box || !box.w || !box.h) return null;
+    const f = Math.max(0.1, Math.min(1, frac != null ? frac : 0.6));
+    const w = Math.max(1, Math.round(box.w * f));
+    const h = Math.max(1, Math.round(box.h * f));
+    const x = Math.round(box.x + (box.w - w) * 0.5);
+    const y = Math.round(box.y + (box.h - h) * 0.5);
+    return { x, y, w, h };
+  }
+
+  function stripCardScrim(r, o) {
+    if (!r || !r.d || !r.w || !r.h) return null;
+    const w = r.w | 0, h = r.h | 0, n = w * h;
+    if (n <= 0 || r.d.length < n * 4) return null;
+    const cfg = o || {};
+    const maxAlpha = cfg.maxAlpha != null ? cfg.maxAlpha : 235;
+    const maxRgb = cfg.maxRgb != null ? cfg.maxRgb : 24;
+    const pad = Math.max(0, (cfg.pad != null ? cfg.pad : 8) | 0);
+    const out = new Uint8ClampedArray(n * 4);
+    out.set(r.d.length === n * 4 ? r.d : r.d.subarray(0, n * 4));
+    const seen = new Uint8Array(n);
+    const queue = new Int32Array(n);
+    let head = 0, tail = 0;
+
+    function isScrim(p) {
+      const i = p * 4;
+      const a = out[i + 3];
+      if (a <= 8) return true;
+      return a < maxAlpha && out[i] < maxRgb && out[i + 1] < maxRgb && out[i + 2] < maxRgb;
+    }
+
+    function push(p) {
+      if (seen[p] || !isScrim(p)) return;
+      seen[p] = 1;
+      queue[tail++] = p;
+    }
+
+    for (let x = 0; x < w; x++) {
+      push(x);
+      if (h > 1) push((h - 1) * w + x);
+    }
+    for (let y = 1; y < h - 1; y++) {
+      push(y * w);
+      if (w > 1) push(y * w + (w - 1));
+    }
+
+    while (head < tail) {
+      const p = queue[head++];
+      const i = p * 4;
+      out[i] = 0;
+      out[i + 1] = 0;
+      out[i + 2] = 0;
+      out[i + 3] = 0;
+      const x = p % w, y = (p - x) / w;
+      if (x > 0) push(p - 1);
+      if (x + 1 < w) push(p + 1);
+      if (y > 0) push(p - w);
+      if (y + 1 < h) push(p + w);
+    }
+
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (out[(y * w + x) * 4 + 3] > 0) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) return null;
+
+    const cx = Math.max(0, minX - pad);
+    const cy = Math.max(0, minY - pad);
+    const cr = Math.min(w, maxX + 1 + pad);
+    const cb = Math.min(h, maxY + 1 + pad);
+    const cw = cr - cx, ch = cb - cy;
+    const trimmed = new Uint8ClampedArray(cw * ch * 4);
+    for (let y = 0; y < ch; y++) {
+      const srcStart = ((cy + y) * w + cx) * 4;
+      trimmed.set(out.subarray(srcStart, srcStart + cw * 4), y * cw * 4);
+    }
+    return { d: trimmed, w: cw, h: ch, crop: { x: cx, y: cy, w: cw, h: ch } };
   }
 
   /**
@@ -1735,6 +1836,8 @@ const SPECIES = [
     cardShapeOk,
     cardInkMetrics,
     isCardSettled,
+    innerCardBox,
+    stripCardScrim,
     padCardBox,
     pressOutcome,
     castRecovery,
@@ -2611,7 +2714,7 @@ const SPECIES = [
    * the honest answer: that copy has no build step to stamp it.
    * @type {FishCore}
    */
-  const F = { version: "3.9.70" };
+  const F = { version: "3.9.71" };
   const now = () => performance.now();
   const { doctor, wilson, runSummary, pressAcceptSummary, predictionSummary, pressVerdictReport, resultMissingDue, createResultMissing } = /** @type {any} */ (window.AutoFishDiagnostics);
   const {
@@ -2625,7 +2728,7 @@ const SPECIES = [
   } = /** @type {any} */ (window.AutoFishVision);
   const {
     wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk,
-    isCardSettled, padCardBox, newTriangle, pressOutcome, castRecovery, perfRates, fitStable,
+    isCardSettled, innerCardBox, stripCardScrim, padCardBox, newTriangle, pressOutcome, castRecovery, perfRates, fitStable,
     firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady,
     dialFallbackWait, dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics,
   } = /** @type {any} */ (window.AutoFishTiming);
@@ -2891,7 +2994,7 @@ const SPECIES = [
     surfaces();
     uiAdopted = false; uiCheckAt = 0; uiBlank = 0; F.altHit = null; snapAt = 0;
     F.lastBubble = null; F.lastBubbleAt = 0; F.lastCardRect = null;
-    F.cardCheckAt = 0; F.cardScan = 0; F.lastCard = 0; F.cardWait = null; F.trophyWaitAt = 0;
+    F.cardCheckAt = 0; F.cardScan = 0; F.lastCard = 0; F.cardWait = null; F.trophyWaitAt = 0; F.trophySettledAt = 0;
     F.geo = null; F.bad = 0; F.pressesThisDial = 0; F.lastLockAt = 0;
     const cw = (uiCanvas && uiCanvas.width) || window.innerWidth;
     const ch = (uiCanvas && uiCanvas.height) || window.innerHeight;
@@ -3735,50 +3838,62 @@ const SPECIES = [
     } catch (e) { return null; }
   }
 
-  /** Pick whichever surface currently displays settled colored card pixels (never pure white). */
+  /** Pick the UI canvas once it holds settled card pixels; never fall back to gameCanvas when uiCanvas exists. */
   function pickSettledCardSurface(box) {
-    if (!box) return null;
-    const uiRaw = uiCanvas ? readUI(box.x, box.y, box.w, box.h) : null;
-    if (isCardSettled(uiRaw)) return uiCanvas;
-    const gameRaw = gameCanvas && gameCanvas !== uiCanvas ? readCanvasPixels(gameCanvas, box.x, box.y, box.w, box.h) : null;
-    if (isCardSettled(gameRaw)) return gameCanvas;
-    return null;
+    const inner = innerCardBox(box, 0.6);
+    if (!inner) return null;
+    if (uiCanvas) {
+      const uiRaw = readUI(inner.x, inner.y, inner.w, inner.h);
+      return isCardSettled(uiRaw) ? uiCanvas : null;
+    }
+    const gameRaw = gameCanvas ? readCanvasPixels(gameCanvas, inner.x, inner.y, inner.w, inner.h) : null;
+    return isCardSettled(gameRaw) ? gameCanvas : null;
   }
 
   /**
-   * Capture the visible catch card from whichever surface holds the settled artwork, padding
-   * for overflowing rare art and encoding as transparent WebP (PNG fallback). Never returns a
-   * white silhouette blob.
+   * Capture the visible catch card from uiCanvas, strip connected outer semi-transparent scrim
+   * to full transparency, verify the stripped card core is settled (never white flash or mid-flip),
+   * and encode as lossless PNG.
    */
   function captureCardBlob(card, targetCanvas, cb) {
     const c = targetCanvas || uiCanvas;
     if (!c || typeof document === 'undefined' || !card) return cb(null);
     const base = F.lastCardRect || cardBox(c.width, c.height);
+    const inner = innerCardBox(base, 0.6);
+    const innerRaw = inner ? readCanvasPixels(c, inner.x, inner.y, inner.w, inner.h) : null;
+    if (!innerRaw || !isCardSettled(innerRaw)) return cb(null);
     const box = padCardBox(base, c.width, c.height) || base;
     const r = readCanvasPixels(c, box.x, box.y, box.w, box.h);
-    if (!r || !r.d || !r.w || !r.h || !isCardSettled(r)) return cb(null);
+    if (!r || !r.d || !r.w || !r.h) return cb(null);
+    const clean = stripCardScrim(r, { pad: 8 });
+    if (!clean || !clean.d || !clean.w || !clean.h) return cb(null);
+    const cleanInner = innerCardBox({ x: 0, y: 0, w: clean.w, h: clean.h }, 0.6);
+    if (!cleanInner) return cb(null);
+    const cleanCore = new Uint8ClampedArray(cleanInner.w * cleanInner.h * 4);
+    for (let y = 0; y < cleanInner.h; y++) {
+      const srcStart = ((cleanInner.y + y) * clean.w + cleanInner.x) * 4;
+      cleanCore.set(clean.d.subarray(srcStart, srcStart + cleanInner.w * 4), y * cleanInner.w * 4);
+    }
+    if (!isCardSettled({ d: cleanCore, w: cleanInner.w, h: cleanInner.h })) return cb(null);
     try {
       const src = document.createElement('canvas');
-      src.width = r.w; src.height = r.h;
+      src.width = clean.w; src.height = clean.h;
       const sctx = src.getContext('2d');
       if (!sctx) return cb(null);
-      const img = sctx.createImageData(r.w, r.h);
-      img.data.set(r.d.subarray(0, r.w * r.h * 4));
+      const img = sctx.createImageData(clean.w, clean.h);
+      img.data.set(clean.d.subarray(0, clean.w * clean.h * 4));
       sctx.putImageData(img, 0, 0);
       const maxW = 480;
-      const scale = r.w > maxW ? maxW / r.w : 1;
-      const dw = Math.max(1, Math.round(r.w * scale));
-      const dh = Math.max(1, Math.round(r.h * scale));
+      const scale = clean.w > maxW ? maxW / clean.w : 1;
+      const dw = Math.max(1, Math.round(clean.w * scale));
+      const dh = Math.max(1, Math.round(clean.h * scale));
       const out = document.createElement('canvas');
       out.width = dw; out.height = dh;
       const octx = out.getContext('2d');
       if (!octx) return cb(null);
       octx.drawImage(src, 0, 0, dw, dh);
       if (out.toBlob) {
-        out.toBlob((blob) => {
-          if (blob && blob.size) return cb(blob);
-          out.toBlob((png) => cb(png || null), 'image/png');
-        }, 'image/webp', 0.86);
+        out.toBlob((blob) => cb(blob && blob.size ? blob : null), 'image/png');
       } else {
         cb(null);
       }
@@ -3792,18 +3907,26 @@ const SPECIES = [
     /** @type {HTMLCanvasElement | null} */
     let cardSurface = null;
     if (isTrophyCatch({ rarity: info.rarity, shiny: info.shiny, golden: info.golden })) {
-      const settleMs = F.opts && F.opts.trophySettleMs != null ? F.opts.trophySettleMs : 900;
+      const settleMs = F.opts && F.opts.trophySettleMs != null ? F.opts.trophySettleMs : 2500;
+      const animMs = F.opts && F.opts.trophyAnimMs != null ? F.opts.trophyAnimMs : 450;
       const ref = uiCanvas || gameCanvas;
       const box = F.lastCardRect || (ref ? cardBox(ref.width, ref.height) : null);
+      const at = now();
+      if (!F.trophyWaitAt) F.trophyWaitAt = at;
       cardSurface = pickSettledCardSurface(box);
-      if (!cardSurface) {
-        const at = now();
-        if (!F.trophyWaitAt) F.trophyWaitAt = at;
+      if (cardSurface) {
+        if (!F.trophySettledAt) F.trophySettledAt = at;
+        if (animMs > 0 && at - F.trophySettledAt < animMs && at - F.trophyWaitAt < settleMs) {
+          return 'trophy-wait';
+        }
+      } else {
+        F.trophySettledAt = 0;
         if (at - F.trophyWaitAt < settleMs) return 'trophy-wait';
         L('trophy settle timeout', { species: rec.species, elapsedMs: Math.round(at - F.trophyWaitAt) });
       }
     }
     F.trophyWaitAt = 0;
+    F.trophySettledAt = 0;
     clearResultMissing('catch card');
     F.txtAt = now();
     // A parsed catch proves the character was seated and fishing, whatever the watchdog last
@@ -4335,6 +4458,9 @@ const SPECIES = [
 
   function clearPendingWin() {
     F.pendingWin = null;
+    F.cardWait = null;
+    F.trophyWaitAt = 0;
+    F.trophySettledAt = 0;
   }
 
   /**
@@ -4498,7 +4624,7 @@ const SPECIES = [
       ? { x: F.lastGeo.cx, y: F.lastGeo.cy }
       : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
           y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
-    F.txtAt = now(); F.cardWait = null; F.trophyWaitAt = 0;       // only text drawn from here on counts
+    F.txtAt = now(); F.cardWait = null; F.trophyWaitAt = 0; F.trophySettledAt = 0;       // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0; F.dialRejected = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
@@ -5021,7 +5147,10 @@ const SPECIES = [
     captureTextCursor: () => { F.txtAt = now(); },
     tap,
     space,
-    clearPendingWin,
+    clearPendingWin: () => {
+      clearPendingWin();
+      F.txtAt = now();
+    },
     startAttempt,
     resolveAttempt,
     sameDial,
@@ -8602,7 +8731,7 @@ const SPECIES = [
     '.trophy-empty{font-size:11px;color:#8b95a0;text-align:center;padding:24px 8px}',
     '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.74);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:24px;cursor:pointer;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#e8ecef;user-select:none;-webkit-user-select:none}',
     '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;max-width:90vw;max-height:86vh}',
-    '.trophy-lb-img{max-width:min(86vw,480px);max-height:80vh;width:auto;height:auto;object-fit:contain;display:block;border-radius:12px;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lb-img{max-width:min(86vw,480px);max-height:80vh;width:auto;height:auto;object-fit:contain;display:block;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
     '.trophy-lb-img.trophy-sprite{min-width:160px;min-height:160px}',
     '.trophy-lb-missing{font-size:12px;color:#cfd6dd;background:rgba(18,22,28,.9);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:18px 24px}',
     '.trophy-lightbox.hide{display:none}',

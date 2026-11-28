@@ -236,16 +236,25 @@
    */
   function parseCard(raw, isTier, isKnown) {
     if (!raw.length) return { why: 'empty' };                  // nothing drawn since the cursor: already logged
-    const wI = raw.findIndex((s) => WEIGHT.test(s));
-    const vI = raw.findIndex((s) => MONEY.test(s));
-    if (vI < 0) return { why: 'noprice' };                     // every card prints its price
-    const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? raw[wI] : '', value: raw[vI], raw };
+    let lastV = -1, prevV = -1;
+    for (let i = 0; i < raw.length; i++) {
+      if (MONEY.test(raw[i])) { prevV = lastV; lastV = i; }
+    }
+    if (lastV < 0) return { why: 'noprice' };                  // every card prints its price
+    // If multiple cards piled up since F.txtAt, isolate the most recent complete card slice.
+    const slice = prevV >= 0 && raw.slice(prevV + 1, lastV).some((s) => WORD.test(s) && !WEIGHT.test(s))
+      ? raw.slice(prevV + 1)
+      : raw;
+    const wI = slice.findIndex((s) => WEIGHT.test(s));
+    const vI = slice.findIndex((s) => MONEY.test(s));
+    if (vI < 0) return { why: 'noprice' };
+    const rec = { species: '', rarity: '', quality: '', weight: wI >= 0 ? slice[wI] : '', value: slice[vI], raw: slice };
     /** @type {Array<[number, string]>} */
     const words = [];
     for (let i = 0; i < vI; i++) {
       // A weight or price can also satisfy the broad word pattern; they are values, not names.
-      if (WEIGHT.test(raw[i]) || MONEY.test(raw[i])) continue;
-      if (WORD.test(raw[i])) words.push([i, raw[i]]);
+      if (WEIGHT.test(slice[i]) || MONEY.test(slice[i])) continue;
+      if (WORD.test(slice[i])) words.push([i, slice[i]]);
     }
     if (!words.length) return { why: 'nowords' };
     let used = 1;

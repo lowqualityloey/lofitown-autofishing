@@ -62,7 +62,7 @@
   } = /** @type {any} */ (window.AutoFishVision);
   const {
     wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk,
-    isCardSettled, padCardBox, newTriangle, pressOutcome, castRecovery, perfRates, fitStable,
+    isCardSettled, innerCardBox, stripCardScrim, padCardBox, newTriangle, pressOutcome, castRecovery, perfRates, fitStable,
     firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady,
     dialFallbackWait, dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics,
   } = /** @type {any} */ (window.AutoFishTiming);
@@ -328,7 +328,7 @@
     surfaces();
     uiAdopted = false; uiCheckAt = 0; uiBlank = 0; F.altHit = null; snapAt = 0;
     F.lastBubble = null; F.lastBubbleAt = 0; F.lastCardRect = null;
-    F.cardCheckAt = 0; F.cardScan = 0; F.lastCard = 0; F.cardWait = null; F.trophyWaitAt = 0;
+    F.cardCheckAt = 0; F.cardScan = 0; F.lastCard = 0; F.cardWait = null; F.trophyWaitAt = 0; F.trophySettledAt = 0;
     F.geo = null; F.bad = 0; F.pressesThisDial = 0; F.lastLockAt = 0;
     const cw = (uiCanvas && uiCanvas.width) || window.innerWidth;
     const ch = (uiCanvas && uiCanvas.height) || window.innerHeight;
@@ -1172,50 +1172,62 @@
     } catch (e) { return null; }
   }
 
-  /** Pick whichever surface currently displays settled colored card pixels (never pure white). */
+  /** Pick the UI canvas once it holds settled card pixels; never fall back to gameCanvas when uiCanvas exists. */
   function pickSettledCardSurface(box) {
-    if (!box) return null;
-    const uiRaw = uiCanvas ? readUI(box.x, box.y, box.w, box.h) : null;
-    if (isCardSettled(uiRaw)) return uiCanvas;
-    const gameRaw = gameCanvas && gameCanvas !== uiCanvas ? readCanvasPixels(gameCanvas, box.x, box.y, box.w, box.h) : null;
-    if (isCardSettled(gameRaw)) return gameCanvas;
-    return null;
+    const inner = innerCardBox(box, 0.6);
+    if (!inner) return null;
+    if (uiCanvas) {
+      const uiRaw = readUI(inner.x, inner.y, inner.w, inner.h);
+      return isCardSettled(uiRaw) ? uiCanvas : null;
+    }
+    const gameRaw = gameCanvas ? readCanvasPixels(gameCanvas, inner.x, inner.y, inner.w, inner.h) : null;
+    return isCardSettled(gameRaw) ? gameCanvas : null;
   }
 
   /**
-   * Capture the visible catch card from whichever surface holds the settled artwork, padding
-   * for overflowing rare art and encoding as transparent WebP (PNG fallback). Never returns a
-   * white silhouette blob.
+   * Capture the visible catch card from uiCanvas, strip connected outer semi-transparent scrim
+   * to full transparency, verify the stripped card core is settled (never white flash or mid-flip),
+   * and encode as lossless PNG.
    */
   function captureCardBlob(card, targetCanvas, cb) {
     const c = targetCanvas || uiCanvas;
     if (!c || typeof document === 'undefined' || !card) return cb(null);
     const base = F.lastCardRect || cardBox(c.width, c.height);
+    const inner = innerCardBox(base, 0.6);
+    const innerRaw = inner ? readCanvasPixels(c, inner.x, inner.y, inner.w, inner.h) : null;
+    if (!innerRaw || !isCardSettled(innerRaw)) return cb(null);
     const box = padCardBox(base, c.width, c.height) || base;
     const r = readCanvasPixels(c, box.x, box.y, box.w, box.h);
-    if (!r || !r.d || !r.w || !r.h || !isCardSettled(r)) return cb(null);
+    if (!r || !r.d || !r.w || !r.h) return cb(null);
+    const clean = stripCardScrim(r, { pad: 8 });
+    if (!clean || !clean.d || !clean.w || !clean.h) return cb(null);
+    const cleanInner = innerCardBox({ x: 0, y: 0, w: clean.w, h: clean.h }, 0.6);
+    if (!cleanInner) return cb(null);
+    const cleanCore = new Uint8ClampedArray(cleanInner.w * cleanInner.h * 4);
+    for (let y = 0; y < cleanInner.h; y++) {
+      const srcStart = ((cleanInner.y + y) * clean.w + cleanInner.x) * 4;
+      cleanCore.set(clean.d.subarray(srcStart, srcStart + cleanInner.w * 4), y * cleanInner.w * 4);
+    }
+    if (!isCardSettled({ d: cleanCore, w: cleanInner.w, h: cleanInner.h })) return cb(null);
     try {
       const src = document.createElement('canvas');
-      src.width = r.w; src.height = r.h;
+      src.width = clean.w; src.height = clean.h;
       const sctx = src.getContext('2d');
       if (!sctx) return cb(null);
-      const img = sctx.createImageData(r.w, r.h);
-      img.data.set(r.d.subarray(0, r.w * r.h * 4));
+      const img = sctx.createImageData(clean.w, clean.h);
+      img.data.set(clean.d.subarray(0, clean.w * clean.h * 4));
       sctx.putImageData(img, 0, 0);
       const maxW = 480;
-      const scale = r.w > maxW ? maxW / r.w : 1;
-      const dw = Math.max(1, Math.round(r.w * scale));
-      const dh = Math.max(1, Math.round(r.h * scale));
+      const scale = clean.w > maxW ? maxW / clean.w : 1;
+      const dw = Math.max(1, Math.round(clean.w * scale));
+      const dh = Math.max(1, Math.round(clean.h * scale));
       const out = document.createElement('canvas');
       out.width = dw; out.height = dh;
       const octx = out.getContext('2d');
       if (!octx) return cb(null);
       octx.drawImage(src, 0, 0, dw, dh);
       if (out.toBlob) {
-        out.toBlob((blob) => {
-          if (blob && blob.size) return cb(blob);
-          out.toBlob((png) => cb(png || null), 'image/png');
-        }, 'image/webp', 0.86);
+        out.toBlob((blob) => cb(blob && blob.size ? blob : null), 'image/png');
       } else {
         cb(null);
       }
@@ -1229,18 +1241,26 @@
     /** @type {HTMLCanvasElement | null} */
     let cardSurface = null;
     if (isTrophyCatch({ rarity: info.rarity, shiny: info.shiny, golden: info.golden })) {
-      const settleMs = F.opts && F.opts.trophySettleMs != null ? F.opts.trophySettleMs : 900;
+      const settleMs = F.opts && F.opts.trophySettleMs != null ? F.opts.trophySettleMs : 2500;
+      const animMs = F.opts && F.opts.trophyAnimMs != null ? F.opts.trophyAnimMs : 450;
       const ref = uiCanvas || gameCanvas;
       const box = F.lastCardRect || (ref ? cardBox(ref.width, ref.height) : null);
+      const at = now();
+      if (!F.trophyWaitAt) F.trophyWaitAt = at;
       cardSurface = pickSettledCardSurface(box);
-      if (!cardSurface) {
-        const at = now();
-        if (!F.trophyWaitAt) F.trophyWaitAt = at;
+      if (cardSurface) {
+        if (!F.trophySettledAt) F.trophySettledAt = at;
+        if (animMs > 0 && at - F.trophySettledAt < animMs && at - F.trophyWaitAt < settleMs) {
+          return 'trophy-wait';
+        }
+      } else {
+        F.trophySettledAt = 0;
         if (at - F.trophyWaitAt < settleMs) return 'trophy-wait';
         L('trophy settle timeout', { species: rec.species, elapsedMs: Math.round(at - F.trophyWaitAt) });
       }
     }
     F.trophyWaitAt = 0;
+    F.trophySettledAt = 0;
     clearResultMissing('catch card');
     F.txtAt = now();
     // A parsed catch proves the character was seated and fishing, whatever the watchdog last
@@ -1772,6 +1792,9 @@
 
   function clearPendingWin() {
     F.pendingWin = null;
+    F.cardWait = null;
+    F.trophyWaitAt = 0;
+    F.trophySettledAt = 0;
   }
 
   /**
@@ -1935,7 +1958,7 @@
       ? { x: F.lastGeo.cx, y: F.lastGeo.cy }
       : { x: Math.round(((uiCanvas && uiCanvas.width) || window.innerWidth) / 2),
           y: Math.round(((uiCanvas && uiCanvas.height) || window.innerHeight) * 0.42) };
-    F.txtAt = now(); F.cardWait = null; F.trophyWaitAt = 0;       // only text drawn from here on counts
+    F.txtAt = now(); F.cardWait = null; F.trophyWaitAt = 0; F.trophySettledAt = 0;       // only text drawn from here on counts
     F.armed = true; F.lastPress = 0; F.lastDialCheck = 0; F.bad = 0; F.dialRejected = 0;
     F.pressStamp = null; F.dialBlinks = 0; F.pressWait = null; F.dialAnyAt = 0;
     F.pend = null; F.outcomes = []; F.sweep = {}; F.bands = {}; F.dialLastPress = null;
@@ -2458,7 +2481,10 @@
     captureTextCursor: () => { F.txtAt = now(); },
     tap,
     space,
-    clearPendingWin,
+    clearPendingWin: () => {
+      clearPendingWin();
+      F.txtAt = now();
+    },
     startAttempt,
     resolveAttempt,
     sameDial,
