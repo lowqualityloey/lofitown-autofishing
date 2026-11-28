@@ -62,7 +62,7 @@
   } = /** @type {any} */ (window.AutoFishVision);
   const {
     wrap180, deltaOmega, fitOmega, planPress, sweepBias, omegaBand, widthBand, cardShapeOk,
-    isCardSettled, innerCardBox, stripCardScrim, padCardBox, newTriangle, pressOutcome, castRecovery, perfRates, fitStable,
+    isCardSettled, innerCardBox, stripCardScrim, stripCardSpecks, padCardBox, newTriangle, pressOutcome, castRecovery, perfRates, fitStable,
     firstPressGate, firstPressBudget, firstPressCanMature, markFirstPressForced, rearmReady,
     dialFallbackWait, dialGhost, dialStalled, ghostBlocked, spinAlive, lossDiagnostics,
   } = /** @type {any} */ (window.AutoFishTiming);
@@ -1169,7 +1169,8 @@
    * Species, rarity, weight and value are read from the card's own text, never inferred.
    */
   function isTrophyCatch(row) {
-    return !!(row && (row.rarity === 'Epic' || row.rarity === 'Legendary' || row.rarity === 'Secret' || row.shiny || row.golden));
+    return !!(row && (row.rarity === 'Epic' || row.rarity === 'Legendary' || row.rarity === 'Secret' ||
+      row.rarity === 'Halloween' || row.rarity === 'Christmas' || row.shiny || row.golden));
   }
 
   /**
@@ -1238,47 +1239,52 @@
    */
   function captureCardBlob(card, targetCanvas, cb) {
     const c = targetCanvas || uiCanvas;
-    if (!c || typeof document === 'undefined' || !card) return cb(null);
+    if (!c || typeof document === 'undefined' || !card) return cb(null, 'no-canvas-or-card');
     const base = F.lastCardRect || cardBox(c.width, c.height);
     const inner = innerCardBox(base, 0.6);
     const innerRaw = inner ? readCanvasPixels(c, inner.x, inner.y, inner.w, inner.h) : null;
-    if (!innerRaw || !isCardSettled(innerRaw)) return cb(null);
+    if (!innerRaw || !isCardSettled(innerRaw)) return cb(null, 'inner-not-settled');
     const box = padCardBox(base, c.width, c.height) || base;
     const r = readCanvasPixels(c, box.x, box.y, box.w, box.h);
-    if (!r || !r.d || !r.w || !r.h) return cb(null);
+    if (!r || !r.d || !r.w || !r.h) return cb(null, 'no-pixels');
     const clean = stripCardScrim(r, { pad: 8 });
-    if (!clean || !clean.d || !clean.w || !clean.h) return cb(null);
-    const cleanInner = innerCardBox({ x: 0, y: 0, w: clean.w, h: clean.h }, 0.6);
-    if (!cleanInner) return cb(null);
+    if (!clean || !clean.d || !clean.w || !clean.h) return cb(null, 'scrim-strip');
+    const cleaned = stripCardSpecks(clean, { pad: 8, minFrac: 0.01 });
+    if (!cleaned || !cleaned.d || !cleaned.w || !cleaned.h) return cb(null, 'speck-strip');
+    const cleanInner = innerCardBox({ x: 0, y: 0, w: cleaned.w, h: cleaned.h }, 0.6);
+    if (!cleanInner) return cb(null, 'no-inner-box');
     const cleanCore = new Uint8ClampedArray(cleanInner.w * cleanInner.h * 4);
     for (let y = 0; y < cleanInner.h; y++) {
-      const srcStart = ((cleanInner.y + y) * clean.w + cleanInner.x) * 4;
-      cleanCore.set(clean.d.subarray(srcStart, srcStart + cleanInner.w * 4), y * cleanInner.w * 4);
+      const srcStart = ((cleanInner.y + y) * cleaned.w + cleanInner.x) * 4;
+      cleanCore.set(cleaned.d.subarray(srcStart, srcStart + cleanInner.w * 4), y * cleanInner.w * 4);
     }
-    if (!isCardSettled({ d: cleanCore, w: cleanInner.w, h: cleanInner.h })) return cb(null);
+    if (!isCardSettled({ d: cleanCore, w: cleanInner.w, h: cleanInner.h })) return cb(null, 'post-strip-not-settled');
     try {
       const src = document.createElement('canvas');
-      src.width = clean.w; src.height = clean.h;
+      src.width = cleaned.w; src.height = cleaned.h;
       const sctx = src.getContext('2d');
-      if (!sctx) return cb(null);
-      const img = sctx.createImageData(clean.w, clean.h);
-      img.data.set(clean.d.subarray(0, clean.w * clean.h * 4));
+      if (!sctx) return cb(null, 'no-2d-context');
+      const img = sctx.createImageData(cleaned.w, cleaned.h);
+      img.data.set(cleaned.d.subarray(0, cleaned.w * cleaned.h * 4));
       sctx.putImageData(img, 0, 0);
       const maxW = 480;
-      const scale = clean.w > maxW ? maxW / clean.w : 1;
-      const dw = Math.max(1, Math.round(clean.w * scale));
-      const dh = Math.max(1, Math.round(clean.h * scale));
+      const scale = cleaned.w > maxW ? maxW / cleaned.w : 1;
+      const dw = Math.max(1, Math.round(cleaned.w * scale));
+      const dh = Math.max(1, Math.round(cleaned.h * scale));
       const out = document.createElement('canvas');
       out.width = dw; out.height = dh;
       const octx = out.getContext('2d');
-      if (!octx) return cb(null);
+      if (!octx) return cb(null, 'no-output-context');
       octx.drawImage(src, 0, 0, dw, dh);
       if (out.toBlob) {
-        out.toBlob((blob) => cb(blob && blob.size ? blob : null), 'image/png');
+        out.toBlob((blob) => cb(
+          blob && blob.size ? blob : null,
+          blob && blob.size ? null : 'empty-png'
+        ), 'image/png');
       } else {
-        cb(null);
+        cb(null, 'encode-unavailable');
       }
-    } catch (e) { cb(null); }
+    } catch (e) { cb(null, 'encode-exception'); }
   }
 
   F.recordCatch = function (card) {
@@ -1354,7 +1360,17 @@
     }
     if (typeof F.onCatch === 'function') { try { F.onCatch(row); } catch (e) {} }
     if (isTrophyCatch(row) && typeof F.onTrophy === 'function') {
-      try { captureCardBlob(card, cardSurface, (blob) => { try { F.onTrophy(row, blob); } catch (e) {} }); } catch (e) {}
+      try {
+        captureCardBlob(card, cardSurface, (blob, reason) => {
+          const why = blob ? null : (reason || 'no-png');
+          if (!blob) L('trophy capture failed', { species: row.species, rarity: row.rarity, reason: why });
+          try { F.onTrophy(row, blob, why); } catch (e) {}
+        });
+      } catch (e) {
+        const why = 'capture-threw';
+        L('trophy capture failed', { species: row.species, rarity: row.rarity, reason: why, err: String((e && e.message) || e) });
+        try { F.onTrophy(row, null, why); } catch (e2) {}
+      }
     }
     return 'logged';
   };

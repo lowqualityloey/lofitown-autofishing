@@ -587,3 +587,41 @@ test('Phase 2 impeccable polish: tokens, bottomInset, accordion, inline prompts,
   assert.ok(src.includes("'ArrowLeft'") && src.includes("'ArrowRight'") && src.includes('trophy-lb-meta') && src.includes('trophy-lb-nav'), 'lightbox adds card metadata pill, arrow navigation, and Tab trap');
   assert.ok(src.includes('prefers-reduced-motion:reduce'), 'panel respects reduced-motion preferences');
 });
+
+test('chime and trophy predicates differ: Rare and event fish chime, plain Rare is not saved, Event is tab-only', () => {
+  const chime = src.slice(src.indexOf('function isRareChimeRow('), src.indexOf('function isTrophyCatchRow('));
+  const card = src.slice(src.indexOf('function isTrophyCatchRow('), src.indexOf('function unlockAudio('));
+  assert.match(chime, /row\.rarity === 'Rare'/, 'plain Rare chimes');
+  assert.match(chime, /isEventRarity\(row\.rarity\)/, 'Halloween/Christmas chime');
+  assert.doesNotMatch(card, /row\.rarity === 'Rare'/, 'plain Rare is not a saved trophy card');
+  assert.match(card, /isEventRarity\(row\.rarity\)/, 'event fish are saved as trophy cards');
+  assert.ok(src.includes("{ id: 'event', label: 'HAL/CHR' }"), 'one combined event tab exists');
+  assert.ok(src.includes("if (filter === 'event') return isEventRarity(rec.rarity);"), 'event tab filters both event rarities');
+  const tierBlock = src.slice(src.indexOf('tierCells.forEach(function (cell)'), src.indexOf('logMeta.classList.add'));
+  assert.ok(tierBlock.includes("cell.name !== 'Epic' && cell.name !== 'Legendary' && cell.name !== 'Secret'"), 'only EPI/LEG/SEC cells open trophy filters');
+  assert.ok(!tierBlock.includes('Halloween'), 'HAL/CHR stay out of the strip; Event is tab-only');
+});
+
+test('missing trophy cards get a card-shaped placeholder and a stored reason, never an atlas sprite fallback', () => {
+  assert.ok(src.includes("captureError: blob ? null : String(reason || 'no-png')"), 'capture failure reason is stored with the record');
+  assert.match(src, /trophyCounts\.missing/, 'the HUD counts missing screenshots');
+  assert.match(src, /trophy-lb-foot/, 'close control sits outside the metadata pill');
+  assert.match(src, /trophy-lb-missing-note/);
+  const lb = src.slice(src.indexOf('function renderTrophyLightbox('), src.indexOf('function openTrophyLightbox('));
+  assert.match(lb, /No card screenshot saved/);
+  assert.match(lb, /trophy-lb-missing-label/);
+  assert.doesNotMatch(lb, /resolveTrophySprite/, 'the lightbox never substitutes a naked sprite for a missing card');
+});
+
+test('trophy chrome is settled: no permanent tier boxes, no full-row hover wash, anchored nav and a wrapping pill', () => {
+  assert.ok(src.includes('.tier.clickable{padding:0}'), 'clickable tier keeps its layout without a box or vertical offset');
+  assert.ok(src.includes('.body>*{flex:none}'), 'body rows cannot be flex-shrunk into clipped text');
+  assert.ok(!src.includes('.tier.clickable{background'), 'clickable tiers have no permanent selected-looking fill');
+  assert.ok(src.includes('.tier.clickable span{text-decoration:underline'), 'clickable tier has a hover-independent affordance');
+  assert.ok(!src.includes('.row.tappable:hover{background'), 'toggle rows no longer wash the whole row on hover');
+  assert.ok(src.includes('.row.tappable:hover .icon'), 'the switch still shows hover feedback');
+  assert.ok(src.includes('function bindRowTap('), 'full-row click behavior is preserved');
+  assert.ok(src.includes('width:min(92vw,560px)'), 'lightbox shell anchors nav to the card, not the viewport edge');
+  assert.ok(src.includes('.trophy-lb-meta{') && src.includes('max-width:calc(100% - 32px)'), 'metadata pill can wrap and leaves room for close');
+  assert.ok(src.includes('.trophy-lb-missing{') && src.includes('aspect-ratio:4/5'), 'missing capture is a card-shaped placeholder');
+});

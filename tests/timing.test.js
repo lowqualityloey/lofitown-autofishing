@@ -29,7 +29,7 @@ function frames(rate, n, opts) {
 }
 
 test('timing core is present and exports the helpers', () => {
-  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'firstPressGate', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'dialStalled', 'ghostBlocked', 'spinAlive', 'lossDiagnostics']) {
+  for (const k of ['wrap180', 'deltaOmega', 'fitOmega', 'fitStable', 'firstPressGate', 'planPress', 'sweepBias', 'omegaBand', 'widthBand', 'cardShapeOk', 'newTriangle', 'pressOutcome', 'castRecovery', 'perfRates', 'firstPressBudget', 'firstPressCanMature', 'markFirstPressForced', 'rearmReady', 'dialFallbackWait', 'dialGhost', 'dialStalled', 'ghostBlocked', 'spinAlive', 'lossDiagnostics', 'stripCardSpecks']) {
     assert.equal(typeof T[k], 'function', k);
   }
 });
@@ -813,7 +813,49 @@ test('innerCardBox isolates interior flash from scrim and stripCardScrim clears 
 
   // Structural guards: uiCanvas-only when present, post-trim core re-check, 2500ms budget, txtAt flush on new pendingWin
   assert.match(SRC, /if \(uiCanvas\) \{\s*const uiRaw = readUI/, 'pickSettledCardSurface locks to uiCanvas when present');
-  assert.match(SRC, /if \(!isCardSettled\(\{ d: cleanCore, w: cleanInner\.w, h: cleanInner\.h \}\)\) return cb\(null\)/, 'post-strip core validation');
+  assert.match(SRC, /if \(!isCardSettled\(\{ d: cleanCore, w: cleanInner\.w, h: cleanInner\.h \}\)\) return cb\(null, 'post-strip-not-settled'\)/, 'post-strip core validation');
   assert.match(SRC, /trophySettleMs != null \? F\.opts\.trophySettleMs : 2500/, '2500ms settle cap for slow epic reveals');
   assert.match(SRC, /clearPendingWin:\s*\(\)\s*=>\s*\{\s*clearPendingWin\(\);\s*F\.txtAt = now\(\);/, 'clearPendingWin in loopIo flushes stale txtAt');
+});
+
+test('stripCardSpecks keeps the card and large detached art but removes sparkle-sized FX', () => {
+  const W = 40, H = 40;
+  const d = new Uint8ClampedArray(W * H * 4);
+  function paint(x0, y0, pw, ph) {
+    for (let y = y0; y < y0 + ph; y++) {
+      for (let x = x0; x < x0 + pw; x++) {
+        const i = (y * W + x) * 4;
+        d[i] = 200; d[i + 1] = 190; d[i + 2] = 160; d[i + 3] = 255;
+      }
+    }
+  }
+  paint(8, 8, 20, 20);    // 400 px card
+  paint(2, 2, 1, 1);      // 1 px sparkle
+  paint(32, 32, 8, 8);    // 64 px detached art, >= 1% of the card
+
+  const out = T.stripCardSpecks({ d, w: W, h: H }, { pad: 10, minFrac: 0.01 });
+  assert.ok(out, 'a card with specks still produces a clean card');
+  assert.deepEqual(out.stats, { components: 3, kept: 2, removed: 1, largest: 400, maxRemoved: 1, minFrac: 0.01 });
+  assert.deepEqual([out.w, out.h], [40, 40], 'pad keeps the full painted bounds');
+  const alpha = (x, y) => out.d[(y * out.w + x) * 4 + 3];
+  assert.equal(alpha(2, 2), 0, 'sparkle component is cleared');
+  assert.equal(alpha(8, 8), 255, 'card stays opaque');
+  assert.equal(alpha(32, 32), 255, 'large detached art is kept');
+
+  const stricter = T.stripCardSpecks({ d, w: W, h: H }, { pad: 10, minFrac: 0.2 });
+  assert.equal(stricter.stats.kept, 1, 'the threshold can drop the 64 px component');
+  assert.equal(stricter.stats.removed, 2);
+
+  const clean = new Uint8ClampedArray(10 * 10 * 4);
+  for (let p = 0; p < 100; p++) clean[p * 4 + 3] = 255;
+  const cleanOut = T.stripCardSpecks({ d: clean, w: 10, h: 10 });
+  assert.equal(cleanOut.stats.components, 1);
+  assert.equal(cleanOut.stats.removed, 0);
+  assert.deepEqual([cleanOut.w, cleanOut.h], [10, 10]);
+  assert.equal(T.stripCardSpecks({ d: new Uint8ClampedArray(4 * 4 * 4), w: 4, h: 4 }), null, 'empty card returns null');
+
+  assert.match(SRC, /const cleaned = stripCardSpecks\(clean, \{ pad: 8, minFrac: 0\.01 \}\)/, 'capture runs connected-component cleanup before encoding');
+  assert.match(SRC, /trophy capture failed/, 'capture failures are logged with a reason');
+  assert.match(SRC, /F\.onTrophy\(row, blob, why\)/, 'the reason reaches the panel');
+  assert.match(SRC, /row\.rarity === 'Halloween' \|\| row\.rarity === 'Christmas'/, 'event fish are trophy catches');
 });

@@ -664,6 +664,99 @@
   }
 
   /**
+   * Remove detached FX from a scrim-stripped catch card.
+   *
+   * The live 3.9.74 store had 37 PNGs, all carrying detached sparkle components (max 216 px).
+   * A frame/bbox mask cannot remove the Sun Fish sparkle
+   * that sits inside the card's bbox, so keep the largest opaque component plus any component at
+   * least minFrac of it, clear the rest, and trim to the surviving bounds. This preserves large
+   * detached art while dropping sparkle-sized blobs.
+   * @param {{ d?: Uint8Array | Uint8ClampedArray, w?: number, h?: number } | null | undefined} r
+   * @param {{ minFrac?: number, minAlpha?: number, pad?: number }} [o]
+   */
+  function stripCardSpecks(r, o) {
+    if (!r || !r.d || !r.w || !r.h) return null;
+    const w = r.w | 0, h = r.h | 0, n = w * h;
+    if (n <= 0 || r.d.length < n * 4) return null;
+    const cfg = o || {};
+    const minFrac = Math.max(0, Math.min(1, cfg.minFrac != null ? cfg.minFrac : 0.01));
+    const minAlpha = cfg.minAlpha != null ? cfg.minAlpha : 16;
+    const pad = Math.max(0, (cfg.pad != null ? cfg.pad : 8) | 0);
+    const d = new Uint8ClampedArray(n * 4);
+    d.set(r.d.length === n * 4 ? r.d : r.d.subarray(0, n * 4));
+    const comp = new Int32Array(n);
+    const stack = new Int32Array(n);
+    const areas = [0];
+    let largest = 0, largestArea = 0;
+
+    for (let p = 0; p < n; p++) {
+      if (comp[p] || d[p * 4 + 3] <= minAlpha) continue;
+      const id = areas.length;
+      areas.push(0);
+      comp[p] = id;
+      let head = 0, tail = 1, area = 0;
+      stack[0] = p;
+      while (head < tail) {
+        const at = stack[head++];
+        area++;
+        const x = at % w, y = (at - x) / w;
+        if (x > 0) { const q = at - 1; if (!comp[q] && d[q * 4 + 3] > minAlpha) { comp[q] = id; stack[tail++] = q; } }
+        if (x + 1 < w) { const q = at + 1; if (!comp[q] && d[q * 4 + 3] > minAlpha) { comp[q] = id; stack[tail++] = q; } }
+        if (y > 0) { const q = at - w; if (!comp[q] && d[q * 4 + 3] > minAlpha) { comp[q] = id; stack[tail++] = q; } }
+        if (y + 1 < h) { const q = at + w; if (!comp[q] && d[q * 4 + 3] > minAlpha) { comp[q] = id; stack[tail++] = q; } }
+      }
+      areas[id] = area;
+      if (area > largestArea) { largestArea = area; largest = id; }
+    }
+    if (!largestArea) return null;
+
+    const threshold = largestArea * minFrac;
+    const keep = new Uint8Array(areas.length);
+    let kept = 0, removed = 0, maxRemoved = 0;
+    for (let id = 1; id < areas.length; id++) {
+      const on = id === largest || areas[id] >= threshold;
+      keep[id] = on ? 1 : 0;
+      if (on) kept++;
+      else { removed++; if (areas[id] > maxRemoved) maxRemoved = areas[id]; }
+    }
+
+    let minX = w, minY = h, maxX = -1, maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const p = y * w + x;
+        const id = comp[p];
+        if (!id) continue;
+        if (!keep[id]) {
+          const i = p * 4;
+          d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 0;
+          continue;
+        }
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+    if (maxX < minX || maxY < minY) return null;
+
+    const cx = Math.max(0, minX - pad);
+    const cy = Math.max(0, minY - pad);
+    const cr = Math.min(w, maxX + 1 + pad);
+    const cb = Math.min(h, maxY + 1 + pad);
+    const cw = cr - cx, ch = cb - cy;
+    const out = new Uint8ClampedArray(cw * ch * 4);
+    for (let y = 0; y < ch; y++) {
+      const srcStart = ((cy + y) * w + cx) * 4;
+      out.set(d.subarray(srcStart, srcStart + cw * 4), y * cw * 4);
+    }
+    return {
+      d: out, w: cw, h: ch,
+      crop: { x: cx, y: cy, w: cw, h: ch },
+      stats: { components: areas.length - 1, kept, removed, largest: largestArea, maxRemoved, minFrac },
+    };
+  }
+
+  /**
    * Expand a detected catch-card rect with asymmetrical headroom so oversized Legendary/Secret
    * artwork (fins, wings, tails) is captured intact without exceeding canvas bounds.
    * @param {Rect | null | undefined} box
@@ -760,6 +853,7 @@
     isCardSettled,
     innerCardBox,
     stripCardScrim,
+    stripCardSpecks,
     padCardBox,
     pressOutcome,
     castRecovery,

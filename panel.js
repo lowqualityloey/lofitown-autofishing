@@ -60,7 +60,7 @@
   var updateChecking = false;
   /** @type {number | null} */
   var resultMissingSince = null;
-  var trophyCounts = { total: 0, Legendary: 0, Secret: 0, variant: 0 };
+  var trophyCounts = { total: 0, missing: 0, Legendary: 0, Secret: 0, variant: 0 };
   var trophyPopOpen = false;
   var trophyFilter = 'all';
   /** @type {string[]} */
@@ -878,14 +878,20 @@
 
   /* ---------------------------------------------- Web Audio rare catch chime ---- */
 
+  function isEventRarity(rarity) {
+    return rarity === 'Halloween' || rarity === 'Christmas';
+  }
+
   function isRareChimeRow(row) {
     if (!row) return false;
-    return row.rarity === 'Legendary' || row.rarity === 'Secret' || !!row.shiny || !!row.golden;
+    return row.rarity === 'Rare' || row.rarity === 'Legendary' || row.rarity === 'Secret' ||
+      isEventRarity(row.rarity) || !!row.shiny || !!row.golden;
   }
 
   function isTrophyCatchRow(row) {
     if (!row) return false;
-    return row.rarity === 'Epic' || isRareChimeRow(row);
+    return row.rarity === 'Epic' || row.rarity === 'Legendary' || row.rarity === 'Secret' ||
+      isEventRarity(row.rarity) || !!row.shiny || !!row.golden;
   }
 
   function unlockAudio() {
@@ -1053,7 +1059,7 @@
     });
   }
 
-  async function saveTrophyCard(row, blob) {
+  async function saveTrophyCard(row, blob, reason) {
     if (!row || !isTrophyCatchRow(row)) return;
     await withTrophyStore(async function (store, tx) {
       var txDone = new Promise(function (res) { tx.oncomplete = res; tx.onerror = res; tx.onabort = res; });
@@ -1071,6 +1077,7 @@
         shiny: !!row.shiny,
         golden: !!row.golden,
         blob: blob || null,
+        captureError: blob ? null : String(reason || 'no-png'),
       });
       await pruneTrophiesInStore(store, prof, Date.now());
       await txDone;
@@ -1116,8 +1123,9 @@
 
   async function refreshTrophyCounts() {
     var rows = await listTrophyCards(profileName());
-    var next = { total: rows.length, Legendary: 0, Secret: 0, variant: 0 };
+    var next = { total: rows.length, missing: 0, Legendary: 0, Secret: 0, variant: 0 };
     rows.forEach(function (r) {
+      if (!r.blob) next.missing++;
       if (r.rarity === 'Legendary') next.Legendary++;
       if (r.rarity === 'Secret') next.Secret++;
       if (r.shiny || r.golden) next.variant++;
@@ -1336,12 +1344,11 @@
       var lbBadges = el('div', 'trophy-badges');
       buildTrophyBadges(rec, lbBadges);
       if (lbBadges.childNodes.length) ui.trophyLbMeta.appendChild(lbBadges);
-      var details = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : '', (trophyLightboxIdx + 1) + ' / ' + rows.length].filter(Boolean);
+      var details = [rec.weight, rec.value, rec.at ? clockTime(rec.at) : '', (trophyLightboxIdx + 1) + ' of ' + rows.length].filter(Boolean);
       details.forEach(function (txt) {
         ui.trophyLbMeta.appendChild(el('span', 'trophy-lb-sep', '·'));
         ui.trophyLbMeta.appendChild(el('span', null, txt));
       });
-      if (ui.trophyLbClose) ui.trophyLbMeta.appendChild(ui.trophyLbClose);
     }
     if (ui.trophyLbStage) {
       ui.trophyLbStage.textContent = '';
@@ -1353,22 +1360,13 @@
         img.alt = rec.species + ' catch card';
         ui.trophyLbStage.appendChild(img);
       } else {
-        var fallbackEl = el('div', 'trophy-lb-missing', rec.species);
+        var fallbackEl = el('div', 'trophy-lb-missing');
+        fallbackEl.setAttribute('role', 'img');
+        fallbackEl.setAttribute('aria-label', rec.species + ' catch card unavailable');
+        fallbackEl.appendChild(el('div', 'trophy-lb-missing-label', rec.species));
+        fallbackEl.appendChild(el('div', 'trophy-lb-missing-note', 'No card screenshot saved'));
+        if (rec.captureError) fallbackEl.appendChild(el('div', 'trophy-lb-missing-why', String(rec.captureError)));
         ui.trophyLbStage.appendChild(fallbackEl);
-        var activeIdx = trophyLightboxIdx;
-        resolveTrophySprite(rec).then(function (spriteUrl) {
-          if (!trophyLightboxOpen || trophyLightboxIdx !== activeIdx || !ui.trophyLbStage) return;
-          if (!spriteUrl) {
-            fallbackEl.textContent = 'No card screenshot saved';
-            return;
-          }
-          ui.trophyLbStage.textContent = '';
-          var spImg = document.createElement('img');
-          spImg.className = 'trophy-lb-img trophy-sprite' + rareCls;
-          spImg.src = spriteUrl;
-          spImg.alt = rec.species;
-          ui.trophyLbStage.appendChild(spImg);
-        });
       }
     }
   }
@@ -1404,6 +1402,7 @@
     if (filter === 'Epic') return rec.rarity === 'Epic';
     if (filter === 'Legendary') return rec.rarity === 'Legendary';
     if (filter === 'Secret') return rec.rarity === 'Secret';
+    if (filter === 'event') return isEventRarity(rec.rarity);
     if (filter === 'variant') return !!(rec.shiny || rec.golden);
     return true;
   }
@@ -1423,6 +1422,11 @@
     ui.trophyList.appendChild(el('div', 'trophy-empty', 'Loading trophy cards…'));
     var allForProf = await listTrophyCards(profileName());
     if (ui.trophyClear) ui.trophyClear.disabled = !allForProf.length;
+    var missing = allForProf.filter(function (r) { return !r.blob; }).length;
+    if (ui.trophyHint) {
+      ui.trophyHint.textContent = 'Auto-expires after 24h' +
+        (missing ? ' · ' + missing + ' missing screenshot' + (missing === 1 ? '' : 's') : '');
+    }
     var rows = allForProf.filter(function (r) {
       return matchesTrophyFilter(r, trophyFilter);
     });
@@ -1449,17 +1453,20 @@
         img.alt = '';
         thumb.appendChild(img);
       } else {
-        thumb.appendChild(el('span', 'trophy-none', '🐟'));
+        thumb.title = 'No card screenshot saved';
+        thumb.appendChild(el('span', 'trophy-none', '▧'));
       }
-      resolveTrophySprite(rec).then(function (spriteUrl) {
-        if (!spriteUrl || !trophyPopOpen || !thumb.isConnected) return;
-        thumb.textContent = '';
-        var sp = document.createElement('img');
-        sp.className = 'trophy-img trophy-sprite';
-        sp.src = spriteUrl;
-        sp.alt = '';
-        thumb.appendChild(sp);
-      });
+      if (rec.blob) {
+        resolveTrophySprite(rec).then(function (spriteUrl) {
+          if (!spriteUrl || !trophyPopOpen || !thumb.isConnected) return;
+          thumb.textContent = '';
+          var sp = document.createElement('img');
+          sp.className = 'trophy-img trophy-sprite';
+          sp.src = spriteUrl;
+          sp.alt = '';
+          thumb.appendChild(sp);
+        });
+      }
       item.appendChild(thumb);
       var info = el('div', 'trophy-info');
       info.appendChild(el('div', 'trophy-name', rec.species));
@@ -1743,6 +1750,7 @@
     '.icon:hover{background:rgba(255,255,255,.08);color:var(--af-text)}',
     'button:focus-visible,.pill:focus-visible,[role="button"]:focus-visible,.sel:focus-visible{outline:2px solid #5ad18b;outline-offset:2px;border-radius:6px}',
     '.body{padding:10px;display:flex;flex-direction:column;gap:9px;max-height:calc(100vh - 70px);overflow-y:auto}',
+    '.body>*{flex:none}',
     '@media (min-height:480px){.body{max-height:calc(100vh - 180px)}}',
     '.body,.trophy-list,.perfjson{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.18) transparent}',
     '.body::-webkit-scrollbar,.trophy-list::-webkit-scrollbar,.perfjson::-webkit-scrollbar{width:6px;height:6px}',
@@ -1752,7 +1760,8 @@
     '.body::-webkit-scrollbar-button,.trophy-list::-webkit-scrollbar-button,.perfjson::-webkit-scrollbar-button{display:none;width:0;height:0}',
     '.row{display:flex;align-items:center;gap:6px}',
     '.row.tappable{cursor:pointer;border-radius:6px;padding:1px 4px;margin:0 -4px}',
-    '.row.tappable:hover{background:rgba(255,255,255,.04)}',
+    '.row.tappable:hover .label{color:#e8ecef}',
+    '.row.tappable:hover .icon{background:rgba(255,255,255,.08);color:var(--af-text)}',
     '.label{flex:1;color:#aab4bf}',
     '.step{display:flex;align-items:center;gap:4px;background:var(--af-surface);border-radius:9px;padding:2px}',
     '.step button{border:0;background:transparent;color:#cfd6dd;width:24px;height:24px;border-radius:7px;cursor:pointer;font-size:14px;line-height:1}',
@@ -1796,7 +1805,8 @@
     '.logmeta{font-size:10px;color:var(--af-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.logmeta.clickable,.tier.clickable{cursor:pointer;border-radius:6px;padding:1px 3px}',
     '.logmeta.clickable{text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px}',
-    '.tier.clickable{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);padding:2px 0}',
+    '.tier.clickable{padding:0}',
+    '.tier.clickable span{text-decoration:underline;text-decoration-style:dotted;text-underline-offset:2px}',
     '.logmeta.clickable:hover,.tier.clickable:hover{background:rgba(255,255,255,.10)}',
     '.icon.csv{font-size:10px;font-weight:600;padding:3px 7px;color:#b8c2cc}',
     '.icon.danger{font-size:10px;font-weight:600;color:var(--af-bad);padding:2px 6px}.icon.danger:disabled{opacity:.35;cursor:default}.icon.danger.armed{background:rgba(255,107,107,.16);color:#ffb3b3}',
@@ -1842,7 +1852,7 @@
     '.trophy-status{font-size:10.5px;color:#5ad18b;padding:2px 0}',
     '.trophy-head{display:flex;align-items:center;gap:6px}',
     '.trophy-title{flex:1;font-weight:600;font-size:11.5px;color:#e8ecef}',
-    '.trophy-tabs{display:flex;gap:4px}',
+    '.trophy-tabs{display:flex;flex-wrap:wrap;gap:4px}',
     '.trophy-tab{border:0;background:rgba(255,255,255,.06);color:var(--af-muted);font:inherit;font-size:10px;padding:4px 8px;min-height:24px;border-radius:99px;cursor:pointer}',
     '.trophy-tab.active{background:rgba(90,209,139,.18);color:#5ad18b}',
     '.trophy-list{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:5px;padding-right:4px}',
@@ -1862,10 +1872,10 @@
     '.trophy-sub{font-size:10px;color:#9aa4ae;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
     '.trophy-empty{font-size:11px;color:#8b95a0;text-align:center;padding:24px 8px}',
     '.trophy-lightbox{position:fixed;inset:0;z-index:20;background:rgba(9,12,17,.74);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:24px;cursor:pointer;font:12px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--af-text);user-select:none;-webkit-user-select:none}',
-    '.trophy-lb-shell{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:92vw;max-height:92vh}',
-    '.trophy-lb-row{display:flex;align-items:center;gap:12px}',
-    '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;max-width:82vw;max-height:76vh}',
-    '.trophy-lb-img{max-width:min(80vw,480px);max-height:74vh;width:auto;height:auto;object-fit:contain;display:block;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
+    '.trophy-lb-shell{display:flex;flex-direction:column;align-items:center;gap:10px;width:min(92vw,560px);max-height:92vh}',
+    '.trophy-lb-row{display:flex;align-items:center;gap:12px;width:100%}',
+    '.trophy-lb-stage{display:flex;align-items:center;justify-content:center;flex:1;min-width:0;max-width:82vw;max-height:76vh}',
+    '.trophy-lb-img{max-width:100%;max-height:74vh;width:auto;height:auto;object-fit:contain;display:block;filter:drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
     '.trophy-lb-img.rare-leg{filter:drop-shadow(0 14px 28px rgba(242,193,78,.26)) drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
     '.trophy-lb-img.rare-sec{filter:drop-shadow(0 14px 28px rgba(255,143,163,.26)) drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
     '.trophy-lb-img.rare-gold{filter:drop-shadow(0 14px 28px rgba(255,217,112,.30)) drop-shadow(0 18px 36px rgba(0,0,0,.7))}',
@@ -1873,12 +1883,17 @@
     '.trophy-lb-nav{width:34px;height:34px;border-radius:99px;border:1px solid rgba(255,255,255,.18);background:rgba(18,22,28,.82);color:var(--af-text);font:inherit;font-size:18px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;transition:background-color .14s ease}',
     '.trophy-lb-nav:hover{background:rgba(255,255,255,.18)}',
     '.trophy-lb-nav.hide{display:none}',
-    '.trophy-lb-meta{display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:6px;padding:6px 12px;border-radius:99px;background:rgba(18,22,28,.86);border:1px solid rgba(255,255,255,.14);font-size:11.5px;color:#dfe5ea;font-variant-numeric:tabular-nums;cursor:default}',
+    '.trophy-lb-foot{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;max-width:100%;min-width:0}',
+    '.trophy-lb-meta{display:flex;align-items:center;flex-wrap:wrap;justify-content:center;gap:6px;max-width:calc(100% - 32px);box-sizing:border-box;padding:6px 12px;border-radius:99px;background:rgba(18,22,28,.86);border:1px solid rgba(255,255,255,.14);font-size:11.5px;color:#dfe5ea;font-variant-numeric:tabular-nums;cursor:default}',
+    '.trophy-lb-meta b{min-width:0;overflow-wrap:anywhere}',
     '.trophy-lb-meta .trophy-badges{gap:4px}',
     '.trophy-lb-sep{color:var(--af-dim)}',
     '.trophy-lb-close{border:0;background:rgba(255,255,255,.10);color:#cfd6dd;width:24px;height:24px;border-radius:99px;font-size:12px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;margin-left:2px}',
     '.trophy-lb-close:hover{background:rgba(255,255,255,.22);color:var(--af-text)}',
-    '.trophy-lb-missing{font-size:12px;color:#cfd6dd;background:rgba(18,22,28,.9);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:18px 24px}',
+    '.trophy-lb-missing{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;width:min(76vw,300px);aspect-ratio:4/5;padding:24px;box-sizing:border-box;text-align:center;color:#cfd6dd;background:linear-gradient(160deg,rgba(34,39,47,.96),rgba(18,22,28,.96));border:2px dashed rgba(255,255,255,.18);border-radius:14px;box-shadow:0 18px 36px rgba(0,0,0,.55)}',
+    '.trophy-lb-missing-label{font-size:15px;font-weight:600;color:#e8ecef;overflow-wrap:anywhere}',
+    '.trophy-lb-missing-note{font-size:11.5px;color:#aab4bf}',
+    '.trophy-lb-missing-why{font-size:10px;color:#8b95a0;overflow-wrap:anywhere}',
     '@media (prefers-reduced-motion:reduce){.chev,.trophy-lb-img,.trophy-lb-nav{transition:none!important}}',
     '.trophy-lightbox.hide{display:none}',
     '.hide{display:none}'
@@ -2200,6 +2215,7 @@
       { id: 'Epic', label: 'EPI' },
       { id: 'Legendary', label: 'LEG' },
       { id: 'Secret', label: 'SEC' },
+      { id: 'event', label: 'HAL/CHR' },
       { id: 'variant', label: 'Shiny/Gold' }
     ].map(function (spec) {
       var btn = /** @type {HTMLButtonElement} */ (el('button', 'trophy-tab', spec.label));
@@ -2270,8 +2286,10 @@
     trophyLbClose.type = 'button';
     trophyLbClose.setAttribute('aria-label', 'Close trophy preview');
     trophyLbClose.title = 'Close (Esc)';
+    var trophyLbFoot = el('div', 'trophy-lb-foot');
     trophyLbRow.append(trophyLbPrev, trophyLbStage, trophyLbNext);
-    trophyLbShell.append(trophyLbRow, trophyLbMeta);
+    trophyLbFoot.append(trophyLbMeta, trophyLbClose);
+    trophyLbShell.append(trophyLbRow, trophyLbFoot);
     trophyLightbox.appendChild(trophyLbShell);
 
     root.append(wrap, trophyLightbox);
@@ -2293,7 +2311,7 @@
       primary: primary, secondary: secondary, banner: bannerEl, pill: pill,
       tierCells: tierCells, unknownCell: unknownCell, lastCatch: lastCatch,
       logTrophiesBtn: logTrophiesBtn, logCsvBtn: logCsvBtn, logToggle: logToggle, logTotal: logTotal, logMeta: logMeta,
-      trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyClear: trophyClear,
+      trophyPop: trophyPop, trophyTitle: trophyTitle, trophyStatus: trophyStatus, trophyTabs: trophyTabs, trophyList: trophyList, trophyHint: trophyHint, trophyClear: trophyClear,
       trophyLightbox: trophyLightbox, trophyLbStage: trophyLbStage, trophyLbPrev: trophyLbPrev, trophyLbNext: trophyLbNext, trophyLbMeta: trophyLbMeta, trophyLbClose: trophyLbClose,
       perfLine: perfLine, accLine: accLine, accMore: accMore, perfMore: perfMore, perfRate: perfRate, perfJson: perfJson
     });
@@ -2978,8 +2996,11 @@
     });
     if (ui.unknownCell) ui.unknownCell.title = unknownTitle(book && book.worklist);
     if (ui.logTrophiesBtn) {
+      var missingCards = trophyCounts.missing || 0;
       ui.logTrophiesBtn.textContent = trophyCounts.total ? 'Trophies (' + trophyCounts.total + ')' : 'Trophies';
       ui.logTrophiesBtn.style.color = trophyCounts.total ? '#5ad18b' : '#b8c2cc';
+      ui.logTrophiesBtn.title = 'view saved Legendary, Secret, Epic, event, Shiny, and Golden catch cards (kept 24h)' +
+        (missingCards ? ' · ' + missingCards + ' missing screenshot' + (missingCards === 1 ? '' : 's') : '');
     }
     if (ui.logToggle) {
       ui.logToggle.textContent = logScope === 'today' ? 'today' : 'all';
@@ -2996,9 +3017,11 @@
       ui.logTotal.title = 'all-time total ' + (book && book.total || 0) + ' (' + (book && book.shiny || 0) + ' shiny · ' + (book && book.golden || 0) + ' golden) across ' + daysKept + dayWord;
     }
     if (ui.logMeta) {
+      var savedCards = Math.max(0, (trophyCounts.total || 0) - (trophyCounts.missing || 0));
       ui.logMeta.textContent = 'today ' + (today.shiny || 0) + ' shiny · ' + (today.golden || 0) + ' golden' +
-        (trophyCounts.total ? ' · ' + trophyCounts.total + (trophyCounts.total === 1 ? ' card' : ' cards') : '');
-      ui.logMeta.title = 'profile ' + profileName() + ' · history is stored in this browser · click to view Shiny/Golden trophy cards (24h)';
+        (trophyCounts.total ? ' · ' + savedCards + (savedCards === 1 ? ' card' : ' cards') : '') +
+        (trophyCounts.missing ? ' · ' + trophyCounts.missing + ' missing' : '');
+      ui.logMeta.title = 'profile ' + profileName() + ' · history is stored in this browser · click to view saved trophy cards (24h)';
     }
     var last = book && book.last;
     if (!last) {
@@ -3885,8 +3908,8 @@
       fish().onCatch = function (row) {
         if (isRareChimeRow(row)) playRareChime(row);
       };
-      fish().onTrophy = function (row, blob) {
-        saveTrophyCard(row, blob);
+      fish().onTrophy = function (row, blob, reason) {
+        saveTrophyCard(row, blob, reason);
       };
     }
     window.__panel.guard = function () {
