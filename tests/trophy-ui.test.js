@@ -209,13 +209,28 @@ test('trophy sort and grouping keep every record reachable', () => {
   assert.equal(groups.find((g) => g.species === 'Tuna' && g.rec.shiny).count, 1);
 });
 
+test('grouped weight order follows the visible representative', () => {
+  const { groupTrophyRows } = listHelpers();
+  const rows = [
+    { id: 'guppy-new', species: 'Guppy', rarity: 'Epic', weight: '1 kg', at: 50, blob: {} },
+    { id: 'guppy-old', species: 'Guppy', rarity: 'Epic', weight: '10 kg', at: 10, blob: {} },
+    { id: 'tuna', species: 'Tuna', rarity: 'Epic', weight: '5 kg', at: 40, blob: {} },
+  ];
+  const groups = groupTrophyRows(rows, 'weight');
+  assert.equal(groups.map((g) => g.rec.id).join(','), 'tuna,guppy-new', 'the heavier hidden Guppy must not lead');
+  assert.equal(groups.map((g) => g.rec.weight).join(','), '5 kg,1 kg');
+  const guppy = groups.find((g) => g.species === 'Guppy');
+  assert.equal(guppy.count, 2, 'both Guppy records remain in the group');
+  assert.equal(guppy.records.map((r) => r.id).join(','), 'guppy-new,guppy-old', 'group records stay newest-first');
+});
+
 test('the trophy list exposes search, sort, and grouped navigation', () => {
   assert.ok(src.includes("el('input', 'trophy-search')"), 'the search field exists');
   assert.ok(src.includes("el('select', 'sel trophy-sort')"), 'the sort control exists');
   assert.ok(src.includes("trophyToolbar.append(trophySearch, trophySortSel)"), 'the toolbar is compact and ordered');
   assert.ok(src.includes("trophySearch.addEventListener('input'"), 'typing re-renders the list');
   assert.ok(src.includes("trophySortSel.addEventListener('change'"), 'sort changes re-render the list');
-  assert.match(src, /groupTrophyRows\(rows\)/, 'render groups duplicate cards');
+  assert.match(src, /groupTrophyRows\(rows, trophySort\)/, 'render sorts groups by their visible representative');
   assert.match(src, /trophyCurrentRows = group\.records\.slice\(\)/, 'a group opens its complete card sequence');
   assert.match(src, /'×' \+ group\.count/, 'the row exposes the group size');
 });
@@ -244,12 +259,46 @@ test('missing-card copy distinguishes absent, legacy and unreadable images', () 
 test('unreadable cards fall back instead of showing a broken image', () => {
   assert.match(src, /function trophyMissingNode\(rec, note\)/, 'the lightbox has one shared missing renderer');
   assert.match(src, /function trophyMissingThumb\(thumb, rec, note\)/, 'list thumbnails use the same detail source');
-  assert.match(src, /img\.onerror = function \(\) \{[\s\S]{0,260}?trophyMissingNode\(rec, 'Card screenshot could not be read\.'\)/, 'the lightbox replaces a decode failure with the card placeholder');
+  assert.match(src, /img\.onerror = function \(\) \{[\s\S]{0,520}?trophyMissingNode\(rec, 'Card screenshot could not be read\.'\)/, 'the lightbox replaces a decode failure with the card placeholder');
   assert.match(src, /img\.onerror = function \(\) \{[\s\S]{0,360}?trophyMissingThumb\(thumb, rec, 'Card screenshot could not be read\.'\)/, 'the list replaces a decode failure with the placeholder');
   assert.ok(src.includes('thumbBroken'), 'a later sprite cannot overwrite the failure fallback');
   assert.ok(src.includes('Captured before failure reasons were recorded.'), 'legacy records are explained');
   assert.ok(src.includes('trophy-lb-missing-why'), 'the stored failure reason remains visible');
   assert.ok(!src.includes('Download PNG'), 'Phase 5B export remains deferred');
+});
+
+test('a stale lightbox image error cannot clear the current card', () => {
+  const lightbox = src.slice(src.indexOf('function renderTrophyLightbox('), src.indexOf('function openTrophyLightbox('));
+  assert.match(lightbox, /var renderSeq = \+\+trophyLightboxRenderSeq/, 'every render gets a new sequence');
+  const onerror = lightbox.slice(lightbox.indexOf('img.onerror = function () {'), lightbox.indexOf('ui.trophyLbStage.appendChild(img);'));
+  assert.match(onerror, /if \(!trophyLightboxImageCurrent\(img, renderSeq\)\) return;/, 'the current-image guard runs first');
+  assert.ok(onerror.indexOf('trophyLightboxImageCurrent') < onerror.indexOf('revokeLightboxUrl()'), 'a stale error must not revoke the current URL');
+});
+
+function lightboxImageHelper() {
+  const start = src.indexOf('function trophyLightboxImageCurrent(');
+  const end = src.indexOf('function renderTrophyLightbox(');
+  assert.ok(start > 0 && end > start, 'lightbox image guard has a stable boundary');
+  const stage = {};
+  const sandbox = { trophyLightboxRenderSeq: 2, trophyLightboxOpen: true, ui: { trophyLbStage: stage } };
+  vm.runInNewContext(src.slice(start, end) + '\nthis.api = trophyLightboxImageCurrent;', sandbox);
+  return { current: sandbox.api, sandbox, stage };
+}
+
+test('the lightbox image guard rejects stale and detached images', () => {
+  const { current, sandbox, stage } = lightboxImageHelper();
+  const img = { isConnected: true, parentNode: stage };
+  assert.equal(current(img, 2), true, 'the mounted image in the current render may repaint');
+  assert.equal(current(img, 1), false, 'an older render is stale');
+  assert.equal(current(img, 3), false, 'a future or unrelated render is not current');
+  sandbox.trophyLightboxOpen = false;
+  assert.equal(current(img, 2), false, 'a closed lightbox is never current');
+  sandbox.trophyLightboxOpen = true;
+  img.isConnected = false;
+  assert.equal(current(img, 2), false, 'a detached image is not current');
+  img.isConnected = true;
+  img.parentNode = {};
+  assert.equal(current(img, 2), false, 'only the mounted stage may be repainted');
 });
 
 test('Keep preserves the open group and its current card', () => {

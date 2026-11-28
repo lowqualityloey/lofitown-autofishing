@@ -71,6 +71,7 @@
   var trophyCurrentRows = [];
   var trophyLightboxOpen = false;
   var trophyLightboxIdx = 0;
+  var trophyLightboxRenderSeq = 0;
   /** @type {string | null} */
   var trophyLightboxUrl = null;
   /** @type {HTMLElement | null} */
@@ -1603,6 +1604,15 @@
     thumb.title = detail.note + (detail.why ? ' · ' + detail.why : '');
   }
 
+  function trophyLightboxImageCurrent(img, renderSeq) {
+    return renderSeq === trophyLightboxRenderSeq &&
+      trophyLightboxOpen &&
+      !!ui.trophyLbStage &&
+      !!img &&
+      img.isConnected &&
+      img.parentNode === ui.trophyLbStage;
+  }
+
   function buildTrophyBadges(rec, container) {
     /** @param {string} text @param {string} color */
     function addBadge(text, color) {
@@ -1619,6 +1629,7 @@
 
   function renderTrophyLightbox() {
     if (!ui.trophyLightbox || !trophyLightboxOpen) return;
+    var renderSeq = ++trophyLightboxRenderSeq;
     var rows = trophyCurrentRows;
     if (!rows.length) { closeTrophyLightbox(); return; }
     if (trophyLightboxIdx < 0) trophyLightboxIdx = rows.length - 1;
@@ -1658,11 +1669,12 @@
         img.src = trophyLightboxUrl;
         img.alt = rec.species + ' catch card';
         img.onerror = function () {
+          // A revoked image can report an error after the lightbox has moved on. Ignore any
+          // error that does not belong to the image currently mounted for this render.
+          if (!trophyLightboxImageCurrent(img, renderSeq)) return;
           revokeLightboxUrl();
-          if (trophyLightboxOpen && ui.trophyLbStage) {
-            ui.trophyLbStage.textContent = '';
-            ui.trophyLbStage.appendChild(trophyMissingNode(rec, 'Card screenshot could not be read.'));
-          }
+          ui.trophyLbStage.textContent = '';
+          ui.trophyLbStage.appendChild(trophyMissingNode(rec, 'Card screenshot could not be read.'));
         };
         ui.trophyLbStage.appendChild(img);
       } else {
@@ -1785,20 +1797,22 @@
     return order[rec && rec.rarity] != null ? order[rec.rarity] : -1;
   }
 
+  function trophySortDiff(a, b, sort) {
+    var diff = 0;
+    if (sort === 'rarity') diff = trophyRarityRank(b) - trophyRarityRank(a);
+    else if (sort === 'weight') diff = trophyWeightKg(b) - trophyWeightKg(a);
+    else diff = (Number(b && b.at) || 0) - (Number(a && a.at) || 0);
+    if (diff) return diff;
+    return (Number(b && b.at) || 0) - (Number(a && a.at) || 0);
+  }
+
   function sortTrophyRows(rows, sort) {
     var copy = (Array.isArray(rows) ? rows : []).slice();
-    copy.sort(function (a, b) {
-      var diff = 0;
-      if (sort === 'rarity') diff = trophyRarityRank(b) - trophyRarityRank(a);
-      else if (sort === 'weight') diff = trophyWeightKg(b) - trophyWeightKg(a);
-      else diff = (Number(b && b.at) || 0) - (Number(a && a.at) || 0);
-      if (diff) return diff;
-      return (Number(b && b.at) || 0) - (Number(a && a.at) || 0);
-    });
+    copy.sort(function (a, b) { return trophySortDiff(a, b, sort); });
     return copy;
   }
 
-  function groupTrophyRows(rows) {
+  function groupTrophyRows(rows, sort) {
     /** @type {any[]} */
     var groups = [];
     var seen = {};
@@ -1817,6 +1831,9 @@
       group.count = group.records.length;
       group.rec = group.records[0];
     });
+    // The row renders group.rec, so a group must be ordered by that visible representative,
+    // not by whichever hidden member happened to sort first.
+    if (sort) groups.sort(function (a, b) { return trophySortDiff(a.rec, b.rec, sort); });
     return groups;
   }
 
@@ -1866,7 +1883,7 @@
     var query = String(trophyQuery || '').trim().toLowerCase();
     if (query) rows = rows.filter(function (r) { return String(r.species || '').toLowerCase().indexOf(query) >= 0; });
     rows = sortTrophyRows(rows, trophySort);
-    var groups = groupTrophyRows(rows);
+    var groups = groupTrophyRows(rows, trophySort);
     if (!trophyPopOpen || !ui.trophyList) return;
     trophyCurrentRows = rows;
     ui.trophyList.textContent = '';
