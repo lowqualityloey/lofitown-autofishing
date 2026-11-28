@@ -7,7 +7,7 @@
 - **Overall Status**: ACTIVE — **v3.9.73** release verified (`tsc --noEmit` exit `0`, `475/475` unit tests pass, `check-doctor.sh` exit `0`, `impeccable detect --json` `0` findings), cutting & publishing `v3.9.73`.
 - **Current Working Branch**: `main` (pre-existing CRLF/mode diffs remain untouched on `run.sh`, `docs/releases/3.9.{51,56}.md`, and `docs/reviews/2026-11-23-catch-and-focus-live.md`).
 - **Last Updated**: 2026-11-28
-- **Engine Version**: v2.6.1 @ unknown
+- **Engine Version**: v2.7.0 @ unknown
 - **Runtime**: Node v26.13.1 (WSL), zero dependencies, no bundler
 
 ---
